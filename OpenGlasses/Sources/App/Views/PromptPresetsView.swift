@@ -38,7 +38,7 @@ struct PromptPresetsView: View {
                             Spacer()
                             if preset.id == activeId {
                                 Image(systemName: "checkmark")
-                                    .foregroundStyle(Color.accentColor)
+                                    .foregroundStyle(.primary)
                             }
                         }
                     }

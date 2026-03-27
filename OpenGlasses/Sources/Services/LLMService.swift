@@ -134,7 +134,7 @@ class LLMService: ObservableObject {
     private let maxToolCallIterations = 5
 
     /// Build the full system prompt, optionally including location, tools, memory, and vision context
-    private static func buildSystemPrompt(locationContext: String?, includeTools: Bool, includeOpenClaw: Bool, hasImage: Bool, nativeToolNames: [String] = [], memoryContext: String? = nil, agentContext: String? = nil, playbookContext: String? = nil) -> String {
+    private static func buildSystemPrompt(locationContext: String?, includeTools: Bool, includeOpenClaw: Bool, hasImage: Bool, nativeToolNames: [String] = [], memoryContext: String? = nil, agentContext: String? = nil, playbookContext: String? = nil) async -> String {
         // Agent personality mode: soul.md + skills.md + memory.md replace the standard prompt
         var prompt: String
         if Config.agentModeEnabled, let agentContext, !agentContext.isEmpty {
@@ -199,7 +199,7 @@ class LLMService: ObservableObject {
             - reminder: Create, list, or complete Apple Reminders with due dates and notifications. Syncs with iCloud.
             - set_alarm: Set an alarm for a specific clock time (e.g. '7 AM tomorrow'). Also list or cancel alarms.
             - brightness: Adjust screen brightness (0-100, or presets: max, min, dim, bright, up, down).
-            - smart_home: Control HomeKit smart home devices — lights, switches, fans, thermostats, locks, scenes. Say 'list' to see devices.
+            - smart_home: Control HomeKit smart home devices — lights, switches, fans, thermostats, locks, scenes. ALWAYS try this tool for smart home requests. Say 'list' to see devices.
             - run_shortcut: Run an Apple Shortcut by name (e.g. 'Start Focus', 'Log Water', any user-created shortcut).
             - summarize_conversation: Summarize current conversation, extract action items/to-dos. Use when user says "summarize", "recap", or "what did we discuss?"
             - face_recognition: Remember faces ('remember this person as John'), forget faces, list known people, or toggle auto-recognition on/off.
@@ -213,7 +213,7 @@ class LLMService: ObservableObject {
             - object_memory: Remember where physical objects are. Save ('remember my keys are on the counter'), find ('where are my keys?'), list, forget.
             - contextual_note: Save notes with automatic location and time context. Search notes by keyword or location.
             - social_context: Remember facts about people. Add facts ('remember John works at Stripe'), recall ('what do I know about John?'), list people.
-            - home_assistant: Control Home Assistant smart home — toggle devices, check states, list entities, run automations. Requires HA URL and token.
+            - home_assistant: Control Home Assistant smart home — toggle devices, check states, list entities, run automations, or use 'converse' action to send natural language commands directly to HA (e.g. action=converse, text="turn on the kitchen lights"). ALWAYS try this tool when asked about smart home control. Use entity IDs from the device list below when available; the tool also fuzzy-matches and falls back to HA's voice assistant.
             - scan_code: Scan QR codes or barcodes from the camera. Returns decoded content (URLs, text, product codes). Works offline.
             - live_translate: Start/stop continuous live translation. Listens to spoken foreign language and translates in real-time. Actions: start, stop, status, set_language.
             """
@@ -222,6 +222,11 @@ class LLMService: ObservableObject {
                 let customTools = Config.customTools.filter { Config.isToolEnabled($0.name) }
                 for ct in customTools {
                     toolSection += "\n            - \(ct.name): \(ct.description)"
+                }
+
+                // Inject Home Assistant device list so LLM uses real entity IDs
+                if let haSummary = await HomeAssistantEntityCache.shared.deviceSummaryForPrompt() {
+                    toolSection += "\n\n            \(haSummary.replacingOccurrences(of: "\n", with: "\n            "))"
                 }
             }
 
@@ -237,6 +242,7 @@ class LLMService: ObservableObject {
             toolSection += """
 
             TOOL USAGE RULES:
+            CRITICAL: NEVER tell the user a tool is "not configured" or "not set up" — ALWAYS call the tool and let it handle errors. The tools check configuration internally and return helpful messages. Your job is to call them, not to guess their state.
             1. Before calling any tool, ALWAYS speak a brief acknowledgment first. For example:
                - "Sure, let me check the weather." then call get_weather.
                - "Got it, searching for that now." then call web_search.
@@ -251,6 +257,8 @@ class LLMService: ObservableObject {
                - "Save what that sign says" → (read image text) → copy_to_clipboard (save it)
             4. The calendar proactive alert system will automatically notify the user 10 minutes before events. \
             You do NOT need to remind them about upcoming events unless they ask.
+            5. FALLBACK TO OPENCLAW: If a built-in tool fails or cannot complete the request, try the execute (OpenClaw) tool next. \
+            OpenClaw has 56+ skills including smart home, messaging, web search, and more. NEVER tell the user something can't be done without trying OpenClaw first.
             """
 
             prompt += toolSection
@@ -313,7 +321,7 @@ class LLMService: ObservableObject {
         let includeOpenClaw = Config.isOpenClawConfigured && openClawBridge != nil
         let includeTools = hasNativeTools || includeOpenClaw
         let nativeToolNames = nativeToolRouter?.registry.toolNames ?? []
-        let fullPrompt = Self.buildSystemPrompt(locationContext: locationContext, includeTools: includeTools, includeOpenClaw: includeOpenClaw, hasImage: imageData != nil, nativeToolNames: nativeToolNames, memoryContext: memoryContext, agentContext: agentContext, playbookContext: playbookContext)
+        let fullPrompt = await Self.buildSystemPrompt(locationContext: locationContext, includeTools: includeTools, includeOpenClaw: includeOpenClaw, hasImage: imageData != nil, nativeToolNames: nativeToolNames, memoryContext: memoryContext, agentContext: agentContext, playbookContext: playbookContext)
 
         var toolsLabel = ""
         if hasNativeTools { toolsLabel += " [NativeTools]" }

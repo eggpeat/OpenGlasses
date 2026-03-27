@@ -54,7 +54,7 @@ struct LocalModelManagerView: View {
                                 Spacer()
                                 if selectedModelId == modelId {
                                     Image(systemName: "checkmark")
-                                        .foregroundStyle(Color.accentColor)
+                                        .foregroundStyle(.primary)
                                 }
                             }
                         }

@@ -60,6 +60,25 @@ final class ProactiveAlertService: ObservableObject {
         NSLog("[ProactiveAlerts] Stopped")
     }
 
+    /// Pause alert checking (background optimization for streaming).
+    func pauseAlerts() {
+        guard isRunning else { return }
+        checkTimer?.invalidate()
+        checkTimer = nil
+        NSLog("[ProactiveAlerts] Paused for background optimization")
+    }
+
+    /// Resume alert checking after returning to foreground.
+    func resumeAlerts() {
+        guard isRunning, checkTimer == nil else { return }
+        checkTimer = Timer.scheduledTimer(withTimeInterval: checkInterval, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.checkForAlerts()
+            }
+        }
+        NSLog("[ProactiveAlerts] Resumed after foreground")
+    }
+
     // MARK: - Alert Checking
 
     private func checkForAlerts() {

@@ -184,8 +184,10 @@ struct OpenGlassesApp: App {
             case .background:
                 print("📱 App moved to background — keeping audio alive")
                 appState.liveActivityManager.end()
+                appState.optimizeForBackground()
             case .active:
                 print("📱 App became active")
+                appState.restoreFromBackground()
                 appState.liveActivityManager.start(glassesName: appState.glassesService.deviceName ?? "OpenGlasses")
                 appState.updateLiveActivity()
                 Task {
@@ -206,7 +208,7 @@ struct OpenGlassesApp: App {
                             return
                         }
 
-                        if !appState.wakeWordService.isListening && !appState.isListening {
+                        if !appState.wakeWordService.isListening && !appState.isListening && appState.isConnected && !appState.micMuted {
                             print("🎤 Restarting wake word listener after foreground...")
                             // Re-configure audio session in case Bluetooth route changed
                             appState.wakeWordService.reconfigureAudioSessionIfNeeded()
@@ -283,6 +285,20 @@ class AppState: ObservableObject {
     @Published var lastCallbackAt: Date?
     @Published var debugEvents: [String] = []
     @Published var isListening: Bool = false
+    @Published var micMuted: Bool = false {
+        didSet {
+            if micMuted {
+                wakeWordService.stopListening()
+                isListening = false
+                NSLog("[Privacy] Mic muted by user")
+            } else if isConnected {
+                Task {
+                    try? await wakeWordService.startListening()
+                    NSLog("[Privacy] Mic unmuted — restarted listener")
+                }
+            }
+        }
+    }
     @Published var currentTranscription: String = ""
     @Published var lastResponse: String = ""
     @Published var errorMessage: String?
@@ -499,6 +515,9 @@ class AppState: ObservableObject {
         }
         locationService.startTracking()
 
+        // Initialize HomeKit on main thread early (avoids homed XPC failures)
+        HomeKitTool.prepareShared()
+
         // Start proactive calendar alerts — speaks through TTS when events are imminent
         proactiveAlerts.onAlert = { [weak self] message in
             guard let self else { return }
@@ -518,6 +537,9 @@ class AppState: ObservableObject {
             }
         }
         proactiveAlerts.start()
+
+        // Pre-fetch Home Assistant entity cache for fuzzy matching
+        Task { await HomeAssistantEntityCache.shared.refreshIfNeeded() }
 
         // Wire geofence alerts — speak via TTS when entering/leaving a region
         if let geofenceTool = nativeToolRegistry.tool(named: "geofence") as? GeofenceTool {
@@ -539,6 +561,7 @@ class AppState: ObservableObject {
         }
         if Config.isOpenClawConfigured {
             openClawEventClient.connect()
+            Task { await openClawBridge.checkConnection() }
         }
 
         // Privacy filter — apply saved preference
@@ -620,6 +643,16 @@ class AppState: ObservableObject {
             }
         }
 
+        wakeWordService.onBluetoothDisconnected = { [weak self] in
+            Task { @MainActor in
+                guard let self else { return }
+                if self.isConnected {
+                    self.isConnected = false
+                    NSLog("[Privacy] Bluetooth audio lost — marking glasses disconnected")
+                }
+            }
+        }
+
         transcriptionService.onTranscriptionComplete = { [weak self] text in
             Task { @MainActor in
                 guard let self = self else { return }
@@ -662,6 +695,10 @@ class AppState: ObservableObject {
                             self.agentNotificationQueue.onGlassesReconnected()
                         }
                     }
+                } else if self.isConnected {
+                    // Glasses powered off or Bluetooth disconnected
+                    self.isConnected = false
+                    NSLog("[Glasses] Device list empty — glasses disconnected")
                 }
             }
         }
@@ -1185,6 +1222,49 @@ class AppState: ObservableObject {
         }
     }
 
+    // MARK: - Background Resource Optimization
+
+    /// Whether we applied background optimizations that need reverting.
+    private var isBackgroundOptimized = false
+
+    /// Optimize resource allocation when the app moves to background during active streaming.
+    /// Reduces non-essential work to prioritize the encoding pipeline.
+    func optimizeForBackground() {
+        let isStreaming = broadcastService.isBroadcasting || webRTCStreaming.isStreaming
+        guard isStreaming else {
+            print("📱 Background: no active streams — normal background behavior")
+            return
+        }
+
+        isBackgroundOptimized = true
+        print("📱 Background: active stream detected — optimizing for encoding")
+
+        // Pause proactive alerts (non-essential background work)
+        proactiveAlerts.pauseAlerts()
+
+        // Reduce face recognition frequency if running (CPU-intensive Vision work)
+        faceRecognition.reduceFrequency()
+
+        // Suspend privacy filter (Gaussian blur is GPU-intensive, not visible when backgrounded)
+        privacyFilter.suspend()
+
+        // Log the optimization for diagnostics
+        addDebugEvent("Background optimization: streaming priority mode enabled")
+    }
+
+    /// Restore normal resource allocation when the app returns to foreground.
+    func restoreFromBackground() {
+        guard isBackgroundOptimized else { return }
+        isBackgroundOptimized = false
+        print("📱 Foreground: restoring normal resource allocation")
+
+        proactiveAlerts.resumeAlerts()
+        faceRecognition.restoreFrequency()
+        privacyFilter.resume()
+
+        addDebugEvent("Background optimization: normal mode restored")
+    }
+
     /// Start listening directly — no wake word needed.
     /// Called from Action Button intent or manual mic button.
     /// Transcription will check for persona names in the spoken text.
@@ -1236,6 +1316,82 @@ class AppState: ObservableObject {
         guard Config.activeModel?.visionEnabled == true else { return nil }
         guard cameraService.isStreaming, let frame = cameraService.latestFrame else { return nil }
         return frame.jpegData(compressionQuality: Config.geminiLiveVideoJPEGQuality)
+    }
+
+    // MARK: - Smart Camera Activation
+
+    /// Timestamp of the last smart camera activation (for cooldown window).
+    private var lastSmartCameraActivation: Date?
+
+    /// Determine image data for a query using smart camera logic:
+    /// 1. If camera is already streaming, reuse the latest frame (existing behavior).
+    /// 2. If smart camera is enabled and query is vision-related, activate camera and capture.
+    /// 3. If preset has "always" camera behavior, keep camera on.
+    /// 4. Otherwise, no image.
+    private func smartCameraImageData(for query: String) async -> Data? {
+        guard Config.activeModel?.visionEnabled == true else { return nil }
+
+        // Already have a live frame? Use it (cheapest path).
+        if let existing = currentVisionFrameDataIfAvailable() {
+            lastSmartCameraActivation = Date()
+            return existing
+        }
+
+        // Check camera behavior from active preset
+        let cameraBehavior = Config.activePresetCameraBehavior
+
+        // "always" mode: try to keep camera on and capture
+        if cameraBehavior == "always" {
+            return await smartCameraCapture(reason: "always-on mode")
+        }
+
+        // Smart camera detection
+        guard Config.smartCameraEnabled || cameraBehavior == "smart" else { return nil }
+
+        // Within cooldown window from last vision query? Auto-activate for follow-ups.
+        if let lastActivation = lastSmartCameraActivation,
+           Date().timeIntervalSince(lastActivation) < Config.smartCameraCooldown {
+            return await smartCameraCapture(reason: "cooldown follow-up")
+        }
+
+        // Classify the query
+        let intent = VisionIntentDetector.classify(query)
+        guard intent == .vision else {
+            return nil
+        }
+
+        lastSmartCameraActivation = Date()
+        return await smartCameraCapture(reason: "vision query detected")
+    }
+
+    /// Attempt to activate the camera and capture a frame for smart camera.
+    /// Returns nil on failure (doesn't crash the flow — text-only fallback).
+    private func smartCameraCapture(reason: String) async -> Data? {
+        print("📷 Smart Camera: activating (\(reason))")
+
+        // If camera is already streaming, just grab the frame
+        if cameraService.isStreaming, let frame = cameraService.latestFrame {
+            return frame.jpegData(compressionQuality: Config.geminiLiveVideoJPEGQuality)
+        }
+
+        // Try to start streaming and capture
+        do {
+            try await cameraService.startStreaming()
+            // Brief wait for first frame
+            try await Task.sleep(nanoseconds: 500_000_000)
+            if let frame = cameraService.latestFrame {
+                print("📷 Smart Camera: captured frame")
+                return frame.jpegData(compressionQuality: Config.geminiLiveVideoJPEGQuality)
+            }
+            // Try photo capture as fallback
+            let photoData = try await cameraService.capturePhoto()
+            cameraService.restoreAudioForWakeWord()
+            print("📷 Smart Camera: captured photo")
+            return photoData
+        } catch {
+            print("📷 Smart Camera: capture failed — \(error.localizedDescription)")
+            return nil
+        }
     }
 
     func handleTranscription(_ text: String) async {
@@ -1381,10 +1537,8 @@ class AppState: ObservableObject {
         speechService.startThinkingSound()
 
         do {
-            let imageData = currentVisionFrameDataIfAvailable()
-            if imageData != nil {
-                print("🖼️ Reusing live camera frame for \(llmService.activeModelName)")
-            }
+            // Smart Camera Activation: detect vision intent and auto-capture if needed
+            let imageData = await smartCameraImageData(for: query)
             let rawResponse = try await llmService.sendMessage(
                 query,
                 locationContext: locationService.locationContext,
@@ -1471,6 +1625,15 @@ class AppState: ObservableObject {
         // actionable via watch, widget, Action Button, and manual mic tap
         if Config.silentMode {
             print("🔇 Silent mode — wake word listener stays off")
+            return
+        }
+        // Don't restart mic on phone speaker when glasses are disconnected
+        if !isConnected {
+            print("🔇 Glasses disconnected — wake word listener stays off for privacy")
+            return
+        }
+        if micMuted {
+            print("🔇 Mic muted — wake word listener stays off")
             return
         }
         do {

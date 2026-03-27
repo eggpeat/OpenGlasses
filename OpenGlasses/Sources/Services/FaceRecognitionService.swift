@@ -40,6 +40,9 @@ class FaceRecognitionService: ObservableObject {
     /// Throttle — process only every Nth frame
     private var frameCount = 0
     private let processEveryNFrames = 15  // ~2 fps at 30fps input
+    private let normalProcessEveryN = 15
+    private let reducedProcessEveryN = 60  // ~0.5 fps — much less CPU in background
+    private var currentProcessEveryN = 15
 
     /// Similarity threshold for matching (0-1, higher = stricter)
     private let matchThreshold: Float = 0.6
@@ -66,7 +69,7 @@ class FaceRecognitionService: ObservableObject {
             guard let self = self else { return }
             Task { @MainActor in
                 self.frameCount += 1
-                if self.frameCount % self.processEveryNFrames == 0 && !self.processingFrame {
+                if self.frameCount % self.currentProcessEveryN == 0 && !self.processingFrame {
                     self.processFrame(image)
                 }
             }
@@ -81,6 +84,18 @@ class FaceRecognitionService: ObservableObject {
         frameSubscription = nil
         lastRecognizedName = nil
         print("👤 Face recognition stopped")
+    }
+
+    /// Reduce processing frequency for background optimization (streaming priority).
+    func reduceFrequency() {
+        currentProcessEveryN = reducedProcessEveryN
+        NSLog("[FaceRecognition] Reduced to background frequency")
+    }
+
+    /// Restore normal processing frequency.
+    func restoreFrequency() {
+        currentProcessEveryN = normalProcessEveryN
+        NSLog("[FaceRecognition] Restored normal frequency")
     }
 
     /// Remember a face from the current camera frame with a name

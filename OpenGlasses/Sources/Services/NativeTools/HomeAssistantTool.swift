@@ -1,20 +1,23 @@
 import Foundation
 
 /// Home Assistant integration via REST API.
-/// Control entities, run automations, and check states.
-/// Requires HA URL and Long-Lived Access Token configured in Settings.
+/// Three-layer entity resolution:
+///   1. LLM picks from real device list (injected into system prompt)
+///   2. Fuzzy matching catches near-misses against cached entities
+///   3. HA Conversation API fallback — send natural language, let HA figure it out
 struct HomeAssistantTool: NativeTool {
     let name = "home_assistant"
-    let description = "Control Home Assistant: turn on/off devices, run automations, check sensor states. Requires Home Assistant URL and token in Settings."
+    let description = "Control Home Assistant: turn on/off devices, run automations, check sensor states. You can also use 'converse' action to send natural language commands directly to HA's voice assistant."
 
     var parametersSchema: [String: Any] {
         [
             "type": "object",
             "properties": [
-                "action": ["type": "string", "description": "call_service, get_state, list_entities, run_automation, or toggle"],
-                "entity_id": ["type": "string", "description": "Entity ID (e.g. light.living_room, switch.fan, automation.morning)"],
+                "action": ["type": "string", "description": "call_service, get_state, list_entities, run_automation, toggle, or converse"],
+                "entity_id": ["type": "string", "description": "Entity ID (e.g. light.living_room, switch.fan). Not needed for converse."],
                 "service": ["type": "string", "description": "Service to call (e.g. turn_on, turn_off, toggle). For call_service action."],
                 "domain": ["type": "string", "description": "Entity domain filter for list_entities (e.g. light, switch, sensor, automation)"],
+                "text": ["type": "string", "description": "Natural language command for converse action (e.g. 'turn on the living room lights')"],
             ],
             "required": ["action"],
         ]
@@ -28,20 +31,34 @@ struct HomeAssistantTool: NativeTool {
             return "Home Assistant access token not set. Generate a Long-Lived Access Token in HA → Profile → Security."
         }
 
+        // Refresh entity cache in background
+        await HomeAssistantEntityCache.shared.refreshIfNeeded()
+
         let action = (args["action"] as? String ?? "").lowercased()
-        let entityId = args["entity_id"] as? String ?? ""
+        let rawEntityId = args["entity_id"] as? String ?? ""
+
+        // Resolve entity ID via fuzzy matching
+        let entityId = await resolveEntityId(rawEntityId, action: action)
 
         switch action {
+        case "converse":
+            let text = args["text"] as? String ?? ""
+            guard !text.isEmpty else { return "What should I tell Home Assistant?" }
+            return await converse(text: text)
+
         case "toggle":
             guard !entityId.isEmpty else { return "Which entity should I toggle?" }
-            return await callService(domain: entityId.split(separator: ".").first.map(String.init) ?? "homeassistant",
-                                     service: "toggle", entityId: entityId)
+            return await callServiceWithFallback(
+                domain: entityId.split(separator: ".").first.map(String.init) ?? "homeassistant",
+                service: "toggle", entityId: entityId, naturalLanguage: "toggle \(friendlyDescription(entityId))")
 
         case "call_service":
             let service = args["service"] as? String ?? "toggle"
             guard !entityId.isEmpty else { return "Which entity?" }
             let domain = entityId.split(separator: ".").first.map(String.init) ?? "homeassistant"
-            return await callService(domain: domain, service: service, entityId: entityId)
+            return await callServiceWithFallback(
+                domain: domain, service: service, entityId: entityId,
+                naturalLanguage: "\(service.replacingOccurrences(of: "_", with: " ")) \(friendlyDescription(entityId))")
 
         case "get_state":
             guard !entityId.isEmpty else { return "Which entity should I check?" }
@@ -53,14 +70,94 @@ struct HomeAssistantTool: NativeTool {
 
         case "run_automation":
             guard !entityId.isEmpty else { return "Which automation should I run?" }
-            return await callService(domain: "automation", service: "trigger", entityId: entityId)
+            return await callServiceWithFallback(
+                domain: "automation", service: "trigger", entityId: entityId,
+                naturalLanguage: "run automation \(friendlyDescription(entityId))")
 
         default:
-            return "Unknown action '\(action)'. Use: toggle, call_service, get_state, list_entities, or run_automation."
+            return "Unknown action '\(action)'. Use: toggle, call_service, get_state, list_entities, run_automation, or converse."
         }
     }
 
-    // MARK: - API Calls
+    // MARK: - Entity Resolution
+
+    private func resolveEntityId(_ raw: String, action: String) async -> String {
+        guard !raw.isEmpty else { return "" }
+
+        let cache = HomeAssistantEntityCache.shared
+        let all = await cache.allEntities()
+
+        if all.contains(where: { $0.entityId == raw }) {
+            return raw
+        }
+
+        let preferDomain: String? = {
+            if raw.contains(".") {
+                return String(raw.split(separator: ".").first ?? "")
+            }
+            return nil
+        }()
+
+        if let matched = await cache.fuzzyMatch(raw, preferDomain: preferDomain) {
+            NSLog("[HomeAssistant] Resolved '%@' → '%@' via fuzzy match", raw, matched)
+            return matched
+        }
+
+        return raw
+    }
+
+    /// Convert entity_id to a human-readable description for conversation fallback.
+    private func friendlyDescription(_ entityId: String) -> String {
+        entityId
+            .replacingOccurrences(of: "_", with: " ")
+            .split(separator: ".")
+            .last
+            .map(String.init) ?? entityId
+    }
+
+    // MARK: - Conversation API
+
+    /// Send natural language to HA's Conversation API.
+    /// HA's Assist pipeline handles intent matching and entity resolution.
+    private func converse(text: String) async -> String {
+        let url = "\(Config.homeAssistantURL)/api/conversation/process"
+        let body: [String: Any] = ["text": text, "language": "en"]
+
+        do {
+            let data = try await haRequest(url: url, method: "POST", body: body)
+            if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let response = json["response"] as? [String: Any],
+               let speech = response["speech"] as? [String: Any],
+               let plain = speech["plain"] as? [String: Any],
+               let reply = plain["speech"] as? String {
+                NSLog("[HomeAssistant] Conversation API: '%@' → '%@'", text, reply)
+                return reply
+            }
+            return "Home Assistant processed the command but gave no response."
+        } catch {
+            return "Home Assistant conversation error: \(error.localizedDescription)"
+        }
+    }
+
+    // MARK: - API Calls with Fallback
+
+    /// Try direct service call first; on failure, fall back to Conversation API.
+    private func callServiceWithFallback(domain: String, service: String, entityId: String, naturalLanguage: String) async -> String {
+        let result = await callService(domain: domain, service: service, entityId: entityId)
+
+        // If direct call failed, try Conversation API
+        if result.contains("error") || result.contains("Error") {
+            NSLog("[HomeAssistant] Direct call failed for %@.%@ on %@, trying Conversation API with: '%@'",
+                  domain, service, entityId, naturalLanguage)
+            let conversationResult = await converse(text: naturalLanguage)
+            // If conversation API also failed, return the original error
+            if conversationResult.contains("error") || conversationResult.contains("Error") {
+                return result
+            }
+            return conversationResult
+        }
+        return result
+    }
 
     private func callService(domain: String, service: String, entityId: String) async -> String {
         let url = "\(Config.homeAssistantURL)/api/services/\(domain)/\(service)"
@@ -91,6 +188,14 @@ struct HomeAssistantTool: NativeTool {
     }
 
     private func listEntities(domain: String?) async -> String {
+        let cache = HomeAssistantEntityCache.shared
+        let cached = await cache.allEntities(domain: domain)
+
+        if !cached.isEmpty {
+            let names = cached.prefix(30).map { "\($0.friendlyName) (\($0.entityId)): \($0.state)" }
+            return "\(cached.count) entities\(domain != nil ? " (\(domain!))" : ""): \(names.joined(separator: ". "))"
+        }
+
         let url = "\(Config.homeAssistantURL)/api/states"
 
         do {
@@ -130,8 +235,13 @@ struct HomeAssistantTool: NativeTool {
             request.httpBody = try JSONSerialization.data(withJSONObject: body)
         }
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 15
+        let session = URLSession(configuration: config)
+        let (data, response) = try await session.data(for: request)
         if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode >= 400 {
+            let body = String(data: data, encoding: .utf8) ?? ""
+            NSLog("[HomeAssistant] HTTP %d: %@", httpResponse.statusCode, String(body.prefix(200)))
             throw URLError(.badServerResponse)
         }
         return data

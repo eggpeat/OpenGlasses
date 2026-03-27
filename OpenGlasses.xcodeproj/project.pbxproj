@@ -56,6 +56,7 @@
 		55911677E2A9DB9541C71B40 /* AppleRemindersTool.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4691CC4CEA5C75C810866ECA /* AppleRemindersTool.swift */; };
 		55B1EEDF2C214A5879E3CA87 /* RadialLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A48B38555905532425A7161 /* RadialLayout.swift */; };
 		577C0C62A00CC49E41539CEB /* IntentClassifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = 21A33541532C58D5979777C4 /* IntentClassifier.swift */; };
+		A1B2C3D4E5F60001DEADBEEF /* VisionIntentDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60002DEADBEEF /* VisionIntentDetector.swift */; };
 		596A9C7E0378E05521826946 /* TranslationTool.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC9A4478835847B85DB3994F /* TranslationTool.swift */; };
 		5A372CED64E94C1BD52F3D81 /* AgentDocumentStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 73CBD57F21361EB7D09E7C01 /* AgentDocumentStore.swift */; };
 		5A97791270E22B047778BAE1 /* GlassesActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA7E5783EB167382D3497E50 /* GlassesActivityAttributes.swift */; };
@@ -147,6 +148,7 @@
 		D7531B56699F43A405E75B52 /* ConversationSummaryTool.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF09406CF770FA333D952DD6 /* ConversationSummaryTool.swift */; };
 		D895774C7A8BF90EB8A819FD /* PhoneCallTool.swift in Sources */ = {isa = PBXBuildFile; fileRef = D82277471510270A53A0045C /* PhoneCallTool.swift */; };
 		D9D0CB02BE599CFFC70DB040 /* ProactiveAlertService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8E5C91138E73863A23CB8E49 /* ProactiveAlertService.swift */; };
+		DA1E3F00BEEF1234ABCD5678 /* HomeAssistantEntityCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA1E3F01BEEF1234ABCD5679 /* HomeAssistantEntityCache.swift */; };
 		DC2844D28DEAE6D2209615C5 /* OpenAIRealtimeSessionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = EFC9FE98120C05E30664ECA0 /* OpenAIRealtimeSessionManager.swift */; };
 		DD9CB205BB424A72BF6CFD48 /* ShareSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 965542FBCBFA014EEC77EABC /* ShareSheet.swift */; };
 		E0D62BE69472F32DE3DB600F /* OpenClawBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 92A74F270CBABDF72C72C5BD /* OpenClawBridge.swift */; };
@@ -238,6 +240,7 @@
 		1F9E1F6B5AC442EC808D2B26 /* TranscriptionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptionService.swift; sourceTree = "<group>"; };
 		21997649410C7C5AB6C9E408 /* ChineseAppsTool.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChineseAppsTool.swift; sourceTree = "<group>"; };
 		21A33541532C58D5979777C4 /* IntentClassifier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IntentClassifier.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F60002DEADBEEF /* VisionIntentDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VisionIntentDetector.swift; sourceTree = "<group>"; };
 		21C6147CE5F69027F56B754E /* LiveTranslationTool.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveTranslationTool.swift; sourceTree = "<group>"; };
 		220AC9B94458D011A6DC7E37 /* DeviceInfoTool.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceInfoTool.swift; sourceTree = "<group>"; };
 		24FDEE6CFAE6AD8A3F2AC702 /* OpenAIRealtimeService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenAIRealtimeService.swift; sourceTree = "<group>"; };
@@ -301,6 +304,7 @@
 		8BAB04141EE25C5FE20E591C /* StatusIndicator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusIndicator.swift; sourceTree = "<group>"; };
 		8BE07ADBE388B52CC68238D2 /* CalculatorTool.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalculatorTool.swift; sourceTree = "<group>"; };
 		8E5C91138E73863A23CB8E49 /* ProactiveAlertService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProactiveAlertService.swift; sourceTree = "<group>"; };
+		DA1E3F01BEEF1234ABCD5679 /* HomeAssistantEntityCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeAssistantEntityCache.swift; sourceTree = "<group>"; };
 		8EA4C5150A11DB81C1E126C1 /* GlassesConnectionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlassesConnectionService.swift; sourceTree = "<group>"; };
 		9233780EDEB6BCD031FBF535 /* MusicControlTool.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MusicControlTool.swift; sourceTree = "<group>"; };
 		924255FDB4AB583D2ACDB6E3 /* FaceRecognitionTool.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FaceRecognitionTool.swift; sourceTree = "<group>"; };
@@ -595,6 +599,7 @@
 				4252125BA0BF5D460D5DA5B9 /* FaceRecognitionService.swift */,
 				8EA4C5150A11DB81C1E126C1 /* GlassesConnectionService.swift */,
 				21A33541532C58D5979777C4 /* IntentClassifier.swift */,
+				A1B2C3D4E5F60002DEADBEEF /* VisionIntentDetector.swift */,
 				939D1D229A4FEA0E0E45223A /* LiveActivityManager.swift */,
 				E29DBEE8C553A06821992454 /* LiveTranslationService.swift */,
 				D3951EA5CAF381F4F3192D54 /* LLMService.swift */,
@@ -609,6 +614,7 @@
 				5C9AFB5D83CF43D393B3FF00 /* VideoDecoder.swift */,
 				17E6AE3E9BAD4CEEAFB419E4 /* OpenClawEventClient.swift */,
 				642F3C950294CA183F11F7E7 /* PrivacyFilterService.swift */,
+				DA1E3F01BEEF1234ABCD5679 /* HomeAssistantEntityCache.swift */,
 				8E5C91138E73863A23CB8E49 /* ProactiveAlertService.swift */,
 				BD85B93668F3556CA85DA8D3 /* ShortcutCallbackManager.swift */,
 				6E0EFD4CE4C3499FDF5444E0 /* TextToSpeechService.swift */,
@@ -899,6 +905,7 @@
 				7FEB4872181371440E06BE08 /* HomeAssistantTool.swift in Sources */,
 				D0352863512881B058D5BEAE /* HomeKitTool.swift in Sources */,
 				577C0C62A00CC49E41539CEB /* IntentClassifier.swift in Sources */,
+				A1B2C3D4E5F60001DEADBEEF /* VisionIntentDetector.swift in Sources */,
 				EC0E3F2571BC3922E04CF484 /* LLMService.swift in Sources */,
 				28865FF06AEB316EA2C923DD /* LaunchScreen.swift in Sources */,
 				3E6777A15E47D573A8B16990 /* LiveActivityManager.swift in Sources */,
@@ -944,6 +951,7 @@
 				D895774C7A8BF90EB8A819FD /* PhoneCallTool.swift in Sources */,
 				7D154D5C9BB42A08BF6B5034 /* PomodoroTool.swift in Sources */,
 				9FAC75105CE8F343D51E2DF1 /* PrivacyFilterService.swift in Sources */,
+				DA1E3F00BEEF1234ABCD5678 /* HomeAssistantEntityCache.swift in Sources */,
 				D9D0CB02BE599CFFC70DB040 /* ProactiveAlertService.swift in Sources */,
 				10B64E733570FE21A2622316 /* PromptInspectorView.swift in Sources */,
 				9649CC4B7DBACDADB3C6D4A1 /* PromptPresetsView.swift in Sources */,
@@ -1010,7 +1018,7 @@
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				CLANG_ANALYZER_NONNULL = YES;
 				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
-				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++17";
 				CLANG_CXX_LIBRARY = "libc++";
 				CLANG_ENABLE_MODULES = YES;
 				CLANG_ENABLE_OBJC_ARC = YES;
@@ -1153,7 +1161,7 @@
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				CLANG_ANALYZER_NONNULL = YES;
 				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
-				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++17";
 				CLANG_CXX_LIBRARY = "libc++";
 				CLANG_ENABLE_MODULES = YES;
 				CLANG_ENABLE_OBJC_ARC = YES;

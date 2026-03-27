@@ -61,7 +61,7 @@ class OpenClawBridge: ObservableObject {
         self.session = URLSession(configuration: config)
 
         let pingConfig = URLSessionConfiguration.default
-        pingConfig.timeoutIntervalForRequest = 5
+        pingConfig.timeoutIntervalForRequest = 10
         self.pingSession = URLSession(configuration: pingConfig)
 
         let lanPingConfig = URLSessionConfiguration.default
@@ -138,10 +138,13 @@ class OpenClawBridge: ObservableObject {
         request.setValue("Bearer \(Config.openClawGatewayToken)", forHTTPHeaderField: "Authorization")
         do {
             let (_, response) = try await session.data(for: request)
-            if let http = response as? HTTPURLResponse, (200...499).contains(http.statusCode) {
-                return true
+            if let http = response as? HTTPURLResponse {
+                NSLog("[OpenClaw] Reachability check %@ → HTTP %d", baseURL, http.statusCode)
+                return (200...599).contains(http.statusCode)
             }
-        } catch { }
+        } catch {
+            NSLog("[OpenClaw] Reachability check %@ failed: %@", baseURL, error.localizedDescription)
+        }
         return false
     }
 
@@ -163,15 +166,21 @@ class OpenClawBridge: ObservableObject {
         request.setValue("Bearer \(Config.openClawGatewayToken)", forHTTPHeaderField: "Authorization")
         do {
             let (_, response) = try await pingSession.data(for: request)
-            if let http = response as? HTTPURLResponse, (200...499).contains(http.statusCode) {
-                connectionState = .connected
-                NSLog("[OpenClaw] Gateway reachable via %@ (HTTP %d)", resolvedConnection?.label ?? "unknown", http.statusCode)
+            if let http = response as? HTTPURLResponse {
+                NSLog("[OpenClaw] Ping %@ → HTTP %d", endpoint, http.statusCode)
+                if (200...599).contains(http.statusCode) {
+                    // Any HTTP response means the server is there (even 4xx/5xx)
+                    connectionState = .connected
+                    NSLog("[OpenClaw] Gateway reachable via %@ (HTTP %d)", resolvedConnection?.label ?? "unknown", http.statusCode)
+                } else {
+                    connectionState = .unreachable("HTTP \(http.statusCode)")
+                }
             } else {
-                connectionState = .unreachable("Unexpected response")
+                connectionState = .unreachable("Non-HTTP response")
             }
         } catch {
             connectionState = .unreachable(error.localizedDescription)
-            NSLog("[OpenClaw] Gateway unreachable: %@", error.localizedDescription)
+            NSLog("[OpenClaw] Gateway unreachable at %@: %@", endpoint, error.localizedDescription)
         }
     }
 

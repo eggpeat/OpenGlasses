@@ -1,115 +1,176 @@
 import SwiftUI
+import UIKit
 
-/// Large central ambient status indicator — the visual heartbeat of the app.
-/// Adapts to Direct, Gemini Live, and OpenAI Realtime modes.
-/// When glasses aren't connected, acts as a connect button.
+/// Center status panel — card showing current state + quick action buttons.
+///
+/// The panel grows vertically as the user adds more quick actions.
+/// Status info at top, action grid below.
 struct StatusIndicator: View {
     @EnvironmentObject var appState: AppState
     @ObservedObject var session: GeminiLiveSessionManager
     @ObservedObject var openAISession: OpenAIRealtimeSessionManager
 
-    /// Outer ring pulse
-    @State private var ringScale: CGFloat = 1.0
-    @State private var ringOpacity: Double = 0.3
+    @State private var pulseScale: CGFloat = 1.0
+    @State private var executingActionId: String?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var isGemini: Bool { appState.currentMode == .geminiLive }
     private var isOpenAI: Bool { appState.currentMode == .openaiRealtime }
     private var isRealtime: Bool { appState.currentMode.isRealtime }
 
+    private var actions: [QuickAction] { Config.quickActions }
+
+    private var isIdle: Bool {
+        !appState.isProcessing
+        && !appState.isListening
+        && !appState.speechService.isSpeaking
+        && !appState.cameraService.isCaptureInProgress
+        && executingActionId == nil
+    }
+
+    private var showActions: Bool {
+        appState.isConnected && isIdle && appState.currentMode == .direct && !actions.isEmpty
+    }
+
     var body: some View {
-        VStack(spacing: 20) {
-            ZStack {
-                // Ambient ring — pulses when active
-                Circle()
-                    .stroke(ringColor.opacity(ringOpacity), lineWidth: 2)
-                    .frame(width: 160, height: 160)
-                    .scaleEffect(ringScale)
-
-                // Inner glow
-                Circle()
-                    .fill(
-                        RadialGradient(
-                            colors: [ringColor.opacity(0.15), Color.clear],
-                            center: .center,
-                            startRadius: 20,
-                            endRadius: 80
-                        )
-                    )
-                    .frame(width: 140, height: 140)
-
-                // Icon
-                Image(systemName: iconName)
-                    .font(.system(size: 52, weight: .light))
-                    .foregroundStyle(ringColor)
-                    .symbolEffect(.pulse, isActive: isPulsing)
-
-                // Camera streaming badge (realtime modes)
-                if isRealtime && appState.cameraService.isStreaming {
+        VStack(spacing: 0) {
+            // Status row
+            HStack(spacing: 14) {
+                ZStack {
                     Circle()
-                        .fill(Color.green)
-                        .frame(width: 10, height: 10)
-                        .overlay(Circle().stroke(Color.black, lineWidth: 1.5))
-                        .offset(x: 50, y: -50)
-                        .transition(.scale.combined(with: .opacity))
+                        .fill(ringColor.opacity(0.12))
+                        .frame(width: 48, height: 48)
+                        .scaleEffect(pulseScale)
+
+                    Image(systemName: iconName)
+                        .font(.system(size: 22, weight: .light))
+                        .foregroundStyle(ringColor)
+                        .symbolEffect(.pulse, isActive: isPulsing)
                 }
-            }
-            .animation(.easeInOut(duration: 0.4), value: iconName)
-            .onAppear { startRingAnimation() }
-            .onChange(of: isPulsing) { _, active in
-                if active { startRingAnimation() } else { stopRingAnimation() }
-            }
-            // Tap to connect when glasses aren't connected
-            .onTapGesture {
-                if !appState.isConnected {
-                    Task { await appState.glassesService.connect() }
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(statusLabel)
+                        .font(.system(size: 17, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.9))
+                        .lineLimit(1)
+
+                    HStack(spacing: 6) {
+                        Text(modeLabel)
+                            .font(.system(size: 12))
+                            .foregroundStyle(.white.opacity(0.45))
+
+                        if isRealtime && appState.cameraService.isStreaming {
+                            HStack(spacing: 3) {
+                                Circle().fill(.green).frame(width: 5, height: 5)
+                                Text("CAM")
+                                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                                    .foregroundStyle(.green.opacity(0.8))
+                            }
+                        }
+                    }
                 }
+
+                Spacer()
             }
+            .padding(.horizontal, 18)
+            .padding(.top, 14)
+            .padding(.bottom, showActions ? 10 : 14)
 
-            // Status text
-            VStack(spacing: 4) {
-                Text(statusLabel)
-                    .font(.system(size: 17, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.9))
-                    .lineLimit(2)
-                    .multilineTextAlignment(.center)
-
-                Text(modeLabel)
-                    .font(.system(size: 12, weight: .regular))
-                    .foregroundStyle(.white.opacity(0.6))
-                    .lineLimit(1)
-
-                // Connection hint when not connected
-                if !appState.isConnected {
-                    Text("Tap to connect your glasses")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(.cyan.opacity(0.7))
-                        .padding(.top, 4)
-                }
-            }
-
-            // Tool call status
+            // Tool call / reconnecting
             if isGemini && session.toolCallStatus.isActive {
                 toolCallPill(session.toolCallStatus.displayText, color: .purple)
+                    .padding(.bottom, 10)
             } else if !isRealtime && appState.llmService.toolCallStatus.isActive {
                 toolCallPill(appState.llmService.toolCallStatus.displayText, color: .purple)
+                    .padding(.bottom, 10)
             }
 
-            // Reconnecting
             if isGemini && session.reconnecting {
-                Text("Reconnecting…")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.orange.opacity(0.8))
+                reconnectingLabel.padding(.bottom, 10)
             }
             if isOpenAI && openAISession.reconnecting {
-                Text("Reconnecting…")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.orange.opacity(0.8))
+                reconnectingLabel.padding(.bottom, 10)
+            }
+
+            // Quick action buttons — grid that grows with user's actions
+            if showActions {
+                Divider()
+                    .background(.white.opacity(0.08))
+                    .padding(.horizontal, 16)
+
+                quickActionGrid
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 12)
             }
         }
-        .accessibilityElement(children: .combine)
+        .background(
+            RoundedRectangle(cornerRadius: 16)
+                .fill(.ultraThinMaterial)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16)
+                        .strokeBorder(ringColor.opacity(isPulsing ? 0.2 : 0.06), lineWidth: 0.5)
+                )
+        )
+        .padding(.horizontal, 20)
+        .onAppear { startPulse() }
+        .onChange(of: isPulsing) { _, active in
+            if active { startPulse() } else { stopPulse() }
+        }
+        .accessibilityElement(children: .contain)
         .accessibilityLabel("\(statusLabel). \(modeLabel)")
-        .accessibilityHint(appState.isConnected ? "" : "Double-tap to connect your glasses")
+    }
+
+    // MARK: - Quick Action Grid
+
+    private var quickActionGrid: some View {
+        let columns = [
+            GridItem(.adaptive(minimum: 70, maximum: 100), spacing: 8)
+        ]
+
+        return LazyVGrid(columns: columns, spacing: 10) {
+            ForEach(actions) { action in
+                quickActionButton(action)
+            }
+        }
+    }
+
+    private func quickActionButton(_ action: QuickAction) -> some View {
+        let isExecuting = executingActionId == action.id
+
+        return Button {
+            guard !isExecuting else { return }
+            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+            executingActionId = action.id
+            Task {
+                await appState.executeQuickAction(action)
+                executingActionId = nil
+            }
+        } label: {
+            VStack(spacing: 5) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(.white.opacity(0.06))
+                        .frame(height: 42)
+
+                    if isExecuting {
+                        ProgressView()
+                            .scaleEffect(0.7)
+                            .tint(.white)
+                    } else {
+                        Image(systemName: action.icon)
+                            .font(.system(size: 17, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.85))
+                    }
+                }
+
+                Text(action.label)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.6))
+                    .lineLimit(1)
+            }
+        }
+        .buttonStyle(.plain)
+        .disabled(isExecuting)
     }
 
     // MARK: - Computed Properties
@@ -190,26 +251,26 @@ struct StatusIndicator: View {
         if isGemini {
             if !session.isActive { return "Ready" }
             switch session.connectionState {
-            case .ready where session.isModelSpeaking: return "Speaking…"
-            case .ready: return "Listening…"
-            case .connecting: return "Connecting…"
-            case .settingUp: return "Setting Up…"
+            case .ready where session.isModelSpeaking: return "Speaking..."
+            case .ready: return "Listening..."
+            case .connecting: return "Connecting..."
+            case .settingUp: return "Setting Up..."
             case .error(let msg): return msg
-            case .disconnected: return session.reconnecting ? "Reconnecting…" : "Disconnected"
+            case .disconnected: return session.reconnecting ? "Reconnecting..." : "Disconnected"
             }
         } else if isOpenAI {
             if !openAISession.isActive { return "Ready" }
             switch openAISession.connectionState {
-            case .ready where openAISession.isModelSpeaking: return "Speaking…"
-            case .ready: return "Listening…"
-            case .connecting: return "Connecting…"
-            case .settingUp: return "Setting Up…"
+            case .ready where openAISession.isModelSpeaking: return "Speaking..."
+            case .ready: return "Listening..."
+            case .connecting: return "Connecting..."
+            case .settingUp: return "Setting Up..."
             case .error(let msg): return msg
-            case .disconnected: return openAISession.reconnecting ? "Reconnecting…" : "Disconnected"
+            case .disconnected: return openAISession.reconnecting ? "Reconnecting..." : "Disconnected"
             }
         } else {
-            if appState.isListening { return "Listening…" }
-            if appState.speechService.isSpeaking { return "Speaking…" }
+            if appState.isListening { return "Listening..." }
+            if appState.speechService.isSpeaking { return "Speaking..." }
             return "Ready"
         }
     }
@@ -220,11 +281,17 @@ struct StatusIndicator: View {
         } else if isOpenAI {
             return "OpenAI Realtime"
         } else {
-            return "Voice · \(appState.llmService.activeModelName)"
+            return "Voice \u{00B7} \(appState.llmService.activeModelName)"
         }
     }
 
     // MARK: - Helpers
+
+    private var reconnectingLabel: some View {
+        Text("Reconnecting...")
+            .font(.system(size: 12))
+            .foregroundStyle(.orange.opacity(0.8))
+    }
 
     private func toolCallPill(_ text: String, color: Color) -> some View {
         HStack(spacing: 6) {
@@ -239,22 +306,19 @@ struct StatusIndicator: View {
         .overlay(Capsule().strokeBorder(color.opacity(0.4), lineWidth: 0.5))
     }
 
-    private func startRingAnimation() {
+    private func startPulse() {
         guard !reduceMotion else {
-            ringScale = 1.0
-            ringOpacity = 0.6
+            pulseScale = 1.0
             return
         }
         withAnimation(.easeInOut(duration: 2).repeatForever(autoreverses: true)) {
-            ringScale = 1.12
-            ringOpacity = 0.6
+            pulseScale = 1.15
         }
     }
 
-    private func stopRingAnimation() {
+    private func stopPulse() {
         withAnimation(.easeOut(duration: reduceMotion ? 0.01 : 0.5)) {
-            ringScale = 1.0
-            ringOpacity = 0.3
+            pulseScale = 1.0
         }
     }
 }

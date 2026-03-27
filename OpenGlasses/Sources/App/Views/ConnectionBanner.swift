@@ -1,8 +1,13 @@
 import SwiftUI
 import UIKit
 
-/// Top-of-screen status pills showing glasses, Gemini, and OpenClaw connection state.
-/// Each pill is tappable — expands to show details and actions.
+/// Top-of-screen status bar.
+///
+/// Layout:
+///   Row 1:  [Glasses status]  ·  [Q quick-actions]  ·  [OpenClaw status]
+///   Row 2:  Full-width model/session bar
+///
+/// Icons are tappable — expand to show details and actions.
 struct ConnectionBanner: View {
     @EnvironmentObject var appState: AppState
     @ObservedObject var session: GeminiLiveSessionManager
@@ -11,8 +16,7 @@ struct ConnectionBanner: View {
 
     @State private var expandedPill: PillType? = nil
     @State private var cameraPermissionStatus: String?
-
-    enum PillType { case glasses, gemini, openAI, openClaw }
+    enum PillType { case glasses, gemini, openAI, openClaw, model }
 
     private var registrationStateLabel: String {
         switch appState.registrationStateRaw {
@@ -33,168 +37,240 @@ struct ConnectionBanner: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                glassesPill
-                if appState.currentMode == .geminiLive {
-                    geminiPill
-                } else if appState.currentMode == .openaiRealtime {
-                    openAIPill
-                } else {
-                    activeModelPill
-                }
-                if Config.isOpenClawConfigured {
-                    openClawPill
-                }
+        VStack(spacing: 6) {
+            // Row 1: [Glasses] · [OpenClaw/Session]
+            HStack {
+                glassesIcon
                 Spacer()
+                trailingIcon
             }
+            .padding(.horizontal, 20)
+
+            // Row 2: Full-width model/session bar
+            modelBar
 
             // Expanded dropdown
             if let expanded = expandedPill {
                 expandedCard(for: expanded)
+                    .padding(.horizontal, 16)
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
-        .padding(.horizontal, 16)
         .padding(.vertical, 8)
         .animation(.easeInOut(duration: 0.2), value: expandedPill)
     }
 
-    // MARK: - Pills
+    // MARK: - Row 1: Status Icons
 
-    private var glassesPill: some View {
+    private var glassesIcon: some View {
         let connected = appState.isConnected
-        let color: Color
-        let label: String
+        let color: Color = connected ? .green :
+            (appState.registrationStateRaw > 0 ? registrationStateColor : .red.opacity(0.7))
+        let label = connected ? (appState.glassesService.deviceName ?? "Glasses") : registrationStateLabel
 
-        if connected {
-            color = .green
-            label = appState.glassesService.deviceName ?? "Glasses"
-        } else if appState.registrationStateRaw > 0 {
-            color = registrationStateColor
-            label = registrationStateLabel
-        } else {
-            color = .red.opacity(0.7)
-            label = "Disconnected"
-        }
-
-        return iconPill(
-            systemIcon: "eyeglasses",
-            color: color,
-            label: label,
-            accessibilityDescription: "Glasses: \(label)",
-            isExpanded: expandedPill == .glasses
-        ) {
+        return Button {
             withAnimation { expandedPill = expandedPill == .glasses ? nil : .glasses }
-        }
-    }
-
-    private var geminiPill: some View {
-        let (color, label): (Color, String) = {
-            switch session.connectionState {
-            case .ready: return (.green, "Gemini")
-            case .connecting, .settingUp: return (.orange, "Connecting")
-            case .error: return (.red, "Error")
-            case .disconnected: return (.gray, "Gemini")
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "eyeglasses")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(color)
+                Circle()
+                    .fill(color)
+                    .frame(width: 6, height: 6)
             }
-        }()
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(.ultraThinMaterial, in: Capsule())
+            .overlay(
+                Capsule().strokeBorder(
+                    expandedPill == .glasses ? color.opacity(0.4) : Color.white.opacity(0.08),
+                    lineWidth: 0.5
+                )
+            )
+        }
+        .accessibilityLabel("Glasses: \(label)")
+    }
 
-        return iconPill(
-            systemIcon: "sparkles",
-            color: color,
-            label: label,
-            accessibilityDescription: "Gemini Live: \(label)",
-            isExpanded: expandedPill == .gemini
-        ) {
-            withAnimation { expandedPill = expandedPill == .gemini ? nil : .gemini }
+    @ViewBuilder
+    private var trailingIcon: some View {
+        if Config.isOpenClawConfigured {
+            openClawIcon
+        } else if appState.currentMode == .geminiLive {
+            geminiIcon
+        } else if appState.currentMode == .openaiRealtime {
+            openAIIcon
+        } else {
+            Color.clear.frame(width: 50, height: 40)
         }
     }
 
-    private var openClawPill: some View {
+    private var openClawIcon: some View {
         let (color, label): (Color, String) = {
             switch openClawBridge.connectionState {
-            case .connected: return (.green, "OpenClaw")
+            case .connected: return (.green, "Connected")
             case .checking: return (.orange, "Checking")
             case .unreachable: return (.red, "Unreachable")
             case .notConfigured: return (.gray, "Not Set Up")
             }
         }()
 
-        return iconPill(
-            systemIcon: "hand.point.up.braille.fill",
-            color: color,
-            label: label,
-            accessibilityDescription: "OpenClaw: \(label)",
-            isExpanded: expandedPill == .openClaw
-        ) {
+        return Button {
             withAnimation { expandedPill = expandedPill == .openClaw ? nil : .openClaw }
+        } label: {
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(color)
+                    .frame(width: 6, height: 6)
+                Image(systemName: "hand.point.up.braille.fill")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(color)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(.ultraThinMaterial, in: Capsule())
+            .overlay(
+                Capsule().strokeBorder(
+                    expandedPill == .openClaw ? color.opacity(0.4) : Color.white.opacity(0.08),
+                    lineWidth: 0.5
+                )
+            )
         }
+        .accessibilityLabel("OpenClaw: \(label)")
     }
 
-    private var openAIPill: some View {
+    private var geminiIcon: some View {
         let (color, label): (Color, String) = {
-            switch openAISession.connectionState {
-            case .ready: return (.green, "OpenAI")
+            switch session.connectionState {
+            case .ready: return (.green, "Connected")
             case .connecting, .settingUp: return (.orange, "Connecting")
             case .error: return (.red, "Error")
-            case .disconnected: return (.gray, "OpenAI")
+            case .disconnected: return (.gray, "Disconnected")
             }
         }()
 
-        return iconPill(
-            systemIcon: "bolt.fill",
-            color: color,
-            label: label,
-            accessibilityDescription: "OpenAI Realtime: \(label)",
-            isExpanded: expandedPill == .openAI
-        ) {
+        return Button {
+            withAnimation { expandedPill = expandedPill == .gemini ? nil : .gemini }
+        } label: {
+            HStack(spacing: 6) {
+                Circle().fill(color).frame(width: 6, height: 6)
+                Image(systemName: "sparkles")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(color)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(.ultraThinMaterial, in: Capsule())
+            .overlay(
+                Capsule().strokeBorder(
+                    expandedPill == .gemini ? color.opacity(0.4) : Color.white.opacity(0.08),
+                    lineWidth: 0.5
+                )
+            )
+        }
+        .accessibilityLabel("Gemini: \(label)")
+    }
+
+    private var openAIIcon: some View {
+        let (color, label): (Color, String) = {
+            switch openAISession.connectionState {
+            case .ready: return (.green, "Connected")
+            case .connecting, .settingUp: return (.orange, "Connecting")
+            case .error: return (.red, "Error")
+            case .disconnected: return (.gray, "Disconnected")
+            }
+        }()
+
+        return Button {
             withAnimation { expandedPill = expandedPill == .openAI ? nil : .openAI }
+        } label: {
+            HStack(spacing: 6) {
+                Circle().fill(color).frame(width: 6, height: 6)
+                Image(systemName: "bolt.horizontal.fill")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(color)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(.ultraThinMaterial, in: Capsule())
+            .overlay(
+                Capsule().strokeBorder(
+                    expandedPill == .openAI ? color.opacity(0.4) : Color.white.opacity(0.08),
+                    lineWidth: 0.5
+                )
+            )
         }
+        .accessibilityLabel("OpenAI: \(label)")
     }
 
-    private var activeModelPill: some View {
-        HStack(spacing: 5) {
-            Image(systemName: "brain")
-                .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(.purple)
-            Text(appState.llmService.activeModelName)
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.85))
-                .lineLimit(1)
-                .truncationMode(.tail)
+    // MARK: - Row 2: Model Bar
+
+    private var modelBar: some View {
+        let isRealtime = appState.currentMode.isRealtime
+        let modelName: String
+        let icon: String
+        let color: Color
+
+        if appState.currentMode == .geminiLive {
+            modelName = "Gemini Live"
+            icon = "sparkles"
+            color = session.isActive ? .green : .gray
+        } else if appState.currentMode == .openaiRealtime {
+            modelName = "OpenAI Realtime"
+            icon = "bolt.horizontal.fill"
+            color = openAISession.isActive ? .green : .gray
+        } else {
+            modelName = appState.llmService.activeModelName
+            icon = "brain"
+            color = .purple
         }
-        .pillBackground()
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Active model: \(appState.llmService.activeModelName)")
+
+        return Button {
+            withAnimation { expandedPill = expandedPill == .model ? nil : .model }
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: icon)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(color)
+
+                Text(modelName)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.85))
+                    .lineLimit(1)
+
+                Spacer()
+
+                // Active persona badge
+                if let persona = appState.activePersona {
+                    HStack(spacing: 4) {
+                        Image(systemName: persona.icon ?? "person.circle")
+                            .font(.system(size: 10))
+                        Text(persona.name)
+                            .font(.system(size: 11, weight: .medium))
+                    }
+                    .foregroundStyle(.cyan.opacity(0.8))
+                }
+
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(.white.opacity(0.4))
+                    .rotationEffect(expandedPill == .model ? .degrees(180) : .zero)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .background(.ultraThinMaterial, in: Capsule())
+            .overlay(
+                Capsule().strokeBorder(
+                    expandedPill == .model ? color.opacity(0.3) : Color.white.opacity(0.06),
+                    lineWidth: 0.5
+                )
+            )
+        }
+        .padding(.horizontal, 16)
+        .accessibilityLabel("Model: \(modelName)")
     }
 
-    // MARK: - Reusable Pill
-
-    private func iconPill(systemIcon: String, color: Color, label: String, accessibilityDescription: String, isExpanded: Bool, action: @escaping () -> Void) -> some View {
-        HStack(spacing: 5) {
-            Image(systemName: systemIcon)
-                .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(color)
-            Text(label)
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.85))
-                .lineLimit(1)
-                .truncationMode(.tail)
-            Image(systemName: "chevron.down")
-                .font(.system(size: 8, weight: .bold))
-                .foregroundStyle(.white.opacity(0.5))
-                .rotationEffect(isExpanded ? .degrees(180) : .zero)
-        }
-        .pillBackground(borderColor: isExpanded ? color.opacity(0.4) : Color.white.opacity(0.08))
-        .contentShape(Capsule())
-        .onTapGesture(perform: action)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(accessibilityDescription)
-        .accessibilityHint("Tap to \(isExpanded ? "collapse" : "expand") details")
-        .accessibilityAddTraits(.isButton)
-    }
-
-    // MARK: - Expanded Card
+    // MARK: - Expanded Cards
 
     @ViewBuilder
     private func expandedCard(for type: PillType) -> some View {
@@ -207,7 +283,41 @@ struct ConnectionBanner: View {
             openAICard
         case .openClaw:
             openClawCard
+        case .model:
+            modelCard
         }
+    }
+
+    private var modelCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if appState.currentMode == .geminiLive {
+                Text("Gemini Live — bidirectional voice streaming")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.white.opacity(0.7))
+            } else if appState.currentMode == .openaiRealtime {
+                Text("OpenAI Realtime — bidirectional voice streaming")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.white.opacity(0.7))
+            } else {
+                Text("Direct mode — \(appState.llmService.activeModelName)")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.white.opacity(0.7))
+
+                if appState.llmService.toolCallStatus.isActive {
+                    HStack(spacing: 6) {
+                        ProgressView().scaleEffect(0.7).tint(.white)
+                        Text(appState.llmService.toolCallStatus.displayText)
+                            .font(.system(size: 11))
+                            .foregroundStyle(.purple.opacity(0.8))
+                    }
+                }
+            }
+
+            Text("Tap the Model button below to switch models")
+                .font(.system(size: 11))
+                .foregroundStyle(.white.opacity(0.5))
+        }
+        .cardBackground()
     }
 
     private var glassesCard: some View {

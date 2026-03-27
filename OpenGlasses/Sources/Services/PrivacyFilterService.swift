@@ -19,12 +19,27 @@ class PrivacyFilterService: ObservableObject {
 
     private let ciContext = CIContext()
 
+    /// Whether processing is suspended (background optimization for streaming).
+    private var isSuspended = false
+
     // MARK: - Public API
 
+    /// Suspend face blurring (background optimization — no UI visible, save CPU).
+    func suspend() {
+        isSuspended = true
+        NSLog("[PrivacyFilter] Suspended for background optimization")
+    }
+
+    /// Resume face blurring after returning to foreground.
+    func resume() {
+        isSuspended = false
+        NSLog("[PrivacyFilter] Resumed after foreground")
+    }
+
     /// Process a UIImage and return it with bystander faces blurred.
-    /// Returns the original image if no faces detected or filtering is disabled.
+    /// Returns the original image if no faces detected or filtering is disabled/suspended.
     func processFrame(_ image: UIImage) -> UIImage {
-        guard isEnabled else { return image }
+        guard isEnabled, !isSuspended else { return image }
         guard let cgImage = image.cgImage else { return image }
 
         // Detect faces

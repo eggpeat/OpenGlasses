@@ -36,24 +36,12 @@ class OpenClawEventClient {
     // MARK: - Private
 
     private func establishConnection() {
-        // Build WebSocket URL from the configured OpenClaw endpoint
-        let mode = Config.openClawConnectionMode
-        let wsURL: String
-        switch mode {
-        case .tunnel:
-            // Tunnel: convert https:// to wss://
-            let tunnel = Config.openClawTunnelHost
-            wsURL = tunnel
-                .replacingOccurrences(of: "https://", with: "wss://")
-                .replacingOccurrences(of: "http://", with: "ws://")
-        case .lan, .auto:
-            // LAN: use host + port with ws://
-            let host = Config.openClawLanHost
-                .replacingOccurrences(of: "http://", with: "")
-                .replacingOccurrences(of: "https://", with: "")
-            let port = Config.openClawPort
-            wsURL = "ws://\(host):\(port)"
-        }
+        // WebSocket always connects via LAN — tunnel proxies (Tailscale serve,
+        // Cloudflare Tunnel) typically don't support WebSocket upgrade.
+        // Only fall back to tunnel WSS if no LAN host is configured.
+        let lanURL = Self.lanWebSocketURL()
+        let hasLAN = !Config.openClawLanHost.isEmpty
+        let wsURL = hasLAN ? lanURL : Self.tunnelWebSocketURL()
 
         guard let url = URL(string: wsURL) else {
             NSLog("[OpenClawWS] Invalid URL: %@", wsURL)
@@ -68,6 +56,20 @@ class OpenClawEventClient {
 
         NSLog("[OpenClawWS] Connecting to %@", url.absoluteString)
         startReceiving()
+    }
+
+    private static func tunnelWebSocketURL() -> String {
+        Config.openClawTunnelHost
+            .replacingOccurrences(of: "https://", with: "wss://")
+            .replacingOccurrences(of: "http://", with: "ws://")
+    }
+
+    private static func lanWebSocketURL() -> String {
+        let host = Config.openClawLanHost
+            .replacingOccurrences(of: "http://", with: "")
+            .replacingOccurrences(of: "https://", with: "")
+        let port = Config.openClawPort
+        return "ws://\(host):\(port)"
     }
 
     private func startReceiving() {

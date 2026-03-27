@@ -1,13 +1,18 @@
 import SwiftUI
 
-/// Bottom control bar with circular action buttons spanning the full width.
-/// Layout: [Settings] [Camera] [🎤 Hero] [Preview] [Model] [Persona]
+/// Bottom control bar — ergonomic layout for thumb and index finger use.
+///
+/// Layout: Two rows.
+///   Row 1 (primary):  Wide mic/action capsule — the main touch target.
+///   Row 2 (secondary): [Settings] [Camera] [Preview] [Model] [Persona]
+///
+/// The mic capsule is large enough to hit easily with a thumb from either hand.
+/// Secondary buttons are spaced for index finger taps.
 struct BottomControlBar: View {
     @EnvironmentObject var appState: AppState
     @ObservedObject var session: GeminiLiveSessionManager
     @ObservedObject var openAISession: OpenAIRealtimeSessionManager
 
-    /// Sheet bindings passed down from MainView
     @Binding var showSettings: Bool
     @Binding var showModelPicker: Bool
     @Binding var showPreview: Bool
@@ -21,63 +26,62 @@ struct BottomControlBar: View {
         isGemini ? session.isActive : (isOpenAI ? openAISession.isActive : false)
     }
 
-    // MARK: - Slot visibility
-
     private var previewVisible: Bool { appState.isConnected }
 
-    /// Photo capture disabled for local text-only models (no vision encoder).
     private var photoDisabledForLocalModel: Bool {
         guard let model = Config.activeModel, model.llmProvider == .local else { return false }
         return !model.visionEnabled
     }
-    private var modeVisible: Bool {
-        switch appState.currentMode {
-        case .geminiLive, .openaiRealtime: return true
-        case .direct: return Config.isGeminiLiveConfigured
-        }
-    }
 
     var body: some View {
-        HStack(spacing: 0) {
-            // Slot 1: Settings
-            CircleButton(icon: "gearshape", size: 38, label: "Settings") {
-                showSettings = true
-            }
-            .frame(maxWidth: .infinity)
+        VStack(spacing: 10) {
+            // Primary: wide mic capsule
+            heroCapsule
+                .simultaneousGesture(
+                    LongPressGesture(minimumDuration: 0.5)
+                        .onEnded { _ in
+                            appState.micMuted.toggle()
+                        }
+                )
 
-            // Slot 2: Camera / Connect
-            cameraButton
+            // Secondary: utility row
+            HStack(spacing: 0) {
+                BarButton(icon: "gearshape", label: "Settings") {
+                    showSettings = true
+                }
                 .frame(maxWidth: .infinity)
 
-            // Slot 3: Hero — mic or session toggle (largest)
-            heroButton
+                cameraButton
+                    .frame(maxWidth: .infinity)
+
+                if previewVisible {
+                    BarButton(
+                        icon: "eye",
+                        label: "Preview",
+                        isActive: appState.videoRecorder.isRecording
+                    ) {
+                        showPreview = true
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+
+                BarButton(
+                    icon: "brain",
+                    label: appState.llmService.activeModelName,
+                    truncateLabel: true
+                ) {
+                    showModelPicker = true
+                }
                 .frame(maxWidth: .infinity)
 
-            // Slot 4: Preview (dimmed when no glasses)
-            CircleButton(
-                icon: "eye",
-                size: 38,
-                isActive: appState.videoRecorder.isRecording,
-                isDisabled: !previewVisible,
-                label: previewVisible ? "Live Preview" : "No glasses"
-            ) {
-                if previewVisible { showPreview = true }
+                personaButton
+                    .frame(maxWidth: .infinity)
             }
-            .opacity(previewVisible ? 1 : 0.3)
-            .frame(maxWidth: .infinity)
-
-            // Slot 5: Model picker
-            CircleButton(icon: "brain", size: 38, label: "Switch Model") {
-                showModelPicker = true
-            }
-            .frame(maxWidth: .infinity)
-
-            // Slot 6: Persona
-            personaButton
-                .frame(maxWidth: .infinity)
+            .padding(.horizontal, 8)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 12)
+        .padding(.horizontal, 16)
+        .padding(.top, 8)
+        .padding(.bottom, 8)
         .background(
             Rectangle()
                 .fill(.ultraThinMaterial)
@@ -92,107 +96,55 @@ struct BottomControlBar: View {
         )
     }
 
-    // MARK: - Slot Builders
+    // MARK: - Hero Capsule
 
     @ViewBuilder
-    private var cameraButton: some View {
-        if !appState.isConnected {
-            CircleButton(
-                icon: "camera.fill",
-                size: 38,
-                label: "Connect Glasses"
-            ) {
-                Task { await appState.glassesService.connect() }
-                appState.errorMessage = "Connecting glasses for camera…"
-            }
-        } else if isRealtime {
-            CircleButton(
-                icon: "video.fill",
-                size: 38,
-                isActive: appState.cameraService.isStreaming,
-                isDisabled: !realtimeSessionActive,
-                label: appState.cameraService.isStreaming ? "Camera Streaming" : "Start Camera"
-            ) {
-                if realtimeSessionActive && !appState.cameraService.isStreaming {
-                    Task {
-                        do {
-                            try await appState.cameraService.startStreaming()
-                        } catch {
-                            appState.errorMessage = "Camera: \(error.localizedDescription)"
-                        }
-                    }
-                }
-            }
-        } else {
-            CircleButton(
-                icon: "camera.fill",
-                size: 38,
-                isActive: appState.cameraService.isCaptureInProgress,
-                isDisabled: appState.cameraService.isCaptureInProgress || photoDisabledForLocalModel,
-                label: photoDisabledForLocalModel ? "Photos not available (text-only model)" : "Take Photo"
-            ) {
-                if !photoDisabledForLocalModel {
-                    Task { await appState.captureAndAnalyzePhoto() }
-                }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var heroButton: some View {
+    private var heroCapsule: some View {
         if isGemini {
-            CircleButton(
+            ActionCapsule(
                 icon: session.isActive ? "stop.fill" : "play.fill",
-                size: 56,
+                label: session.isActive ? "Stop Session" : "Start Gemini Live",
                 isActive: session.isActive,
-                label: session.isActive ? "Stop Gemini Session" : "Start Gemini Session"
+                color: session.isActive ? .red : .cyan
             ) {
                 Task {
-                    if session.isActive {
-                        session.stopSession()
-                    } else {
-                        await session.startSession()
-                    }
+                    if session.isActive { session.stopSession() }
+                    else { await session.startSession() }
                 }
             }
         } else if isOpenAI {
-            CircleButton(
+            ActionCapsule(
                 icon: openAISession.isActive ? "stop.fill" : "play.fill",
-                size: 56,
+                label: openAISession.isActive ? "Stop Session" : "Start OpenAI Realtime",
                 isActive: openAISession.isActive,
-                label: openAISession.isActive ? "Stop OpenAI Session" : "Start OpenAI Session"
+                color: openAISession.isActive ? .red : .cyan
             ) {
                 Task {
-                    if openAISession.isActive {
-                        openAISession.stopSession()
-                    } else {
-                        await openAISession.startSession()
-                    }
+                    if openAISession.isActive { openAISession.stopSession() }
+                    else { await openAISession.startSession() }
                 }
             }
         } else if appState.isProcessing || appState.speechService.isSpeaking {
-            // Interrupt: cancel current processing or TTS
-            CircleButton(
+            ActionCapsule(
                 icon: "stop.fill",
-                size: 56,
+                label: appState.speechService.isSpeaking ? "Tap to stop" : "Cancel",
                 isActive: true,
-                label: appState.speechService.isSpeaking ? "Tap to stop" : "Tap to cancel"
+                color: .orange
             ) {
                 appState.cancelCurrentResponse()
             }
         } else {
-            CircleButton(
+            ActionCapsule(
                 icon: appState.isListening ? "mic.fill" : "mic",
-                size: 56,
+                label: appState.isListening ? "Listening..." : "Tap to talk",
                 isActive: appState.isListening,
-                label: appState.isListening ? "Listening" : "Start Listening"
+                color: appState.isListening ? .cyan : .white,
+                showMuteBadge: appState.micMuted
             ) {
                 Task {
                     if appState.isListening {
-                        // Tap while listening → cancel and return to wake word
                         await appState.returnToWakeWord()
                     } else {
-                        // Tap to start → stop wake word first, then start transcription
                         appState.wakeWordService.stopListening()
                         try? await Task.sleep(nanoseconds: 100_000_000)
                         await appState.handleWakeWordDetected()
@@ -202,41 +154,163 @@ struct BottomControlBar: View {
         }
     }
 
+    // MARK: - Secondary Buttons
+
     @ViewBuilder
-    private var personaButton: some View {
-        let activePersona = appState.activePersona
-        let personaCount = Config.enabledPersonas.count
-        CircleButton(
-            icon: "person.2",
-            size: 38,
-            isActive: activePersona != nil,
-            badge: personaCount > 1 ? "\(personaCount)" : nil,
-            label: activePersona != nil ? "Active: \(activePersona!.name)" : "Personas"
-        ) {
-            showPersonaPicker = true
+    private var cameraButton: some View {
+        if !appState.isConnected {
+            BarButton(icon: "eyeglasses", label: "Connect") {
+                Task { await appState.glassesService.connect() }
+            }
+        } else if isRealtime {
+            BarButton(
+                icon: "video.fill",
+                label: appState.cameraService.isStreaming ? "Streaming" : "Camera",
+                isActive: appState.cameraService.isStreaming,
+                isDisabled: !realtimeSessionActive
+            ) {
+                if realtimeSessionActive && !appState.cameraService.isStreaming {
+                    Task {
+                        do { try await appState.cameraService.startStreaming() }
+                        catch { appState.errorMessage = "Camera: \(error.localizedDescription)" }
+                    }
+                }
+            }
+        } else {
+            BarButton(
+                icon: "camera.fill",
+                label: "Photo",
+                isActive: appState.cameraService.isCaptureInProgress,
+                isDisabled: appState.cameraService.isCaptureInProgress || photoDisabledForLocalModel
+            ) {
+                if !photoDisabledForLocalModel {
+                    Task { await appState.captureAndAnalyzePhoto() }
+                }
+            }
         }
     }
 
     @ViewBuilder
-    private var modeButton: some View {
-        switch appState.currentMode {
-        case .geminiLive:
-            CircleButton(icon: "mic.circle", size: 40, label: "Switch to Voice Mode") {
-                appState.switchMode(to: .direct)
-            }
-        case .openaiRealtime:
-            CircleButton(icon: "mic.circle", size: 40, label: "Switch to Voice Mode") {
-                appState.switchMode(to: .direct)
-            }
-        case .direct:
-            CircleButton(
-                icon: "waveform.circle.fill",
-                size: 40,
-                badge: "G",
-                label: "Switch to Gemini Live"
-            ) {
-                appState.switchMode(to: .geminiLive)
-            }
+    private var personaButton: some View {
+        let activePersona = appState.activePersona
+        let personaCount = Config.enabledPersonas.count
+        BarButton(
+            icon: activePersona?.icon ?? "person.2",
+            label: activePersona?.name ?? "Modes",
+            badge: personaCount > 1 ? "\(personaCount)" : nil
+        ) {
+            showPersonaPicker = true
         }
+    }
+}
+
+// MARK: - Action Capsule (primary touch target)
+
+/// Wide capsule button — the main interaction element.
+/// Sized for easy thumb hits from either hand edge.
+private struct ActionCapsule: View {
+    let icon: String
+    let label: String
+    var isActive: Bool = false
+    var color: Color = .white
+    var showMuteBadge: Bool = false
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                ZStack {
+                    Image(systemName: icon)
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(color)
+
+                    if showMuteBadge {
+                        Image(systemName: "mic.slash.fill")
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundStyle(.red)
+                            .padding(3)
+                            .background(.black.opacity(0.7), in: Circle())
+                            .offset(x: 12, y: -8)
+                    }
+                }
+
+                Text(label)
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(color.opacity(0.9))
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: 50)
+            .background(
+                Capsule()
+                    .fill(.ultraThinMaterial)
+                    .overlay(
+                        Capsule()
+                            .fill(isActive ? color.opacity(0.15) : Color.clear)
+                    )
+                    .overlay(
+                        Capsule()
+                            .strokeBorder(
+                                isActive ? color.opacity(0.4) : Color.white.opacity(0.1),
+                                lineWidth: 1
+                            )
+                    )
+            )
+        }
+        .accessibilityLabel(label)
+    }
+}
+
+// MARK: - Bar Button (secondary actions)
+
+/// Compact button for the secondary utility row.
+private struct BarButton: View {
+    let icon: String
+    var label: String = ""
+    var isActive: Bool = false
+    var isDisabled: Bool = false
+    var badge: String? = nil
+    var truncateLabel: Bool = false
+    var action: () -> Void = {}
+
+    private var foreground: Color {
+        if isDisabled { return .white.opacity(0.25) }
+        if isActive { return .white }
+        return .white.opacity(0.7)
+    }
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 3) {
+                ZStack {
+                    Image(systemName: icon)
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundStyle(foreground)
+
+                    if let badge {
+                        Text(badge)
+                            .font(.system(size: 8, weight: .bold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 3)
+                            .padding(.vertical, 1)
+                            .background(Color.accentColor, in: Capsule())
+                            .offset(x: 10, y: -8)
+                    }
+                }
+                .frame(width: 32, height: 28)
+
+                if !label.isEmpty {
+                    Text(label)
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundStyle(foreground.opacity(0.7))
+                        .lineLimit(1)
+                        .truncationMode(truncateLabel ? .middle : .tail)
+                }
+            }
+            .frame(minWidth: 44, minHeight: 44)
+            .contentShape(Rectangle())
+        }
+        .disabled(isDisabled)
+        .opacity(isDisabled ? 0.4 : 1)
+        .accessibilityLabel(label.isEmpty ? icon : label)
     }
 }

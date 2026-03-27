@@ -80,7 +80,7 @@ struct ModelPickerSheet: View {
                     Spacer()
                     if model.id == activeId {
                         Image(systemName: "checkmark")
-                            .foregroundStyle(Color.accentColor)
+                            .foregroundStyle(.primary)
                             .accessibilityLabel("Active model")
                     }
                 }

@@ -26,8 +26,21 @@ final class HomeKitTool: NativeTool, @unchecked Sendable {
     ]
 
     /// Single shared HomeKit manager — persists for the app lifetime.
-    /// Creating a new HMHomeManager each call causes race conditions and auth issues.
-    private static let shared = HomeKitManager()
+    /// Initialized lazily but always on the main thread.
+    private static var _shared: HomeKitManager?
+    private static var shared: HomeKitManager {
+        if let existing = _shared { return existing }
+        // This should be called from main thread via prepareShared()
+        let manager = HomeKitManager()
+        _shared = manager
+        return manager
+    }
+
+    /// Call from AppState init on the main thread to avoid lazy init issues.
+    @MainActor
+    static func prepareShared() {
+        _ = shared
+    }
 
     init() {}
 
@@ -36,7 +49,8 @@ final class HomeKitTool: NativeTool, @unchecked Sendable {
             return "No action specified. Use 'on', 'off', 'toggle', 'set', 'brightness', 'temperature', 'lock', 'unlock', 'scene', 'list', or 'list_scenes'."
         }
 
-        // Wait for HomeKit to be ready (first call may take a few seconds)
+        // Ensure HomeKit is initialized on main thread
+        await MainActor.run { Self.prepareShared() }
         let manager = Self.shared
         await manager.ensureReady()
 
@@ -45,8 +59,10 @@ final class HomeKitTool: NativeTool, @unchecked Sendable {
         }
 
         let authStatus = homeManager.authorizationStatus
-        if !authStatus.contains(.authorized) {
-            return "HomeKit access not authorized. Please enable Home Data for OpenGlasses in Settings → Privacy & Security → HomeKit."
+        NSLog("[HomeKit] Auth status: %d, homes: %d", authStatus.rawValue, homeManager.homes.count)
+        // Accept if authorized OR if we have homes (auth may lag behind on some iOS versions)
+        if !authStatus.contains(.authorized) && homeManager.homes.isEmpty {
+            return "HomeKit access not authorized. Please enable Home Data for OpenGlasses in Settings → Privacy & Security → HomeKit. (Auth status: \(authStatus.rawValue))"
         }
 
         // Homes may not have loaded yet — retry a few times
@@ -101,7 +117,8 @@ final class HomeKitTool: NativeTool, @unchecked Sendable {
         for room in home.rooms {
             let accessories = room.accessories.map { acc -> String in
                 let state = getPowerState(acc) ?? "unknown"
-                return "\(acc.name) (\(state))"
+                let reachable = acc.isReachable ? "" : " [offline]"
+                return "\(acc.name) (\(state)\(reachable))"
             }
             if !accessories.isEmpty {
                 result.append("\(room.name): \(accessories.joined(separator: ", "))")
@@ -132,6 +149,17 @@ final class HomeKitTool: NativeTool, @unchecked Sendable {
             return "Couldn't find a controllable device matching '\(deviceName)'. Say 'list' to see available devices."
         }
 
+        guard accessory.isReachable else {
+            return "\(accessory.name) is not reachable. The device may be offline or disconnected from the network."
+        }
+
+        // Read current value first — some accessories require this before writes
+        do {
+            try await characteristic.readValue()
+        } catch {
+            NSLog("[HomeKit] Read before write failed for %@: %@", accessory.name, error.localizedDescription)
+        }
+
         let newValue: Bool
         if action == "toggle" {
             let current = characteristic.value as? Bool ?? false
@@ -144,7 +172,7 @@ final class HomeKitTool: NativeTool, @unchecked Sendable {
             try await characteristic.writeValue(newValue)
             return "\(accessory.name) turned \(newValue ? "on" : "off")."
         } catch {
-            return "Failed to control \(accessory.name): \(error.localizedDescription)"
+            return "Failed to control \(accessory.name): \(error.localizedDescription). Is the device reachable? (reachable=\(accessory.isReachable))"
         }
     }
 
@@ -159,7 +187,12 @@ final class HomeKitTool: NativeTool, @unchecked Sendable {
             return "Couldn't find a dimmable light matching '\(deviceName)'."
         }
 
+        guard accessory.isReachable else {
+            return "\(accessory.name) is not reachable. The device may be offline."
+        }
+
         do {
+            try await characteristic.readValue()
             if let powerChar = findCharacteristic(accessory: accessory, serviceType: HMServiceTypeLightbulb, characteristicType: HMCharacteristicTypePowerState) {
                 try await powerChar.writeValue(true)
             }
@@ -198,9 +231,14 @@ final class HomeKitTool: NativeTool, @unchecked Sendable {
             return "Couldn't find a lock matching '\(deviceName)'."
         }
 
+        guard accessory.isReachable else {
+            return "\(accessory.name) is not reachable. The device may be offline."
+        }
+
         let lockValue = locked ? HMCharacteristicValueLockMechanismState.secured.rawValue : HMCharacteristicValueLockMechanismState.unsecured.rawValue
 
         do {
+            try await characteristic.readValue()
             try await characteristic.writeValue(lockValue)
             return "\(accessory.name) \(locked ? "locked" : "unlocked")."
         } catch {
@@ -280,18 +318,11 @@ private class HomeKitManager: NSObject, HMHomeManagerDelegate {
     override init() {
         super.init()
         // HMHomeManager MUST be created on the main thread
-        if Thread.isMainThread {
-            let manager = HMHomeManager()
-            manager.delegate = self
-            self.homeManager = manager
-        } else {
-            DispatchQueue.main.sync {
-                let manager = HMHomeManager()
-                manager.delegate = self
-                self.homeManager = manager
-            }
-        }
-        print("🏠 HomeKit manager initialized (main thread: \(Thread.isMainThread))")
+        assert(Thread.isMainThread, "HomeKitManager must be initialized on the main thread")
+        let manager = HMHomeManager()
+        manager.delegate = self
+        self.homeManager = manager
+        print("🏠 HomeKit manager initialized on main thread")
     }
 
     func ensureReady() async {

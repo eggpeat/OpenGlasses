@@ -14,6 +14,8 @@ class WakeWordService: NSObject, ObservableObject {
     /// Called when a wake word is detected. Passes the matched phrase so the caller can route to the right persona.
     var onWakeWordDetected: ((String) -> Void)?
     var onStopCommand: (() -> Void)?
+    /// Called when Bluetooth audio route is lost (glasses in case / powered off)
+    var onBluetoothDisconnected: (() -> Void)?
 
     private var audioEngine: AVAudioEngine?
     private var speechRecognizer: SFSpeechRecognizer?
@@ -117,10 +119,16 @@ class WakeWordService: NSObject, ObservableObject {
             print("🎤 Audio interrupted (phone call, Siri, etc.)")
             stopListening()
         case .ended:
-            print("🎤 Audio interruption ended — restarting listener")
-            // Re-activate audio session and restart
-            try? AVAudioSession.sharedInstance().setActive(true)
-            Task { try? await startListening() }
+            // Only restart if Bluetooth (glasses) route is available
+            let route = AVAudioSession.sharedInstance().currentRoute
+            let hasBluetooth = route.inputs.contains { $0.portType == .bluetoothHFP }
+            if hasBluetooth {
+                print("🎤 Audio interruption ended — restarting listener (Bluetooth active)")
+                try? AVAudioSession.sharedInstance().setActive(true)
+                Task { try? await startListening() }
+            } else {
+                print("🎤 Audio interruption ended — NOT restarting (no Bluetooth)")
+            }
         @unknown default:
             break
         }
@@ -139,21 +147,29 @@ class WakeWordService: NSObject, ObservableObject {
         switch reason {
         case .oldDeviceUnavailable:
             // Bluetooth device disconnected — kill the engine so it's recreated fresh
-            print("🎤 Bluetooth device disconnected — stopping audio engine")
+            let lostBluetooth = !route.inputs.contains { $0.portType == .bluetoothHFP }
+            print("🎤 Bluetooth device disconnected — stopping audio engine (BT lost: \(lostBluetooth))")
             cleanupAudioEngine()
             isListening = false
+            if lostBluetooth {
+                onBluetoothDisconnected?()
+            }
         case .newDeviceAvailable:
-            // New device connected (glasses back on) — restart with fresh engine
-            print("🎤 New audio device available — restarting with fresh engine")
-            cleanupAudioEngine()
-            isListening = false
-            Task {
-                // Small delay for the new route to stabilize
-                try? await Task.sleep(nanoseconds: 500_000_000)
-                // Re-configure audio session to pick up new route
-                audioSessionConfigured = false
-                configureAudioSession()
-                try? await startListening()
+            // New device connected — only restart if it's Bluetooth (glasses back on)
+            let newRoute = AVAudioSession.sharedInstance().currentRoute
+            let isBluetooth = newRoute.inputs.contains { $0.portType == .bluetoothHFP }
+            if isBluetooth {
+                print("🎤 Bluetooth device reconnected — restarting with fresh engine")
+                cleanupAudioEngine()
+                isListening = false
+                Task {
+                    try? await Task.sleep(nanoseconds: 500_000_000)
+                    audioSessionConfigured = false
+                    configureAudioSession()
+                    try? await startListening()
+                }
+            } else {
+                print("🎤 New audio device (non-Bluetooth) — NOT restarting mic for privacy")
             }
         case .override, .categoryChange:
             // Check if format is still valid — if not, rebuild engine
