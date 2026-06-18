@@ -1657,6 +1657,21 @@ struct Config {
         UserDefaults.standard.set(preference.rawValue, forKey: "ttsEnginePreference")
     }
 
+    /// Which speech-recognition engine to prefer (Additional Capabilities #8 — the on-device
+    /// SenseVoice tier). Drives `ASREngineSelector`; defaults to `.auto` (Apple Speech today, switching
+    /// to the offline on-device recognizer once its model is downloaded).
+    static var asrEnginePreference: ASREnginePreference {
+        guard let raw = UserDefaults.standard.string(forKey: "asrEnginePreference"),
+              let preference = ASREnginePreference(rawValue: raw) else {
+            return .auto
+        }
+        return preference
+    }
+
+    static func setASREnginePreference(_ preference: ASREnginePreference) {
+        UserDefaults.standard.set(preference.rawValue, forKey: "asrEnginePreference")
+    }
+
     // MARK: - App Mode
 
     static var appMode: AppMode {

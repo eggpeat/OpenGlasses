@@ -116,9 +116,10 @@ targets:
         GENERATE_INFOPLIST_FILE: "NO"
         INFOPLIST_KEY_CFBundleDisplayName: "OpenGlasses"
         INFOPLIST_KEY_LSApplicationCategoryType: "public.app-category.utilities"
-        # Compiles the real Kokoro on-device inference path (Additional Capabilities #1);
-        # the vendored sherpa-onnx binary provides the C API behind `#if KOKORO_ENABLED`.
-        OTHER_SWIFT_FLAGS: "$(inherited) -D KOKORO_ENABLED"
+        # Compiles the real on-device sherpa-onnx inference paths — Kokoro TTS (Additional
+        # Capabilities #1, `#if KOKORO_ENABLED`) and SenseVoice ASR (#8, `#if SHERPA_ONNX_ENABLED`).
+        # The vendored sherpa-onnx binary (Vendor/SherpaOnnx) provides the C API for both.
+        OTHER_SWIFT_FLAGS: "$(inherited) -D KOKORO_ENABLED -D SHERPA_ONNX_ENABLED"
         SKIP_INSTALL: "NO"
     dependencies:
       - package: meta-wearables-dat-ios

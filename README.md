@@ -2,7 +2,7 @@
 
 [中文文档 (Chinese)](README.zh-CN.md)
 
-An open-source voice-powered AI assistant for Ray-Ban and Oakley Meta smart glasses. 85+ built-in tools, multi-LLM support (cloud + on-device) with automatic model routing, personas with simultaneous wake words, an in-lens HUD with hands-free task control on Ray-Ban Display glasses, an on-device knowledge graph, live translation, hands-free field-service guidance, real-time vision coaching, MCP tool servers, and CarPlay + Apple Watch companions — all controlled hands-free by voice.
+An open-source voice-powered AI assistant for Ray-Ban and Oakley Meta smart glasses. 85+ built-in tools, multi-LLM support (cloud + on-device) with automatic model routing, a **fully offline voice mode** (on-device speech-to-text, AI, and voice), personas with simultaneous wake words, an in-lens HUD with hands-free task control on Ray-Ban Display glasses, an on-device knowledge graph, live translation, hands-free field-service guidance, real-time vision coaching, MCP tool servers, and CarPlay + Apple Watch companions — all controlled hands-free by voice.
 
 > **Note**: The Meta Wearables SDK is currently in **developer preview**. App Store distribution is not yet supported — each user must build the app from source with their own Meta developer credentials.
 
@@ -62,6 +62,16 @@ Run AI models entirely on your iPhone — no internet, no cloud, no API keys.
 | Qwen 2.5 0.5B | 0.4 GB | Ultra-light, basic |
 
 **Gemma 4 E2B** is the default on-device agent — it runs automatically when no cloud model is configured. Models are stored persistently and work fully offline after download. Toggle **Offline Mode** in Settings → Tools to disable internet-dependent tools.
+
+### Fully Offline Voice Mode
+
+Run the **entire voice loop on-device** — nothing leaves your iPhone:
+
+- **Speech-to-text** — an on-device SenseVoice recognizer (multilingual, ~240 MB). No audio is sent to any server.
+- **The AI** — a local LLM (Gemma / Qwen via MLX, or Apple Intelligence).
+- **Text-to-speech** — an on-device Kokoro neural voice (~185 MB) — natural, far better than the robotic system voice.
+
+Speech recognition and the spoken voice are CPU/ONNX (not Metal), so they keep working **even while the app is backgrounded**. Choose the engines under **Settings → Services → Speech Recognition / Voice Engine** and download the models once — then you have a private assistant that works on a plane, in a tunnel, or anywhere with no signal. Each tier also degrades gracefully: with no model (or no cloud), it falls back to Apple Speech and the iOS voice.
 
 ### 85+ Native Tools
 

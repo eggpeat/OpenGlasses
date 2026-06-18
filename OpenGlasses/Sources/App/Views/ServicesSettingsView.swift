@@ -39,6 +39,11 @@ struct ServicesSettingsView: View {
     /// Drives the on-device Kokoro model download + status row.
     @StateObject private var kokoroDownloader = KokoroModelDownloader()
 
+    // Speech recognition (Additional Capabilities #8 — on-device SenseVoice ASR)
+    @State private var asrEnginePreference: ASREnginePreference = Config.asrEnginePreference
+    /// Drives the on-device SenseVoice model download + status row.
+    @StateObject private var asrDownloader = ASRModelDownloader()
+
     // ElevenLabs account voices (loaded from the user's key)
     @State private var elevenLabsVoices: [TextToSpeechService.ElevenLabsVoice] = []
     @State private var elevenLabsVoicesLoading = false
@@ -197,6 +202,55 @@ struct ServicesSettingsView: View {
                 Text("A free, offline neural voice that can speak even when the app is in the background. Downloads \(KokoroModelBundle.active.displayName) (~185 MB) over Wi-Fi; until it's installed, on-device speech falls back to the iOS voice.")
             }
             .onAppear { kokoroDownloader.refreshState() }
+
+            // MARK: Speech Recognition (Additional Capabilities #8)
+            Section {
+                Picker("Recognizer", selection: $asrEnginePreference) {
+                    ForEach(ASREnginePreference.allCases) { preference in
+                        Text(preference.displayName).tag(preference)
+                    }
+                }
+                .onChange(of: asrEnginePreference) { _, newValue in
+                    Config.setASREnginePreference(newValue)
+                }
+
+                switch asrDownloader.state {
+                case .ready:
+                    HStack {
+                        Label("On-Device Model", systemImage: "cpu")
+                        Spacer()
+                        Text("Installed").foregroundStyle(.secondary)
+                    }
+                    Button("Remove Download", role: .destructive) {
+                        asrDownloader.deleteModel()
+                    }
+                case .downloading(let progress):
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Downloading… \(Int(progress * 100))%")
+                        ProgressView(value: progress)
+                    }
+                case .verifying:
+                    HStack {
+                        Text("Verifying…")
+                        Spacer()
+                        ProgressView()
+                    }
+                case .failed(let reason):
+                    Text(reason).font(.caption).foregroundStyle(.red)
+                    Button("Download Model (~240 MB)") {
+                        Task { await asrDownloader.download() }
+                    }
+                case .notDownloaded:
+                    Button("Download Model (~240 MB)") {
+                        Task { await asrDownloader.download() }
+                    }
+                }
+            } header: {
+                Text("Speech Recognition")
+            } footer: {
+                Text("On-device \(ASRModelBundle.active.displayName) (~240 MB) transcribes offline and privately — no audio leaves the device. Until it's installed, recognition uses Apple Speech.")
+            }
+            .onAppear { asrDownloader.refreshState() }
 
             // MARK: Web Search
             Section {

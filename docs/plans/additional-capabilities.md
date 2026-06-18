@@ -31,7 +31,7 @@ extension of "no Display hardware → tests are the gate." (~0.5 day.)
 | 5 | **Alternative hands-free triggers** | ~2–4 days | 🚧 Core shipped — gate + service + shake detector + Settings; acoustic/volume detectors deferred |
 | 6 | **Multi-user profiles + PIN gate** | ~4–6 days | ◻︎ Conditional — only if shared-device is a goal |
 | 7 | **Declarative HUD widget board** | ~3–5 days | ⏸ Defer — Display Phase 5 concept |
-| 8 | **On-device ASR (SenseVoice) tier** | ~2–4 days | ✅ Take — sherpa-onnx binary already vendored; closes the offline loop |
+| 8 | **On-device ASR (SenseVoice) tier** | ~2–4 days | ✅ Shipped — selector + model layer + SenseVoice recognizer + TranscriptionService wiring; accuracy device-pending |
 | 9 | **Vision-based procedure auto-advance (SOP spotter)** | ~3–4 days | ✅ Take after #8 — hands-free Field Assist; reuses analyzeFrame + ProcedureRunner |
 
 ---
@@ -333,6 +333,37 @@ same engine pattern as Kokoro, an `OfflineRecognizer` instead of an `OfflineTts`
 the SenseVoice descriptor, the `ASREngineSelector` pure policy, and `OnDeviceASREngine` behind the
 sherpa flag with a guarded decode path — all headlessly testable. Real transcription accuracy +
 streaming/VAD are deferred (device-validated), exactly as Kokoro's audio output was.
+
+**Status: ✅ shipped (accuracy device-pending).** The tested core is in
+[`Sources/Services/ASR/`](../../OpenGlasses/Sources/Services/ASR/):
+- [ASREngine.swift](../../OpenGlasses/Sources/Services/ASR/ASREngine.swift) — `ASREngineSelector`, a
+  **pure policy** mirroring `TTSEngineSelector`: given (Apple Speech authorized, SenseVoice model
+  present, online) + the user's `ASREnginePreference`, it yields the `On-Device ↔ Apple Speech` chain.
+  Apple Speech is the terminal fallback; `.auto` promotes the fully-local recognizer **when offline**;
+  `.onDevice` never silently falls back to the cloud-capable engine. Fully unit-tested.
+- [ASRModelBundle.swift](../../OpenGlasses/Sources/Services/ASR/ASRModelBundle.swift) +
+  [ASRModelStore.swift](../../OpenGlasses/Sources/Services/ASR/ASRModelStore.swift) +
+  [ASRModelDownloader.swift](../../OpenGlasses/Sources/Services/ASR/ASRModelDownloader.swift) — the
+  SenseVoice descriptor (`csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17`, ~240 MB int8,
+  just `model.int8.onnx` + `tokens.txt`), the presence store, and the stage→verify→atomic-install
+  downloader (injected installer; the live one fetches the two unpacked files from HF — no tree
+  enumeration). *Kept parallel to the Kokoro model layer to leave shipped Kokoro untouched; unifying the
+  two into one sherpa model layer is a follow-up.*
+- [OnDeviceASREngine.swift](../../OpenGlasses/Sources/Services/ASR/OnDeviceASREngine.swift) +
+  [SenseVoiceRecognizer.swift](../../OpenGlasses/Sources/Services/ASR/SenseVoiceRecognizer.swift) —
+  gated behind **`SHERPA_ONNX_ENABLED`** (added alongside `KOKORO_ENABLED`; same vendored binary).
+  `isReady = isCompiledIn && model present`. The recognizer drives the real sherpa-onnx `OfflineRecognizer`
+  (SenseVoice config, 16 kHz resample, greedy decode) — compiles + links against the real C API.
+- Wired into [TranscriptionService](../../OpenGlasses/Sources/Services/TranscriptionService.swift): when
+  on-device is selected + ready, the utterance's PCM is accumulated and decoded once on stop (SenseVoice
+  is whole-buffer); otherwise the Apple Speech path is unchanged. `Config.asrEnginePreference` + a
+  **Speech Recognition** picker and SenseVoice download/status row in
+  [ServicesSettingsView.swift](../../OpenGlasses/Sources/App/Views/ServicesSettingsView.swift). 25 headless tests.
+
+**Deferred (device-validated):** real transcription **accuracy** + the live ~240 MB download; **VAD-based
+endpointing** + on-device **partial results** for the continuous wake-word / ambient-caption paths
+(today the on-device turn ends on `stopRecording()` / the no-speech timeout); reachability-aware `online`
+in `TranscriptionService` (passes `true` today); and unifying the Kokoro + ASR sherpa model layers.
 
 ---
 

@@ -27,6 +27,17 @@ class TranscriptionService: ObservableObject {
     /// Shared audio engine — set by AppState from WakeWordService
     weak var sharedAudioEngineProvider: WakeWordService?
 
+    // MARK: - On-device ASR (Additional Capabilities #8)
+    //
+    // SenseVoice is offline / whole-buffer (not streaming), so when it's the selected engine we
+    // accumulate the utterance's PCM and decode once on stop, instead of Apple's streaming partials.
+    // VAD-based endpointing + on-device partial results are the staged follow-up; for now the turn
+    // ends on the caller's `stopRecording()` (or the no-speech timeout).
+    private let onDeviceEngine = OnDeviceASREngine()
+    private var useOnDevice = false
+    private var accumulatedSamples: [Float] = []
+    private var captureSampleRate: Double = 16000
+
     init() {
         speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
     }
@@ -36,6 +47,17 @@ class TranscriptionService: ObservableObject {
 
         didReceiveSpeech = false
         currentTranscription = ""
+
+        // Pick the recognizer: on-device SenseVoice when selected + its model is ready, else Apple.
+        let availability = ASREngineSelector.Availability(
+            appleSpeechReady: speechRecognizer?.isAvailable ?? false,
+            onDeviceReady: onDeviceEngine.isReady,
+            online: true
+        )
+        useOnDevice = ASREngineSelector.select(preference: Config.asrEnginePreference,
+                                               availability: availability) == .onDevice
+        accumulatedSamples.removeAll(keepingCapacity: true)
+
         do {
             try setupAndStartRecording()
             isRecording = true
@@ -54,6 +76,12 @@ class TranscriptionService: ObservableObject {
         silenceTimer = nil
         noSpeechTimer?.invalidate()
         noSpeechTimer = nil
+
+        if useOnDevice {
+            finishOnDeviceRecording()
+            return
+        }
+
         recognitionTask?.finish()
         recognitionTask = nil
         recognitionRequest?.endAudio()
@@ -83,6 +111,11 @@ class TranscriptionService: ObservableObject {
     }
 
     private func setupAndStartRecording() throws {
+        if useOnDevice {
+            try setupOnDeviceCapture()
+            return
+        }
+
         recognitionTask?.cancel()
         recognitionTask = nil
 
@@ -134,6 +167,69 @@ class TranscriptionService: ObservableObject {
             engine.stop()
             engine.inputNode.removeTap(onBus: 0)
             fallbackAudioEngine = nil
+        }
+    }
+
+    // MARK: - On-device capture (SenseVoice)
+
+    /// Accumulate the utterance's mono float samples (the recognizer resamples to 16 kHz on decode).
+    private func setupOnDeviceCapture() throws {
+        let accumulate: @Sendable (AVAudioPCMBuffer) -> Void = { [weak self] buffer in
+            guard let channels = buffer.floatChannelData, buffer.frameLength > 0 else { return }
+            let samples = Array(UnsafeBufferPointer(start: channels[0], count: Int(buffer.frameLength)))
+            let rate = buffer.format.sampleRate
+            Task { @MainActor [weak self] in
+                guard let self, self.isRecording else { return }
+                self.captureSampleRate = rate
+                self.accumulatedSamples.append(contentsOf: samples)
+                if !self.didReceiveSpeech {
+                    self.didReceiveSpeech = true
+                    self.noSpeechTimer?.invalidate()
+                    self.noSpeechTimer = nil
+                }
+            }
+        }
+
+        if let provider = sharedAudioEngineProvider, provider.getAudioEngine() != nil {
+            print("🎙️ On-device ASR: reusing shared audio engine")
+            provider.setAudioBufferForwarder { buffer in accumulate(buffer) }
+        } else {
+            print("🎙️ On-device ASR: dedicated audio engine")
+            let audioEngine = AVAudioEngine()
+            let inputNode = audioEngine.inputNode
+            let format = inputNode.outputFormat(forBus: 0)
+            inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in accumulate(buffer) }
+            audioEngine.prepare()
+            try audioEngine.start()
+            self.fallbackAudioEngine = audioEngine
+        }
+    }
+
+    /// On stop, decode the accumulated buffer with SenseVoice and report the result (whole-utterance —
+    /// no streaming partials).
+    private func finishOnDeviceRecording() {
+        cleanupEngine()
+        isRecording = false
+        let samples = accumulatedSamples
+        let rate = captureSampleRate
+        accumulatedSamples.removeAll(keepingCapacity: false)
+
+        Task { @MainActor in
+            do {
+                let text = try await onDeviceEngine.transcribe(samples: samples, sampleRate: rate)
+                if text.isEmpty {
+                    print("🤫 On-device ASR: no speech recognized")
+                    onSilenceTimeout?()
+                } else {
+                    print("📤 On-device transcription: \(text)")
+                    currentTranscription = ""
+                    onTranscriptionComplete?(text)
+                }
+            } catch {
+                print("🎙️ On-device ASR failed: \(error)")
+                errorMessage = error.localizedDescription
+                onSilenceTimeout?()
+            }
         }
     }
 
