@@ -1,7 +1,14 @@
 # Plan — Study Mode (flashcards + quizzes from your documents)
 
-**Status: 📋 Planned (not built).** Rides our **Document RAG** + OCR + on-device-LLM engines
-(scan → summarize → decks of flashcards + quizzes).
+**Status: 🚧 PR 1 (deterministic core) shipped on `feat/study-mode`.** Rides our **Document RAG** + OCR +
+on-device-LLM engines (scan → summarize → decks of flashcards + quizzes).
+
+> **PR 1 (`feat/study-mode`):** the testable core — `StudyModels` (deck/flashcard/quiz/review/result),
+> pure `QuizGrader`, pure Leitner `SpacedRepetition`, `StudyContentBuilder` (generation prompt + JSON
+> schema + parse/validate), and `StudyStore` (decks + review records persistence). 15 tests, Debug green.
+> **Deferred to follow-ups:** `StudyService` (source → generate → store → review/quiz flow; needs a new
+> stateless text→JSON `LLMService` call), the `study` tool (make_deck/quiz/review/answer), the SwiftUI
+> views (deck list / flashcard / quiz), the hands-free voice-answer matcher, and the scan source.
 
 **Strategic fit:** A consumer **active-recall study companion**. We already turn documents into
 retrievable knowledge (Document RAG, [Plan O](O-document-rag.md)/[P](P-chunk-citations.md)) and read text
