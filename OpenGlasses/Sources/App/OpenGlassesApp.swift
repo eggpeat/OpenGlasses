@@ -892,6 +892,9 @@ class AppState: ObservableObject, AppStateProtocol {
         StructuredVisionService.shared.configure(camera: cameraService, llm: llmService, tts: speechService)
         StructuredVisionService.shared.glassesDisplay = glassesDisplay
 
+        // Configure Safety Assessment (HECA) — runs through the structured-vision provider layer.
+        SafetyAssessmentService.shared.configure(camera: cameraService, llm: llmService)
+
         // Field Assist Phase 5 (Plan K2): expert stream bridge for escalations. Transport
         // (MJPEG / WebRTC) is selected in Settings; MJPEG is the working default.
         EscalationCoordinator.shared.bridge = ExpertStreamBridge(

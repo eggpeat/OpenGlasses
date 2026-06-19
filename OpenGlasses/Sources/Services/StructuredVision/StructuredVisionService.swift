@@ -61,6 +61,13 @@ final class StructuredVisionService: ObservableObject {
     /// Dismiss the currently presented card.
     func dismiss() { latest = nil }
 
+    /// Publish an externally-produced card (e.g. from a domain service like HECA) so it renders in the
+    /// shared card overlay and mirrors to the HUD.
+    func present(_ card: AssessmentCard) {
+        latest = card
+        mirrorToHUD(card)
+    }
+
     // MARK: - Core (testable)
 
     /// Assess a specific JPEG against `kind`. Decodes, backstops, publishes, and mirrors to the HUD.

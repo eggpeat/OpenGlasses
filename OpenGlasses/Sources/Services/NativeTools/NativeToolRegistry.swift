@@ -140,6 +140,8 @@ final class NativeToolRegistry {
             register(NetworkCalcTool())
             // equipment_lookup gains an on-device OCR path when a camera is present.
             register(EquipmentLookupTool(cameraService: cameraService))
+            // Safety Assessment (HECA) — camera high-energy hazard assessment via SafetyAssessmentService.shared.
+            register(SafetyAssessmentTool())
             if let camera = cameraService {
                 register(PhotoLogTool(cameraService: camera))
             }
