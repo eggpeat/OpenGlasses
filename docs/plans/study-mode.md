@@ -1,14 +1,16 @@
 # Plan — Study Mode (flashcards + quizzes from your documents)
 
-**Status: 🚧 PR 1 (deterministic core) shipped on `feat/study-mode`.** Rides our **Document RAG** + OCR +
-on-device-LLM engines (scan → summarize → decks of flashcards + quizzes).
+**Status: 🚧 Core + generation + review shipped on `feat/study-mode` (#88).** Rides our **Document RAG** +
+OCR + on-device-LLM engines (scan → summarize → decks of flashcards + quizzes).
 
-> **PR 1 (`feat/study-mode`):** the testable core — `StudyModels` (deck/flashcard/quiz/review/result),
-> pure `QuizGrader`, pure Leitner `SpacedRepetition`, `StudyContentBuilder` (generation prompt + JSON
-> schema + parse/validate), and `StudyStore` (decks + review records persistence). 15 tests, Debug green.
-> **Deferred to follow-ups:** `StudyService` (source → generate → store → review/quiz flow; needs a new
-> stateless text→JSON `LLMService` call), the `study` tool (make_deck/quiz/review/answer), the SwiftUI
-> views (deck list / flashcard / quiz), the hands-free voice-answer matcher, and the scan source.
+> **`feat/study-mode` (#88):** deterministic core (`StudyModels`, pure `QuizGrader` + Leitner
+> `SpacedRepetition`, `StudyContentBuilder`, `StudyStore`) + `LLMService.completeStructured` (a new
+> stateless **text→JSON** call, cloud forced-tool/JSON + on-device offline fallback) + `StudyService`
+> (generate a deck from a Document RAG doc or raw text; hands-free **quiz** and spaced-repetition
+> **flashcard review** state machines) + `StudyAnswerMatcher` (spoken answer → option) + the `study`
+> tool (make_deck/list/quiz/answer/review/flip/grade/stop), wired into both system prompts. 28 tests, Debug green.
+> **Deferred to a follow-up:** the SwiftUI views (deck list / flashcard / quiz) and the glasses
+> scan→OCR source (make_deck currently works from a saved Document RAG doc or supplied text).
 
 **Strategic fit:** A consumer **active-recall study companion**. We already turn documents into
 retrievable knowledge (Document RAG, [Plan O](O-document-rag.md)/[P](P-chunk-citations.md)) and read text

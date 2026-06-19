@@ -204,6 +204,8 @@ final class NativeToolRegistry {
             ragTool.documentStore = docStore
             ragTool.cameraService = cameraService
             register(ragTool)
+            // Study Mode — flashcards + quizzes over the same documents (via StudyService.shared).
+            register(StudyTool())
         }
 
         // LiveTranslationTool is registered separately after the service is created

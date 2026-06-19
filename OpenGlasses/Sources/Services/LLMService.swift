@@ -266,6 +266,7 @@ class LLMService: ObservableObject {
             - health_vault: Query or update the user's Personal Health Vault (their own notes on biometrics, conditions, diet, labs, medications, wearables). action 'query' (with question) grounds a health question in their data — cite the source file; action 'log' (file + entry) records a new entry. Never fabricate health data.
             - notes_vault: The user's personal notes / second brain. 'log' to remember something ("note that…", "remember…"), 'query' to recall it ("what did I note about…"). Files: general, people, ideas, todos. Answers only from recorded notes.
             - document_knowledge: Private on-device knowledge base of the user's documents (manuals, contracts, reports). action 'query' retrieves the most relevant passages to ground an answer — cite the document name and answer only from what's returned; 'ingest_scan' captures and saves a document seen through the glasses ("remember this manual"); 'ingest_text' saves provided text; 'list' shows saved documents; 'forget' deletes one. Use 'query' whenever the user asks about a document they've saved.
+            - study: Study Mode — turn a saved document into flashcards + a quiz and review hands-free with spaced repetition. Actions: make_deck (from a document name via 'deck' or raw 'text'), list, quiz (start), answer (via 'value' — a number or the option), review (flashcards), flip, grade (right/wrong via 'value'), stop. Use for "make flashcards from X", "quiz me", "study X".
             - identify_medication: Read a medication label via the glasses camera (on-device OCR) and cross-check it against the user's recorded medications. Use for "what's this pill?", "is this my medication?". Reports the label text + match status; never makes clinical claims. Needs Medical Compliance.
             - aircraft_overhead: Report aircraft flying near the user using live ADS-B data and their location. Use for "what's flying overhead?", "any planes nearby?". Param: radius_miles (1-200, default 25).
             - live_coach: Real-time, one-sentence coaching feedback from the glasses camera. Use for "coach my squat form", "watch my knife technique", "help with my guitar". Actions: start (domain), stop, status. Domains: sports_tactics, cooking_form, posture, guitar, climbing, custom. Params: custom_prompt, interval_seconds, max_words, max_duration_minutes.
@@ -1040,6 +1041,97 @@ class LLMService: ObservableObject {
             }
         } catch {
             NSLog("[LLM] analyzeFrameStructured request failed: %@", error.localizedDescription)
+            return nil
+        }
+    }
+
+    /// Stateless TEXT → JSON structured completion (no image, no conversation history) — the text sibling
+    /// of `analyzeFrameStructured`. Cloud providers use forced tool-use / JSON mode; the on-device
+    /// providers (Apple Foundation Models / local MLX) are prompted for JSON and parsed tolerantly, so
+    /// the offline path works. Returns the JSON object, or nil on failure. Used by Study Mode generation.
+    func completeStructured(systemPrompt: String, userText: String, jsonSchema: [String: Any],
+                            toolName: String = "result", maxTokens: Int = 2048) async -> [String: Any]? {
+        guard let modelConfig = Config.activeModel else { return nil }
+        let provider = modelConfig.llmProvider
+        let toolDescription = "Return the structured result."
+
+        do {
+            switch provider {
+            case .anthropic:
+                var request = URLRequest(url: URL(string: "https://api.anthropic.com/v1/messages")!)
+                request.httpMethod = "POST"
+                request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                request.setValue(modelConfig.apiKey, forHTTPHeaderField: "x-api-key")
+                request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+                request.timeoutInterval = 45
+                let body: [String: Any] = [
+                    "model": modelConfig.model,
+                    "max_tokens": maxTokens,
+                    "system": systemPrompt,
+                    "tools": [["name": toolName, "description": toolDescription, "input_schema": jsonSchema]],
+                    "tool_choice": ["type": "tool", "name": toolName],
+                    "messages": [["role": "user", "content": userText]]
+                ]
+                request.httpBody = try JSONSerialization.data(withJSONObject: body)
+                let (data, response) = try await URLSession.shared.data(for: request)
+                guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { return nil }
+                return StructuredVisionParser.anthropic(data, toolName: toolName)
+
+            case .openai, .groq, .zai, .qwen, .minimax, .openrouter, .custom:
+                var baseURL = modelConfig.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !baseURL.hasSuffix("/chat/completions") {
+                    baseURL += baseURL.hasSuffix("/") ? "chat/completions" : "/chat/completions"
+                }
+                guard let url = URL(string: baseURL) else { return nil }
+                var request = URLRequest(url: url)
+                request.httpMethod = "POST"
+                request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                request.setValue("Bearer \(modelConfig.apiKey)", forHTTPHeaderField: "Authorization")
+                request.timeoutInterval = 45
+                let body: [String: Any] = [
+                    "model": modelConfig.model,
+                    "max_tokens": maxTokens,
+                    "messages": [
+                        ["role": "system", "content": systemPrompt],
+                        ["role": "user", "content": userText]
+                    ],
+                    "tools": [["type": "function", "function": [
+                        "name": toolName, "description": toolDescription, "parameters": jsonSchema]]],
+                    "tool_choice": ["type": "function", "function": ["name": toolName]]
+                ]
+                request.httpBody = try JSONSerialization.data(withJSONObject: body)
+                let (data, response) = try await URLSession.shared.data(for: request)
+                guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { return nil }
+                return StructuredVisionParser.openAI(data)
+
+            case .gemini:
+                guard let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(modelConfig.model):generateContent?key=\(modelConfig.apiKey)") else { return nil }
+                var request = URLRequest(url: url)
+                request.httpMethod = "POST"
+                request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                request.timeoutInterval = 45
+                let body: [String: Any] = [
+                    "system_instruction": ["parts": [["text": systemPrompt]]],
+                    "contents": [["role": "user", "parts": [["text": userText]]]],
+                    "generationConfig": ["maxOutputTokens": maxTokens, "responseMimeType": "application/json"]
+                ]
+                request.httpBody = try JSONSerialization.data(withJSONObject: body)
+                let (data, response) = try await URLSession.shared.data(for: request)
+                guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { return nil }
+                return StructuredVisionParser.gemini(data)
+
+            case .appleOnDevice:
+                let prompt = systemPrompt + "\n\nReturn ONLY a single valid JSON object matching the requested shape — no prose, no code fences."
+                let text = try await sendAppleOnDevice(userText, systemPrompt: prompt)
+                return AssessmentJSON.object(fromText: text)
+
+            case .local:
+                let prompt = systemPrompt + "\n\nReturn ONLY a single valid JSON object — no prose, no code fences."
+                let text = try await sendLocal(userText, systemPrompt: prompt, config: modelConfig, includeTools: false)
+                return AssessmentJSON.object(fromText: text)
+            }
+        } catch {
+            NSLog("[LLM] completeStructured request failed: %@", error.localizedDescription)
             return nil
         }
     }
