@@ -1,8 +1,24 @@
 # Plan — Safety Assessment (High-Energy Control Assessment)
 
-**Status: 📋 Planned (not built).** Plan refined 2026-06-18 (structured-output + catalog); no code yet —
-none of the named files exist. Sequenced as a Field Assist vertical after the in-flight #8 (ASR) / #9
-(SOP spotter) cores.
+**Status: 🚧 PR 1 core shipped on `feat/safety-assessment-heca` (built on the structured-vision substrate).**
+Plan refined 2026-06-18 (structured-output + catalog); revised + built 2026-06-19 on the now-shipped
+**Structured Vision Assessment** substrate (`docs/plans/structured-vision-assessment.md`). 18 tests, Debug green.
+
+> **Revision — build on the substrate.** The substrate already provides the provider-agnostic forced
+> structured-output call (`LLMService.analyzeFrameStructured`), per-provider parsing
+> (`StructuredVisionParser`), tolerant JSON (`AssessmentJSON`), the generic result card
+> (`AssessmentCard` / `AssessmentCardView`), and HUD mirroring. So HECA is no longer a bespoke
+> `SafetyAssessmentService` doing prompt+parse from scratch — it is:
+> 1. a **deterministic domain core** (`SafetyHazard` catalog · `HazardFinding`/`SafetyReport` + pure
+>    `score` · `SafetyReport.from(json)` validation · pure box→rect mapping) — no LLM;
+> 2. a **`SafetyAssessmentSchema`** (the HECA prompt + structured-output schema + `report(from:)` /
+>    `card(for:)`), reusing the substrate's call + JSON + card;
+> 3. a thin **`SafetyAssessmentService`** (returns the rich `SafetyReport`, publishes the generic card
+>    via `StructuredVisionService.present(_:)`) + a Field-Assist-gated **`safety_assessment`** tool.
+>
+> **PR 1 (this branch):** items 1–3 + tests + the gated tool, end-to-end via the substrate.
+> **Deferred to follow-ups:** the rich `SafetyAssessmentReportView` + box overlay *view*, persistence/history,
+> PDF export via `SessionExporter`, the Field-Assist session-step hook, and the image-seeded advisor chat.
 
 **Strategic fit:** A B2B safety capability that slots into the **Field Assist** line: a technician glances at a job site and gets a structured, audited assessment of the **high-energy hazards** present and whether each is safeguarded by a *direct* control. Grounded in the published EEI / Construction Safety Research Alliance (CSRA) energy-based "Serious Injury & Fatality (SIF) prevention" methodology — the same vault/procedure/audit shape we already ship, applied to safety. Utilities and construction are exactly the verticals Field Assist targets, and SIF-prevention is a budgeted, regulated spend.
 
