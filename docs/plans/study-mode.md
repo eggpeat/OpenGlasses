@@ -9,8 +9,11 @@ OCR + on-device-LLM engines (scan → summarize → decks of flashcards + quizze
 > (generate a deck from a Document RAG doc or raw text; hands-free **quiz** and spaced-repetition
 > **flashcard review** state machines) + `StudyAnswerMatcher` (spoken answer → option) + the `study`
 > tool (make_deck/list/quiz/answer/review/flip/grade/stop), wired into both system prompts. 28 tests, Debug green.
-> **Deferred to a follow-up:** the SwiftUI views (deck list / flashcard / quiz) and the glasses
-> scan→OCR source (make_deck currently works from a saved Document RAG doc or supplied text).
+> **Views (`feat/study-mode-views`):** `DeckListView` (Settings → Study Mode) + `DeckDetailView`,
+> `FlashcardView` (drives the service's spaced-rep review session), `QuizView` (self-contained, scored
+> with the pure `QuizGrader` + per-option feedback).
+> **Only remaining deferral:** the glasses **scan→OCR** source (make_deck works today from a saved
+> Document RAG doc or supplied text). With that, Study Mode is feature-complete.
 
 **Strategic fit:** A consumer **active-recall study companion**. We already turn documents into
 retrievable knowledge (Document RAG, [Plan O](O-document-rag.md)/[P](P-chunk-citations.md)) and read text

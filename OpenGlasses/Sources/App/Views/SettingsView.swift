@@ -293,6 +293,12 @@ struct SettingsView: View {
                 }
 
                 NavigationLink {
+                    DeckListView()
+                } label: {
+                    Label("Study Mode", systemImage: "graduationcap")
+                }
+
+                NavigationLink {
                     HealthVaultEditorView()
                 } label: {
                     HStack {
