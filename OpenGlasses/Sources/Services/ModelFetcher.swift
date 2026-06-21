@@ -32,20 +32,24 @@ enum ModelFetcher {
 
     // MARK: - OpenAI-compatible (/v1/models)
 
-    private static func fetchOpenAICompatible(apiKey: String, baseURL: String) async -> [RemoteModel] {
-        // Derive models endpoint from chat completions URL
-        // e.g. "https://api.openai.com/v1/chat/completions" → "https://api.openai.com/v1/models"
-        let modelsURL: String
+    /// Derive the `/models` listing endpoint from a chat-completions base URL.
+    /// Pure (no I/O) so it's unit-testable — the network call stays in the caller.
+    /// - `…/v1/chat/completions` → `…/v1/models`
+    /// - `…/v1`                  → `…/v1/models`
+    /// - bare host (any trailing slashes trimmed) → `…/models`
+    static func modelsEndpoint(from baseURL: String) -> String {
         if let range = baseURL.range(of: "/v1/", options: .backwards) {
-            modelsURL = String(baseURL[baseURL.startIndex..<range.upperBound]) + "models"
+            return String(baseURL[baseURL.startIndex..<range.upperBound]) + "models"
         } else if baseURL.hasSuffix("/v1") {
-            modelsURL = baseURL + "/models"
+            return baseURL + "/models"
         } else {
-            // Try appending /models to whatever base we have
             let trimmed = baseURL.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-            modelsURL = trimmed + "/models"
+            return trimmed + "/models"
         }
+    }
 
+    private static func fetchOpenAICompatible(apiKey: String, baseURL: String) async -> [RemoteModel] {
+        let modelsURL = modelsEndpoint(from: baseURL)
         guard let url = URL(string: modelsURL) else { return [] }
         var request = URLRequest(url: url)
         request.httpMethod = "GET"

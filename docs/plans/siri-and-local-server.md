@@ -147,15 +147,19 @@ update the three intents' return types.
 Mirror `OpenGlassesTests/ConfigTests.swift` (UserDefaults setup/teardown).
 Refactor where needed so logic is pure and testable:
 
-- **`Config.siriAskOpensApp`** — default `false`; set/get round-trip.
-- **`ModelConfig.inferredSupportsVision`** — `custom` + `llava`/`pixtral`/
+- ✅ **`Config.siriAskOpensApp`** — default `false`; set/get round-trip.
+  (`SiriIntentSupportTests`)
+- ✅ **`ModelConfig.inferredSupportsVision`** — `custom` + `llava`/`pixtral`/
   `minicpm-v` → true; bare text model → false; existing provider cases.
-- **`ModelFetcher` models-endpoint derivation** — extract the URL-derivation in
-  `fetchOpenAICompatible` into a pure `static func modelsEndpoint(from:)` and
-  test `/v1/chat/completions` → `/v1/models`, `/v1` → `/v1/models`, bare host →
-  `/models`. (Network calls stay untested; the string logic is the bug surface.)
-- **Persona resolution helper (#1)** — name/phrase → persona match (pure).
-- **`LocalServerPreset` (#5)** — preset → base URL/model mapping.
+  (`ModelFetcherTests`)
+- ✅ **`ModelFetcher` models-endpoint derivation** — extracted the URL-derivation
+  in `fetchOpenAICompatible` into a pure `static func modelsEndpoint(from:)` and
+  tested `/v1/chat/completions` → `/v1/models`, `/v1` → `/v1/models`, bare host →
+  `/models` (+ trailing-slash and last-`/v1/`-wins edge cases). (`ModelFetcherTests`)
+- ⏳ **Persona resolution helper (#1)** — name/phrase → persona match (pure).
+  Deferred to PR-2 (lands with the persona intent it supports).
+- ⏳ **`LocalServerPreset` (#5)** — preset → base URL/model mapping.
+  Deferred to PR-3 (lands with the preset feature it supports).
 
 **Files:** new `OpenGlassesTests/SiriIntentSupportTests.swift`,
 `ModelFetcherTests.swift`; small pure-function refactors in `ModelFetcher.swift`.
@@ -164,8 +168,10 @@ Refactor where needed so logic is pure and testable:
 
 ## Suggested PR ordering (stacked)
 
-1. **PR-1 (hardening):** #7 tests + the pure-function refactors they require.
-   Lands first so the rest is de-risked.
+1. ✅ **PR-1 (hardening):** the #7 tests + refactor for surfaces that exist today
+   — `Config.siriAskOpensApp`, `ModelConfig.inferredSupportsVision`, and the
+   extracted `ModelFetcher.modelsEndpoint(from:)` (13 tests). The persona/preset
+   tests ride along with their features in PR-2/PR-3. Landed first to de-risk.
 2. **PR-2 (Siri):** #1 persona intent, #2 follow-up, #3 snippets.
 3. **PR-3 (local server):** #4 connection test, #5 presets, then #6 discovery
    (separately, behind an experimental flag — droppable).
