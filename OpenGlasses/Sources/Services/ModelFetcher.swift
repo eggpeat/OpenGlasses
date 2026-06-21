@@ -10,7 +10,9 @@ enum ModelFetcher {
 
     /// Fetch models for a provider. Returns an empty array on failure.
     static func fetchModels(provider: LLMProvider, apiKey: String, baseURL: String) async -> [RemoteModel] {
-        guard !apiKey.isEmpty else { return [] }
+        // Local OpenAI-compatible servers (Ollama, llama.cpp, LM Studio, vLLM…) usually
+        // need no API key, so let the custom provider list models without one.
+        guard !apiKey.isEmpty || provider == .custom else { return [] }
 
         switch provider {
         case .anthropic:
@@ -47,7 +49,10 @@ enum ModelFetcher {
         guard let url = URL(string: modelsURL) else { return [] }
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
-        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        // Keyless local servers don't want an Authorization header at all.
+        if !apiKey.isEmpty {
+            request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        }
         request.timeoutInterval = 30
 
         do {

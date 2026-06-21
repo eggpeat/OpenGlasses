@@ -43,6 +43,18 @@ Each persona has its own wake word, AI model, and personality. All listen simult
 
 **Configure:** Settings → Personas → Add. Pick a wake word, assign a model and prompt preset.
 
+### "Hey Siri" — Ask by Voice Without the Wake Word
+
+OpenGlasses ships App Intents + Siri Shortcuts, so you can drive it straight from Siri — handy when the glasses' own "Hey Meta" is busy, or to start a query hands-free without waiting for the in-app wake word:
+
+| Say | What Happens |
+|-----|-------------|
+| "Hey Siri, ask OpenGlasses a question" | Siri asks **"What would you like to ask?"**, you speak the question, it's routed through your model/persona pipeline, and **Siri reads the answer back** |
+| "Hey Siri, OpenGlasses take a photo" | Captures via the glasses and describes the scene |
+| "Hey Siri, OpenGlasses describe surroundings" | Accessibility scene description |
+
+The first time, iOS surfaces these in the **Shortcuts** app and the Siri phrase picker (you can rename the phrase to anything you like). The "ask a question" flow is **two-step**: the trigger phrase invokes the intent, then Siri prompts for the question and awaits your spoken reply — iOS only lets App Shortcut phrases embed a fixed set of choices, not free-form text, so the question is asked second rather than crammed into the trigger. The intent runs in the background and speaks the result — no need to bring the app forward. If Siri ever says OpenGlasses isn't running, enable **Settings → Voice → Open App for Siri Questions** to have it launch the app first.
+
 ### On-Device Local LLM
 
 Run AI models entirely on your iPhone — no internet, no cloud, no API keys.
@@ -62,6 +74,18 @@ Run AI models entirely on your iPhone — no internet, no cloud, no API keys.
 | Qwen 2.5 0.5B | 0.4 GB | Ultra-light, basic |
 
 **Gemma 4 E2B** is the default on-device agent — it runs automatically when no cloud model is configured. Models are stored persistently and work fully offline after download. Toggle **Offline Mode** in Settings → Tools to disable internet-dependent tools.
+
+### Self-Hosted Local Server (Ollama, llama.cpp, vLLM…)
+
+Prefer to run a bigger model on a desktop or home server and keep everything on your own network? Point OpenGlasses at any **OpenAI-compatible** endpoint — no cloud, no API key:
+
+1. Settings → AI Models → Add Model → pick **"Custom (OpenAI-compatible)"**
+2. Set the **Base URL** to your server, e.g. `http://your-mac.local:11434/v1` (Ollama), and **leave the API Key blank**
+3. Tap **Fetch models** to list what the server has, or type a model ID (e.g. `llava` for vision). Turn on **Vision** to send glasses photos.
+
+Works with **Ollama, llama.cpp server, LM Studio, vLLM, and LocalAI**. Your photos, voice, and conversations never leave the machine running the server.
+
+> **Reaching the server:** use the host's **`.local` mDNS name** (`http://mymac.local:11434/v1`) or a **Tailscale** address (`*.ts.net`, already allow-listed) rather than a raw `192.168.x.x` IP — iOS App Transport Security can block cleartext `http://` to a bare private IP, but allows `.local`, loopback, and the Tailscale exception.
 
 ### Fully Offline Voice Mode
 

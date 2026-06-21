@@ -91,7 +91,7 @@ struct ModelFormView: View {
         } else {
             // MARK: Cloud API key section
             Section {
-                SecureField("API Key", text: $apiKey)
+                SecureField(selectedProvider == .custom ? "API Key (optional for local servers)" : "API Key", text: $apiKey)
                     .autocorrectionDisabled()
                     .textInputAutocapitalization(.never)
                     .onChange(of: apiKey) { _, _ in resetModelList() }
@@ -133,11 +133,11 @@ struct ModelFormView: View {
                                 .foregroundStyle(.secondary)
                         } else {
                             Image(systemName: "arrow.triangle.2.circlepath")
-                            Text("Validate key & fetch models")
+                            Text(selectedProvider == .custom ? "Fetch models" : "Validate key & fetch models")
                         }
                     }
                 }
-                .disabled(apiKey.isEmpty || isFetchingModels)
+                .disabled((apiKey.isEmpty && selectedProvider != .custom) || isFetchingModels)
 
                 if let error = fetchError {
                     Label(error, systemImage: "xmark.circle")
@@ -217,7 +217,7 @@ struct ModelFormView: View {
         case .qwen: return "Coding Plan subscription — coding-intl.dashscope.aliyuncs.com"
         case .minimax: return "MiniMax subscription — platform.minimaxi.com"
         case .openrouter: return "500+ models with one API key — openrouter.ai/keys"
-        case .custom: return "Any OpenAI-compatible API endpoint"
+        case .custom: return "Any OpenAI-compatible endpoint — a cloud API or a self-hosted Ollama / llama.cpp / LM Studio / vLLM / LocalAI server. For a local server, set the Base URL to e.g. http://your-mac.local:11434/v1 and leave the API Key blank. Use the host's .local name or a Tailscale address — a raw 192.168.x.x IP over http may be blocked by App Transport Security."
         case .local: return "On-device inference — no internet needed"
         case .appleOnDevice: return "Apple Intelligence — built-in, no download, no API key"
         }

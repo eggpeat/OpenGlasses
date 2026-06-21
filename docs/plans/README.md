@@ -39,6 +39,7 @@ All plans A–M are **built and merged to `main`** to the extent verifiable with
 | X Interactive HUD — Now/Next Tasks | ✅ Shipped (#46) — foundation + band card + voice bridge + Playbook/Procedure sources; 30 headless tests. Display Phases 1–3 merged (#42, #45, #46). |
 | Y Interactive HUD Launcher | ✅ Shipped (#54, #55) — full launcher: Quick Actions · Workflows · SOPs · Mode/Persona + Resume-task, hand-off to the Plan X card, in-menu voice nav, pagination, on-phone live mirror; 38 tests. |
 | Z Shortcuts Catalog | ✅ Shipped on `feat/shortcuts-catalog` — Siri-added shortcuts injected into the agent prompt; 6 tests. |
+| [Siri Intents + Local Server](siri-and-local-server.md) | 📋 Planned — extends `claude/siri-meta-glasses-integration-g0q7xf`: persona-targeted Siri intent, conversational follow-up, result snippets, plus local-server connection-test / presets / mDNS discovery for the keyless Custom provider, and unit-test hardening (items 1–7). |
 
 Three selectable expert-stream transports: **MJPEG** (same-LAN browser viewer), **Meeting link** (zero-infra — your meeting tool hosts the call; recommended for remote), and **WebRTC** (self-hosted peer-to-peer, needs your own signaling + TURN).
 

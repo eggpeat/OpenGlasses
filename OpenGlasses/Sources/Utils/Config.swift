@@ -2354,6 +2354,21 @@ struct Config {
         UserDefaults.standard.set(enabled, forKey: "userMemoryEnabled")
     }
 
+    // MARK: - Siri "Ask a Question" Behavior
+
+    /// When `true`, the Siri "Ask OpenGlasses a question" intent brings the app to
+    /// the foreground before answering. Default `false`: it runs in the background
+    /// and Siri speaks the answer hands-free (OpenGlasses normally stays running to
+    /// listen for wake words). Users whose app gets killed and see "OpenGlasses is
+    /// not running" can enable this for reliability at the cost of launching the app.
+    static var siriAskOpensApp: Bool {
+        UserDefaults.standard.bool(forKey: "siriAskOpensApp")
+    }
+
+    static func setSiriAskOpensApp(_ enabled: Bool) {
+        UserDefaults.standard.set(enabled, forKey: "siriAskOpensApp")
+    }
+
     // MARK: - Silent Mode
 
     /// When enabled, the wake word listener is off but the agent is still actionable

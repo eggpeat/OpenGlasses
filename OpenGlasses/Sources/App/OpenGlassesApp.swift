@@ -2649,7 +2649,11 @@ class AppState: ObservableObject, AppStateProtocol {
     // MARK: - Text Message Input
 
     /// Send a typed text message (with optional image) to the LLM — same pipeline as voice.
-    func sendTextMessage(_ text: String, imageData: Data? = nil) async {
+    /// Send a text query through the full LLM/persona pipeline.
+    /// - Parameter speakResponse: when `false`, the answer is not read aloud via the
+    ///   internal TTS engine. Used by the Siri "ask a question" intent, where Siri
+    ///   itself speaks the returned dialog (avoids the response being spoken twice).
+    func sendTextMessage(_ text: String, imageData: Data? = nil, speakResponse: Bool = true) async {
         guard !isProcessing else { return }
         let query = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { return }
@@ -2694,12 +2698,16 @@ class AppState: ObservableObject, AppStateProtocol {
             }
 
             // Speak the response (user can still say "stop")
-            startStopListener()
-            await speechService.speak(response)
-            stopStopListener()
+            if speakResponse {
+                startStopListener()
+                await speechService.speak(response)
+                stopStopListener()
+            }
         } catch {
             errorMessage = "Failed to get response: \(error.localizedDescription)"
-            await speechService.speak("Sorry, I encountered an error.")
+            if speakResponse {
+                await speechService.speak("Sorry, I encountered an error.")
+            }
         }
 
         isProcessing = false
