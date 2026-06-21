@@ -145,6 +145,26 @@ class ConversationStore: ObservableObject {
         NSLog("[ConversationStore] Ended thread")
     }
 
+    // MARK: - Recency (one-shot entry points like Siri)
+
+    /// True when `last` is within `window` seconds of `now`. Pure — unit-testable
+    /// (nonisolated so it's callable off the main actor, e.g. from tests).
+    nonisolated static func isWithinRecencyWindow(_ last: Date, now: Date, window: TimeInterval) -> Bool {
+        now.timeIntervalSince(last) <= window
+    }
+
+    /// For one-shot entry points (e.g. the Siri ask intents): keep the active
+    /// thread if its last turn was recent, otherwise start a fresh one so that
+    /// unrelated asks minutes apart don't pile into a single thread.
+    func continueRecentOrStartThread(mode: String, within window: TimeInterval, now: Date = Date()) {
+        if let id = activeThreadId,
+           let thread = threads.first(where: { $0.id == id }),
+           Self.isWithinRecencyWindow(thread.updatedAt, now: now, window: window) {
+            return  // reuse the recent active thread (conversational follow-up)
+        }
+        startThread(mode: mode)
+    }
+
     /// Resume an existing thread (e.g. after app relaunch).
     func resumeThread(_ threadId: String) -> ConversationThread? {
         guard let thread = threads.first(where: { $0.id == threadId }) else { return nil }

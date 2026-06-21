@@ -1579,6 +1579,14 @@ struct Config {
         }
     }
 
+    /// Resolve an enabled persona by its display name (case-insensitive), for the
+    /// Siri persona intent's fuzzy parameter matching. Pure — unit-testable.
+    static func persona(named name: String) -> Persona? {
+        let target = name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !target.isEmpty else { return nil }
+        return enabledPersonas.first { $0.name.lowercased() == target }
+    }
+
     /// All wake phrases across all enabled personas (for speech recognition boosting).
     static var allActiveWakePhrases: [String] {
         enabledPersonas.flatMap(\.allPhrases)

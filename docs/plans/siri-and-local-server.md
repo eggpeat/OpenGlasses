@@ -29,15 +29,15 @@ medium; #6 (mDNS discovery) is the only piece with real platform risk.
 
 ## Scope (items 1–7)
 
-| # | Item | Thread | Effort | Risk |
-|---|------|--------|--------|------|
-| 1 | Persona-targeted Siri intent | Siri | S | low |
-| 2 | Conversational follow-up | Siri | M | low |
-| 3 | Result snippet UI | Siri | S–M | low |
-| 4 | Connection-test button | Local server | S | low |
-| 5 | Local-server presets | Local server | S | low |
-| 6 | LAN auto-detect (mDNS) | Local server | M–L | **medium** (platform) |
-| 7 | Unit tests | Hardening | S | low |
+| # | Item | Thread | Effort | Risk | Status |
+|---|------|--------|--------|------|--------|
+| 1 | Persona-targeted Siri intent | Siri | S | low | ✅ PR-2 |
+| 2 | Conversational follow-up | Siri | M | low | ✅ PR-2 |
+| 3 | Result snippet UI | Siri | S–M | low | ✅ PR-2 |
+| 4 | Connection-test button | Local server | S | low | PR-3 |
+| 5 | Local-server presets | Local server | S | low | PR-3 |
+| 6 | LAN auto-detect (mDNS) | Local server | M–L | **medium** (platform) | PR-3 |
+| 7 | Unit tests | Hardening | S | low | ✅ PR-1 (#93) |
 
 ---
 
@@ -172,7 +172,13 @@ Refactor where needed so logic is pure and testable:
    — `Config.siriAskOpensApp`, `ModelConfig.inferredSupportsVision`, and the
    extracted `ModelFetcher.modelsEndpoint(from:)` (13 tests). The persona/preset
    tests ride along with their features in PR-2/PR-3. Landed first to de-risk.
-2. **PR-2 (Siri):** #1 persona intent, #2 follow-up, #3 snippets.
+2. ✅ **PR-2 (Siri):** #1 `AskPersonaIntent` + `PersonaEntity`/`PersonaQuery`
+   (`EntityStringQuery`; optional persona param so the generic ask still works;
+   replaces the generic shortcut to stay under the 10-phrase cap); #2 thread-recency
+   follow-up (`ConversationStore.continueRecentOrStartThread`); #3 `AnswerSnippetView`
+   result card. `AppState.askUnderPersona` runs the turn under the persona's model
+   then restores. Pure logic unit-tested; live Siri/persona routing is a hardware
+   path, not device-verified.
 3. **PR-3 (local server):** #4 connection test, #5 presets, then #6 discovery
    (separately, behind an experimental flag — droppable).
 

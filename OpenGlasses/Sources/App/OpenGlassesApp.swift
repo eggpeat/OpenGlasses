@@ -2714,6 +2714,27 @@ class AppState: ObservableObject, AppStateProtocol {
         speechService.stopThinkingSound()
     }
 
+    /// Run a one-shot query under a specific persona, then restore the prior
+    /// active model/preset/persona. Used by the Siri persona intent so a persona
+    /// ask doesn't permanently switch the user's active setup. `sendMessage`
+    /// reads `Config.activeModel` per call, so switching here routes this turn to
+    /// the persona's model (mirrors the wake-word persona-routing path).
+    func askUnderPersona(_ persona: Persona, question: String) async {
+        let prevModelId = Config.activeModelId
+        let prevPresetId = Config.activePresetId
+        let prevPersona = activePersona
+
+        activePersona = persona
+        Config.setActiveModelId(persona.modelId)
+        Config.setActivePresetId(persona.presetId)
+
+        await sendTextMessage(question, speakResponse: false)
+
+        Config.setActiveModelId(prevModelId)
+        Config.setActivePresetId(prevPresetId)
+        activePersona = prevPersona
+    }
+
     /// Start wake word listener in "stop detection" mode during TTS playback.
     /// With .playAndRecord audio session (Bluetooth HFP), mic works during TTS.
     private func startStopListener() {

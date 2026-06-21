@@ -37,10 +37,6 @@ struct AskQuestionIntent: AppIntent {
     static var openAppWhenRun: Bool { Config.siriAskOpensApp }
     static var isDiscoverable: Bool { true }
 
-    /// How long to wait for the app to signal it's up before giving up (step 1).
-    private static let connectionTimeout: Duration = .seconds(4)
-    private static let connectionPollInterval: Duration = .milliseconds(100)
-
     @Parameter(
         title: "Question",
         description: "What you want to ask OpenGlasses",
@@ -49,11 +45,11 @@ struct AskQuestionIntent: AppIntent {
     var question: String
 
     @MainActor
-    func perform() async throws -> some IntentResult & ReturnsValue<String> & ProvidesDialog {
-        // Step 1 — await the connection signal. The app may not be wired up the
-        // instant Siri calls us (background invocation, or a fresh launch when
-        // `siriAskOpensApp` is on), so wait briefly instead of failing immediately.
-        let appState = try await awaitConnectedAppState()
+    func perform() async throws -> some IntentResult & ReturnsValue<String> & ProvidesDialog & ShowsSnippetView {
+        // Step 1 — await the connection signal (shared with the persona intent).
+        // The app may not be wired up the instant Siri calls us (background
+        // invocation, or a fresh launch when `siriAskOpensApp` is on).
+        let appState = try await IntentSupport.awaitConnectedAppState()
 
         // Don't ride on a stale `lastResponse`: if a wake-word/voice turn is already
         // in flight, `sendTextMessage` would no-op and we'd speak the previous answer.
@@ -77,35 +73,17 @@ struct AskQuestionIntent: AppIntent {
             throw IntentError.noResponse
         }
 
-        return .result(value: answer, dialog: IntentDialog(stringLiteral: answer))
-    }
-
-    /// Wait up to `connectionTimeout` for the app to signal it's running and wired
-    /// up, polling on the main actor. Returns as soon as `AppStateProvider.shared`
-    /// is available; throws `appNotRunning` only if the signal never arrives (the
-    /// app was killed and not relaunched). A no-op when the app is already resident.
-    @MainActor
-    private func awaitConnectedAppState() async throws -> AppState {
-        if let appState = AppStateProvider.shared { return appState }
-
-        let deadline = ContinuousClock.now + Self.connectionTimeout
-        while ContinuousClock.now < deadline {
-            try await Task.sleep(for: Self.connectionPollInterval)
-            if let appState = AppStateProvider.shared { return appState }
-        }
-        throw IntentError.appNotRunning
+        let snippet = AnswerSnippetView(personaName: appState.activePersona?.name, answer: answer)
+        return .result(value: answer, dialog: IntentDialog(stringLiteral: answer), view: snippet)
     }
 
     enum IntentError: Error, CustomLocalizedStringResourceConvertible {
-        case appNotRunning
         case busy
         case emptyQuestion
         case noResponse
 
         var localizedStringResource: LocalizedStringResource {
             switch self {
-            case .appNotRunning:
-                return "OpenGlasses is not running. Open the app first."
             case .busy:
                 return "OpenGlasses is still working on something. Try again in a moment."
             case .emptyQuestion:

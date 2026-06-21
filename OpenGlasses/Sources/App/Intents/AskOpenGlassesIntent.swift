@@ -68,18 +68,21 @@ struct TakePhotoIntent: AppIntent {
 /// Register shortcuts so they appear in the Shortcuts app and Action Button picker.
 struct OpenGlassesShortcuts: AppShortcutsProvider {
     static var appShortcuts: [AppShortcut] {
-        // NOTE: App Shortcut phrases may only interpolate parameters whose type is
-        // an AppEntity or AppEnum — Siri needs a finite, resolvable set to predict
-        // against. A free-form String like `$question` is rejected by the AppIntents
+        // App Shortcut phrases may only interpolate parameters whose type is an
+        // AppEntity or AppEnum — Siri needs a finite, resolvable set to predict
+        // against. A free-form String (the question) is rejected by the AppIntents
         // metadata processor with a *halting* error that wipes ALL exported intent
-        // metadata, so the spoken question can't ride inside the phrase. Instead the
-        // phrase invokes the intent and Siri resolves the question two-step via the
-        // parameter's `requestValueDialog`.
+        // metadata, so it's resolved two-step via `requestValueDialog`. The persona,
+        // however, IS an AppEntity, so it can ride inside the phrase ("Ask Claude on
+        // OpenGlasses…"). Persona is optional — the generic phrase falls back to the
+        // active/first persona, so this one intent covers both the generic and the
+        // persona-targeted ask (and keeps us at iOS's 10-shortcut cap).
         AppShortcut(
-            intent: AskQuestionIntent(),
+            intent: AskPersonaIntent(),
             phrases: [
                 "Ask \(.applicationName) a question",
-                "Question for \(.applicationName)"
+                "Ask \(\.$persona) on \(.applicationName)",
+                "Ask \(\.$persona) \(.applicationName)"
             ],
             shortTitle: "Ask a Question",
             systemImageName: "bubble.left.and.bubble.right.fill"

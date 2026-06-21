@@ -49,11 +49,12 @@ OpenGlasses ships App Intents + Siri Shortcuts, so you can drive it straight fro
 
 | Say | What Happens |
 |-----|-------------|
-| "Hey Siri, ask OpenGlasses a question" | Siri asks **"What would you like to ask?"**, you speak the question, it's routed through your model/persona pipeline, and **Siri reads the answer back** |
+| "Hey Siri, ask **Claude** on OpenGlasses what's on my calendar" | Runs the question under that **persona's** model + prompt, **Siri reads the answer back**, then restores your active model |
+| "Hey Siri, ask OpenGlasses a question" | Siri asks **"What would you like to ask?"**, you speak the question, it's answered under your active persona |
 | "Hey Siri, OpenGlasses take a photo" | Captures via the glasses and describes the scene |
 | "Hey Siri, OpenGlasses describe surroundings" | Accessibility scene description |
 
-The first time, iOS surfaces these in the **Shortcuts** app and the Siri phrase picker (you can rename the phrase to anything you like). The "ask a question" flow is **two-step**: the trigger phrase invokes the intent, then Siri prompts for the question and awaits your spoken reply — iOS only lets App Shortcut phrases embed a fixed set of choices, not free-form text, so the question is asked second rather than crammed into the trigger. The intent runs in the background and speaks the result — no need to bring the app forward. If Siri ever says OpenGlasses isn't running, enable **Settings → Voice → Open App for Siri Questions** to have it launch the app first.
+The first time, iOS surfaces these in the **Shortcuts** app and the Siri phrase picker (you can rename the phrase to anything you like). A **persona name** can ride in the phrase ("ask Claude…") because it's a fixed, resolvable choice; the **question** can't (iOS only lets App Shortcut phrases embed fixed choices, not free-form text), so it's asked **two-step** — Siri prompts and awaits your spoken reply. Consecutive asks within a few minutes continue the **same conversation thread**, and Siri shows the answer in a result card. The intent runs in the background and speaks the result — no need to bring the app forward. If Siri ever says OpenGlasses isn't running, enable **Settings → Voice → Open App for Siri Questions** to have it launch the app first.
 
 ### On-Device Local LLM
 
