@@ -8,11 +8,12 @@ struct StudyTool: NativeTool {
     let name = "study"
 
     let description = """
-    Study Mode — turn a document into flashcards + a quiz and review hands-free. Actions: make_deck \
-    (generate a deck from a document name via 'deck', or from raw 'text'), list (your decks), quiz (start \
-    a quiz on a deck), answer (answer the current question via 'value' — a number or the option text), \
-    review (start spaced-repetition flashcard review), flip (reveal the current card's back), grade (mark \
-    the current card right/wrong via 'value'), stop. Use for "make flashcards from X", "quiz me", "study X".
+    Study Mode — turn a document into flashcards + a quiz and review hands-free. Actions: scan (capture a \
+    page through the glasses camera via OCR — repeat for multiple pages, then make_deck), make_deck \
+    (generate a deck from the scanned pages, a document name via 'deck', or raw 'text'), list (your decks), \
+    quiz (start a quiz on a deck), answer (answer the current question via 'value' — a number or the option \
+    text), review (start spaced-repetition flashcard review), flip (reveal the current card's back), grade \
+    (mark the current card right/wrong via 'value'), stop. Use for "study this page", "make flashcards from X", "quiz me".
     """
 
     var parametersSchema: [String: Any] {
@@ -21,7 +22,7 @@ struct StudyTool: NativeTool {
             "properties": [
                 "action": [
                     "type": "string",
-                    "enum": ["make_deck", "list", "quiz", "answer", "review", "flip", "grade", "stop"],
+                    "enum": ["make_deck", "scan", "list", "quiz", "answer", "review", "flip", "grade", "stop"],
                     "description": "what to do"
                 ],
                 "deck": ["type": "string", "description": "deck id or document name (for make_deck/quiz/review)"],
@@ -46,13 +47,18 @@ struct StudyTool: NativeTool {
                     deck = try await service.makeDeck(fromText: text, source: deckArg)
                 } else if let deckArg, !deckArg.isEmpty {
                     deck = try await service.makeDeck(fromDocument: deckArg)
+                } else if service.hasScannedPages {
+                    deck = try await service.makeDeckFromScan()
                 } else {
-                    return "Tell me what to study — a document name ('deck') or some 'text'."
+                    return "Tell me what to study — scan a page, give a document name ('deck'), or some 'text'."
                 }
                 return "Made deck “\(deck.summary.title)”: \(deck.flashcards.count) flashcards, \(deck.quiz.count) quiz questions. Say \"quiz me\" or \"review\"."
             } catch {
                 return error.localizedDescription
             }
+
+        case "scan":
+            return await service.scanPage()
 
         case "list":
             let decks = service.store.decks

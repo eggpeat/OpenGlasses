@@ -1,7 +1,8 @@
 # Plan — Study Mode (flashcards + quizzes from your documents)
 
-**Status: 🚧 Core + generation + review shipped on `feat/study-mode` (#88).** Rides our **Document RAG** +
-OCR + on-device-LLM engines (scan → summarize → decks of flashcards + quizzes).
+**Status: ✅ Shipped.** Rides our **Document RAG** + OCR + on-device-LLM engines
+(scan → summarize → decks of flashcards + quizzes). Delivered across #88 (core), #89 (generation +
+hands-free quiz/review), #90 (views), and the scan→OCR source.
 
 > **`feat/study-mode` (#88):** deterministic core (`StudyModels`, pure `QuizGrader` + Leitner
 > `SpacedRepetition`, `StudyContentBuilder`, `StudyStore`) + `LLMService.completeStructured` (a new
@@ -12,8 +13,9 @@ OCR + on-device-LLM engines (scan → summarize → decks of flashcards + quizze
 > **Views (`feat/study-mode-views`):** `DeckListView` (Settings → Study Mode) + `DeckDetailView`,
 > `FlashcardView` (drives the service's spaced-rep review session), `QuizView` (self-contained, scored
 > with the pure `QuizGrader` + per-option feedback).
-> **Only remaining deferral:** the glasses **scan→OCR** source (make_deck works today from a saved
-> Document RAG doc or supplied text). With that, Study Mode is feature-complete.
+> **Scan source (`feat/study-mode-scan`):** hands-free glasses-camera → `OCRService` → multi-page scan
+> buffer → `make_deck`; `study` `scan` action + `make_deck` falls back to the scanned pages. ✅ **Study
+> Mode feature-complete.**
 
 **Strategic fit:** A consumer **active-recall study companion**. We already turn documents into
 retrievable knowledge (Document RAG, [Plan O](O-document-rag.md)/[P](P-chunk-citations.md)) and read text

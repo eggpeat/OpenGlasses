@@ -97,6 +97,7 @@ final class StudyServiceTests: XCTestCase {
     }
 
     func testToolMakeDeckNeedsSource() async throws {
+        StudyService.shared.clearScan()
         let result = try await StudyTool().execute(args: ["action": "make_deck"])
         XCTAssertTrue(result.localizedCaseInsensitiveContains("tell me what to study"))
     }
@@ -113,5 +114,43 @@ final class StudyServiceTests: XCTestCase {
         StudyService.shared.store = tempStore()
         let result = try await StudyTool().execute(args: ["action": "list"])
         XCTAssertTrue(result.localizedCaseInsensitiveContains("no study decks"))
+    }
+
+    // MARK: - Scan → OCR source
+
+    func testScanIngestAccumulatesThenBuildsDeck() async throws {
+        let svc = makeService()
+        svc.ocr = { _ in "Cells are the basic unit of life." }
+        let first = await svc.ingestScannedImage(Data([0x1]))
+        XCTAssertTrue(first.contains("page 1"))
+        _ = await svc.ingestScannedImage(Data([0x2]))
+        XCTAssertEqual(svc.scanPages, 2)
+        XCTAssertTrue(svc.hasScannedPages)
+        let deck = try await svc.makeDeckFromScan()
+        XCTAssertEqual(deck.source, "Scanned notes")
+        XCTAssertFalse(svc.hasScannedPages)     // buffer cleared after building
+    }
+
+    func testScanEmptyOCRRejected() async {
+        let svc = makeService()
+        svc.ocr = { _ in "   " }
+        let status = await svc.ingestScannedImage(Data([0x1]))
+        XCTAssertTrue(status.localizedCaseInsensitiveContains("couldn't read"))
+        XCTAssertEqual(svc.scanPages, 0)
+    }
+
+    func testMakeDeckFromEmptyScanThrows() async {
+        let svc = makeService()
+        do { _ = try await svc.makeDeckFromScan(); XCTFail("expected noDocument") }
+        catch StudyServiceError.noDocument {} catch { XCTFail("wrong error: \(error)") }
+    }
+
+    func testToolMakeDeckFromScanBuffer() async throws {
+        isolateSharedTool()
+        StudyService.shared.clearScan()
+        StudyService.shared.ocr = { _ in "Scanned content about mitochondria." }
+        _ = await StudyService.shared.ingestScannedImage(Data([0x1]))
+        let made = try await StudyTool().execute(args: ["action": "make_deck"])
+        XCTAssertTrue(made.contains("Made deck"))
     }
 }

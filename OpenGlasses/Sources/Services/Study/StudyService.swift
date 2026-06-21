@@ -26,6 +26,14 @@ final class StudyService: ObservableObject {
     /// (systemPrompt, userText, jsonSchema) → JSON object. Set by `configure(...)`; tests inject a fake.
     var generate: ((String, String, [String: Any]) async -> [String: Any]?)?
     weak var documentStore: DocumentStore?
+    private weak var camera: CameraService?
+    /// JPEG → recognized text (OCR). Set by `configure(...)`; tests inject a fake.
+    var ocr: ((Data) async -> String)?
+
+    /// Accumulated text from hands-free scanning (one or more pages) for the next deck.
+    @Published private(set) var scanBuffer: String = ""
+    @Published private(set) var scanPages: Int = 0
+    var hasScannedPages: Bool { scanPages > 0 }
 
     private let grader = QuizGrader()
     var spaced = SpacedRepetition()
@@ -40,11 +48,53 @@ final class StudyService: ObservableObject {
 
     init() {}
 
-    func configure(llm: LLMService, documentStore: DocumentStore?, tts: TextToSpeechService) {
+    func configure(llm: LLMService, documentStore: DocumentStore?, tts: TextToSpeechService, camera: CameraService? = nil) {
         self.documentStore = documentStore
+        self.camera = camera
         self.generate = { [weak llm] systemPrompt, userText, jsonSchema in
             await llm?.completeStructured(systemPrompt: systemPrompt, userText: userText, jsonSchema: jsonSchema)
         }
+        self.ocr = { data in await OCRService().recognizeText(in: data).text }
+    }
+
+    // MARK: - Hands-free scan source (glasses camera → OCR → text)
+
+    /// OCR a captured page and append it to the scan buffer. Returns a spoken status.
+    func ingestScannedImage(_ data: Data) async -> String {
+        guard let ocr else { return "Scanning isn't available right now." }
+        let text = await ocr(data).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return "I couldn't read any text on that page. Try again with better lighting." }
+        scanBuffer += (scanBuffer.isEmpty ? "" : "\n\n") + text
+        scanPages += 1
+        return "Captured page \(scanPages) (\(text.count) characters). Say \"scan\" for another page, or \"make deck\" to build."
+    }
+
+    /// Capture the current camera frame and ingest it.
+    func scanPage() async -> String {
+        guard let camera else { return "Camera unavailable — connect the glasses or use the phone camera." }
+        let data: Data
+        if let frame = camera.latestFrame, let jpeg = frame.jpegData(compressionQuality: 0.8) {
+            data = jpeg
+        } else if let captured = try? await camera.capturePhoto() {
+            data = captured
+        } else {
+            return "I couldn't capture the page. Point the glasses at it and try again."
+        }
+        return await ingestScannedImage(data)
+    }
+
+    /// Build a deck from the accumulated scan buffer, then clear it.
+    func makeDeckFromScan() async throws -> StudyDeck {
+        let text = scanBuffer.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { throw StudyServiceError.noDocument }
+        let deck = try await makeDeck(fromText: text, source: "Scanned notes")
+        clearScan()
+        return deck
+    }
+
+    func clearScan() {
+        scanBuffer = ""
+        scanPages = 0
     }
 
     // MARK: - Generation

@@ -895,8 +895,9 @@ class AppState: ObservableObject, AppStateProtocol {
         // Configure Safety Assessment (HECA) — runs through the structured-vision provider layer.
         SafetyAssessmentService.shared.configure(camera: cameraService, llm: llmService)
 
-        // Configure Study Mode — generates decks from documents via the text→JSON LLM call.
-        StudyService.shared.configure(llm: llmService, documentStore: documentStore, tts: speechService)
+        // Configure Study Mode — generates decks from documents via the text→JSON LLM call;
+        // camera enables the hands-free scan → OCR source.
+        StudyService.shared.configure(llm: llmService, documentStore: documentStore, tts: speechService, camera: cameraService)
 
         // Field Assist Phase 5 (Plan K2): expert stream bridge for escalations. Transport
         // (MJPEG / WebRTC) is selected in Settings; MJPEG is the working default.
