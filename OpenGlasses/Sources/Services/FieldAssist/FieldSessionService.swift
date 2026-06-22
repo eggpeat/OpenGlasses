@@ -297,7 +297,13 @@ final class FieldSessionService: ObservableObject {
             throw FieldSessionError.noActiveSession
         }
         let dir = sessionsRoot.appendingPathComponent(sessionId, isDirectory: true)
-        return try SessionExporter.export(sessionDir: dir, formats: formats)
+        let urls = try SessionExporter.export(sessionDir: dir, formats: formats)
+        // Plan T: store-and-forward the audit — enqueue an op so the export syncs to a backend
+        // when one exists (no-op locally beyond a queued tombstone until a networked sink lands).
+        offlineQueue?.enqueue(QueuedOp.make(
+            kind: .auditExport, sessionId: sessionId,
+            json: ["files": urls.map(\.path), "exportedAt": Date().timeIntervalSince1970]))
+        return urls
     }
 
     // MARK: - History

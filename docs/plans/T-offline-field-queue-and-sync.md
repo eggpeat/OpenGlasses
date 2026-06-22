@@ -15,8 +15,11 @@ offline/reconnect HUD + TTS), fed by `FieldSessionService.attachPhoto` (durable-
 phone **`SyncStatusView`** (connection, queue depth, per-op state, conflicts) linked from Field Assist settings.
 13 tests (queue FIFO/restart/tombstone, reachability edge, engine flush/transient-cap/conflict/idempotent/
 rising-edge, resolver). Full suite 583 green; Debug + Release verified.
-**Deferred:** a real networked sink + `ConflictResolver` live use; routing `SessionLogger` entries / `auditExport`
-/ `llmGrounding` through the queue (add a `synced` column); disk-pressure photo cache cap.
+**Shipped since:** `auditExport` routing (`exportSession` enqueues an `.auditExport` op) and the
+**disk-pressure photo-cache cap** (`PhotoCachePolicy` pure eviction + `OfflineQueue.prunePhotoEvidence`,
+oldest delivered photos first; pending never touched).
+**Still deferred (device-pending):** a real networked sink + `ConflictResolver` live use; routing
+`SessionLogger` entries / `llmGrounding` through the queue.
 
 ---
 

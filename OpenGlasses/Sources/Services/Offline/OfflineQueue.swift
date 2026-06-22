@@ -83,6 +83,39 @@ final class OfflineQueue {
         exec("DELETE FROM ops WHERE state = 'done'")
     }
 
+    /// Delete a single op by id.
+    func delete(id: String) {
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, "DELETE FROM ops WHERE id = ?", -1, &stmt, nil) == SQLITE_OK else { return }
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, id)
+        _ = sqlite3_step(stmt)
+    }
+
+    /// Evict the oldest **delivered** (`done`) photo evidence from disk when it exceeds `maxBytes`,
+    /// then drop those tombstones. Pending/in-flight photos are never touched. Returns bytes freed.
+    @discardableResult
+    func prunePhotoEvidence(maxBytes: Int) -> Int {
+        let fm = FileManager.default
+        let candidates = all().filter { $0.kind == .photoUpload && $0.state == .done }
+            .compactMap { op -> (op: QueuedOp, url: URL, size: Int)? in
+                guard let path = op.payloadJSON["path"] as? String else { return nil }
+                let size = (try? fm.attributesOfItem(atPath: path)[.size]) as? Int ?? 0
+                return (op, URL(fileURLWithPath: path), size)
+            }
+        let entries = candidates.map { PhotoCachePolicy.Entry(id: $0.op.id, sizeBytes: $0.size, createdAt: $0.op.createdAt) }
+        let evict = Set(PhotoCachePolicy.evictions(entries, maxBytes: maxBytes))
+        guard !evict.isEmpty else { return 0 }
+
+        var freed = 0
+        for item in candidates where evict.contains(item.op.id) {
+            freed += item.size
+            try? fm.removeItem(at: item.url)
+            delete(id: item.op.id)
+        }
+        return freed
+    }
+
     /// Test helper: wipe everything.
     func deleteAll() {
         exec("DELETE FROM ops")
