@@ -1,6 +1,13 @@
 # Plan — Siri Conversational Intents + Self-Hosted Local Server Polish
 
-**Status: 📋 Planned.** Builds on the Siri App-Intents layer and the keyless
+**Status: 🚧 Mostly shipped.** Thread A (Siri persona intent + conversational follow-up +
+snippet) shipped in PRs #93/#94. Thread B/C: **connection-test (#4) + local-server presets
+(#5) shipped** — `ModelFetcher.testConnection` (pure `classify`) + a "Test Connection" button,
+and `LocalServerPreset` (Ollama / LM Studio / vLLM / LocalAI) with a base-URL prefill picker in
+`ModelFormView`. **Remaining: #6 LAN auto-detect (mDNS)** — device-pending (NWBrowser + Bonjour;
+many local servers don't advertise, real-LAN testing needed).
+
+Builds on the Siri App-Intents layer and the keyless
 Custom (OpenAI-compatible) provider already on
 `claude/siri-meta-glasses-integration-g0q7xf`:
 
