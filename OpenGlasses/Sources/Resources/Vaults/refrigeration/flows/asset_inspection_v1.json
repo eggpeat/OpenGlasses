@@ -1,0 +1,15 @@
+{
+  "id": "asset_inspection_v1",
+  "title": "Refrigeration Asset Inspection",
+  "applies_to": ["refrigeration_unit", "condenser", "compressor"],
+  "preconditions": [
+    { "type": "inside_region", "region": "work_zone", "message": "Move inside the work zone before inspecting." }
+  ],
+  "steps": [
+    { "field": "asset_id", "prompt": "Scan or read the asset tag.", "binding": { "type": "barcode_or_voice" }, "required": true, "completion": { "min_len": 3 } },
+    { "field": "suction_pressure", "prompt": "Read the suction pressure in psig.", "binding": { "type": "voice_number", "unit": "psig" }, "required": true, "completion": { "range": [0, 400] } },
+    { "field": "discharge_pressure", "prompt": "Read the discharge pressure in psig.", "binding": { "type": "voice_number", "unit": "psig" }, "required": true, "completion": { "range": [0, 600] } },
+    { "field": "condition", "prompt": "Overall condition?", "binding": { "type": "enum", "options": ["good", "fair", "poor", "failed"] }, "required": true },
+    { "field": "nameplate_photo", "prompt": "Photograph the nameplate.", "binding": { "type": "photo" }, "required": false }
+  ]
+}

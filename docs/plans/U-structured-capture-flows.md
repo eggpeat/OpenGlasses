@@ -15,10 +15,13 @@ bundle+overlay merge); `CaptureValue` / `CaptureRecord` / `Provenance`; the dete
 + the **`capture_flow`** tool (`list`/`start`/`answer`/`skip`/`back`/`status`/`finish`/`cancel`), registered + described in
 both LLMService and GeminiLive. On finish the `CaptureRecord` is enqueued to the offline queue (Plan T). 11 tests; full
 suite 594 green; Debug + Release verified.
-**Deferred:** routing the camera bindings to their tools (`barcode_or_voice`→scan_code, `photo`→CapturePhotoTool,
-`ocr_text`→EquipmentLookupTool — the runner already accepts their resolved values); the named-region precondition
-source (currently `unknown`, never hard-blocks); the no-code `CaptureFlowAuthorView`; folding the record into
-`SessionExporter` audit JSON; 2 hero flows.
+**Shipped since:** the **2 hero flows** — `refrigeration/flows/asset_inspection_v1.json` and
+`it_network/flows/it_site_survey_v1.json` (schema + runner exercised end-to-end in tests).
+**Still deferred:** routing the camera bindings to their tools (`barcode_or_voice`→scan_code,
+`photo`→CapturePhotoTool, `ocr_text`→EquipmentLookupTool — runner already accepts resolved values;
+**device-pending**); wiring the named-region precondition source (the runner/service `insideRegion`
+seam exists, just unset — needs a region registry); the no-code `CaptureFlowAuthorView`; folding the
+record into `SessionExporter` audit JSON.
 
 ---
 

@@ -1,0 +1,13 @@
+{
+  "id": "it_site_survey_v1",
+  "title": "IT Site Survey",
+  "applies_to": ["network_rack", "switch", "patch_panel"],
+  "preconditions": [],
+  "steps": [
+    { "field": "rack_id", "prompt": "Scan or read the rack label.", "binding": { "type": "barcode_or_voice" }, "required": true, "completion": { "min_len": 2 } },
+    { "field": "switch_model", "prompt": "Read the switch model from the nameplate.", "binding": { "type": "ocr_text" }, "required": false },
+    { "field": "used_ports", "prompt": "How many ports are in use?", "binding": { "type": "voice_number", "unit": "ports" }, "required": true, "completion": { "range": [0, 96] } },
+    { "field": "uplink", "prompt": "Uplink media?", "binding": { "type": "enum", "options": ["copper", "fiber", "none"] }, "required": true },
+    { "field": "rack_photo", "prompt": "Photograph the rack front.", "binding": { "type": "photo" }, "required": false }
+  ]
+}
