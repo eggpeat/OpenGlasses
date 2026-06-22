@@ -1,9 +1,11 @@
 # Plan — Memory, Recall & Self-Improvement (the closed learning loop)
 
-**Status:** 📋 Planned (not built). The deterministic core (FTS index + query builder, nudge
-heuristics, skill-pattern detector, insights aggregator) is fully headless-testable; only the
-on-device summarization call is model-dependent — same posture as the rest of the brain work.
-Native-first (the brain works without OpenClaw — see `[[project_brain_store]]`).
+**Status:** ✅ Shipped (Phases 1–4) on `main`. Phase 1 pure core (FTS index, query builder,
+nudge/skill analyzers, insights aggregator, PR #100); Phase 2 cross-session recall
+(`RecallService` + `brain recall`, #101); Phase 3 self-improving loop (nudges + skill
+suggestions, auto-save in Agent Mode, #102→#103 re-land); Phase 4 on-device insights
+(`InsightsView` + `brain insights`, #104). Native-first; recall/insights on-device; summaries
+via the user's active provider. Device-pending only: live voice behaviour of the spoken nudges.
 
 Three features built around a self-improving "closed learning loop," all reinforcing
 OpenGlasses' on-device brain rather than the gateway. They share one substrate
