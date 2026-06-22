@@ -62,6 +62,10 @@ class ConversationStore: ObservableObject {
     private let storageURL: URL
     private let encryption = ConversationEncryptionService.shared
 
+    /// On-device full-text index for cross-session recall (Memory & Recall Phase 2). Set by
+    /// `AppState`; nil keeps everything working with no indexing.
+    weak var recallIndex: ConversationIndex?
+
     /// Key for persisting the active thread ID across restarts.
     private static let activeThreadKey = "conversationStore_activeThreadId"
 
@@ -123,6 +127,34 @@ class ConversationStore: ObservableObject {
         threads[idx].messages.append(msg)
         threads[idx].updatedAt = Date()
         save()
+        indexMessage(msg, threadID: threads[idx].id)
+    }
+
+    // MARK: - Recall index (Memory & Recall Phase 2)
+
+    /// Index a single message (user/assistant turns only — system turns aren't recalled).
+    private func indexMessage(_ msg: ConversationMessage, threadID: String) {
+        guard let recallIndex, msg.role == "user" || msg.role == "assistant" else { return }
+        let trimmed = msg.content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        recallIndex.index(IndexedTurn(id: msg.id, threadID: threadID, role: msg.role,
+                                      text: msg.content, timestamp: msg.timestamp))
+    }
+
+    /// One-time backfill of existing conversation history into the recall index (idempotent —
+    /// re-indexing the same message id is a no-op replace). Called by `AppState` when the index
+    /// is empty.
+    func backfillIndex() {
+        guard let recallIndex else { return }
+        let turns = threads.flatMap { thread in
+            thread.messages
+                .filter { ($0.role == "user" || $0.role == "assistant")
+                    && !$0.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+                .map { IndexedTurn(id: $0.id, threadID: thread.id, role: $0.role,
+                                   text: $0.content, timestamp: $0.timestamp) }
+        }
+        recallIndex.indexAll(turns)
+        NSLog("[ConversationStore] Backfilled %d turns into the recall index", turns.count)
     }
 
     /// End the active thread and auto-generate a title and summary.

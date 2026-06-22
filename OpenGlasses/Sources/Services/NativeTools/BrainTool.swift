@@ -14,16 +14,18 @@ struct BrainTool: NativeTool {
     a relationship ('Alice works at Acme'). 'encounters' lists recent face-recognition sightings. \
     'forget' erases an entity. 'status' reports brain size. 'save_need' records a follow-up — what \
     a person wants, is looking for, or you owe them ('Bob wants a copy of the deck') — and 'needs' \
-    lists open follow-ups (per person, or all); 'resolve_need' marks one done.
+    lists open follow-ups (per person, or all); 'resolve_need' marks one done. 'recall' searches \
+    your PAST CONVERSATIONS (what you actually said in earlier sessions) and returns a cited \
+    answer — use for "what did we decide about X?", "what did I say about Y last week?".
     """
 
     var parametersSchema: [String: Any] {
         [
             "type": "object",
             "properties": [
-                "action": ["type": "string", "description": "query, person, link, encounters, save_need, needs, resolve_need, forget, or status",
-                           "enum": ["query", "person", "link", "encounters", "save_need", "needs", "resolve_need", "forget", "status"]],
-                "question": ["type": "string", "description": "On 'query': what to look up."],
+                "action": ["type": "string", "description": "query, recall, person, link, encounters, save_need, needs, resolve_need, forget, or status",
+                           "enum": ["query", "recall", "person", "link", "encounters", "save_need", "needs", "resolve_need", "forget", "status"]],
+                "question": ["type": "string", "description": "On 'query': what to look up across memory. On 'recall': what to find in past conversations (may include 'yesterday'/'last week')."],
                 "person": ["type": "string", "description": "On 'person'/'encounters'/'save_need'/'needs'/'resolve_need'/'forget': the person or entity name."],
                 "source": ["type": "string", "description": "On 'link': subject entity (e.g. 'Alice')."],
                 "relation": ["type": "string", "description": "On 'link': works_at, lives_in, founded, leads, married_to, studied_at, invested_in, attended, or knows."],
@@ -50,6 +52,14 @@ struct BrainTool: NativeTool {
                 return "What should I look up in the brain?"
             }
             return unifiedQuery(question, brain: brain)
+
+        case "recall", "remember", "history":
+            guard let question = (args["question"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !question.isEmpty else {
+                return "What should I recall from past conversations?"
+            }
+            let answer = await RecallService.shared.recall(question)
+            return answer.summary
 
         case "person", "dossier", "who":
             guard let person = (args["person"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -135,7 +145,7 @@ struct BrainTool: NativeTool {
                    "Semantic memory \(memoryCount); \(docCount) documents; \(SocialContextStore.shared.allPeople().count) people with notes."
 
         default:
-            return "Unknown action. Use: query, person, link, encounters, save_need, needs, resolve_need, forget, or status."
+            return "Unknown action. Use: query, recall, person, link, encounters, save_need, needs, resolve_need, forget, or status."
         }
     }
 

@@ -5,10 +5,10 @@ heuristics, skill-pattern detector, insights aggregator) is fully headless-testa
 on-device summarization call is model-dependent — same posture as the rest of the brain work.
 Native-first (the brain works without OpenClaw — see `[[project_brain_store]]`).
 
-Three features cribbed *as capabilities* (not code — it's a Python project) from the
-self-improving loop in Nous's Hermes Agent, all reinforcing OpenGlasses' on-device brain
-rather than the gateway. They share one substrate (`ConversationStore` + `BrainStore` + a new
-conversation index), so they're phased as one effort:
+Three features built around a self-improving "closed learning loop," all reinforcing
+OpenGlasses' on-device brain rather than the gateway. They share one substrate
+(`ConversationStore` + `BrainStore` + a new conversation index), so they're phased as one
+effort:
 
 1. **Cross-session recall** — search and summarize your own past conversations.
 2. **Self-improving memory loop** — proactive "remember this?" nudges + autonomous skill
@@ -133,6 +133,6 @@ past conversation into something you can ask about hands-free; the self-improvin
 the brain *grows* without the user having to curate it by hand; insights make that growth
 legible. All three deepen the on-device brain (native-first, private) rather than leaning on
 the gateway — and the hard parts (FTS query building, nudge/skill heuristics, aggregation) are
-pure, fully-testable functions over data structures already in the app. Reference: the
-Hermes Agent "closed learning loop" (agent-curated memory, autonomous skill creation,
-cross-session recall) proves the shape; the code here is written fresh in Swift.
+pure, fully-testable functions over data structures already in the app. The closed-learning-loop
+shape (agent-curated memory, autonomous skill creation, cross-session recall) is well-proven;
+the code here is written fresh in Swift.

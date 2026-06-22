@@ -257,7 +257,7 @@ class LLMService: ObservableObject {
             - object_memory: Remember where physical objects are. Save ('remember my keys are on the counter'), find ('where are my keys?'), list, forget.
             - contextual_note: Save notes with automatic location and time context. Search notes by keyword or location.
             - social_context: Remember facts about people. Add facts ('remember John works at Stripe'), recall ('what do I know about John?'), list people.
-            - brain: Unified search across ALL on-device memory (facts, documents, people, notes, meetings, knowledge graph + encounter log). action 'query' for any "what do I know about…" when unsure where it lives; 'person' for a dossier before/after meeting someone ("brief me on Alice"); 'link' to record relationships ('Alice works at Acme'); 'encounters' for recent sightings ("when did I last see Bob?"); 'save_need' for a follow-up ("Bob wants the deck"), 'needs' to list open follow-ups, 'resolve_need' to close one. Cites sources and says what's missing — answer only from its findings.
+            - brain: Unified search across ALL on-device memory (facts, documents, people, notes, meetings, knowledge graph + encounter log). action 'query' for any "what do I know about…" when unsure where it lives; 'recall' to search PAST CONVERSATIONS — what you actually said in earlier sessions — and get a cited answer ("what did we decide about X?", "what did I say about Y last week?"); 'person' for a dossier before/after meeting someone ("brief me on Alice"); 'link' to record relationships ('Alice works at Acme'); 'encounters' for recent sightings ("when did I last see Bob?"); 'save_need' for a follow-up ("Bob wants the deck"), 'needs' to list open follow-ups, 'resolve_need' to close one. Cites sources and says what's missing — answer only from its findings.
             - home_assistant: Control Home Assistant smart home — toggle devices, check states, list entities, run automations, or use 'converse' action to send natural language commands directly to HA (e.g. action=converse, text="turn on the kitchen lights"). ALWAYS try this tool when asked about smart home control. Use entity IDs from the device list below when available; the tool also fuzzy-matches and falls back to HA's voice assistant.
             - vehicle_status: Get the user's vehicle / EV charge %, range, charging state, and plug status. Reads live from Home Assistant — use for "what's my car's charge?", "is the car charging?", "how much range do I have?".
             - scan_code: Scan QR codes or barcodes from the camera. Returns decoded content (URLs, text, product codes). Works offline.
@@ -542,7 +542,9 @@ class LLMService: ObservableObject {
     /// A stateless, tools-off completion for the planner: it sees only the system prompt + the
     /// request, never the live conversation history (planning must use trusted context only, and
     /// must not pollute the chat). History is snapshotted and restored even on error.
-    private func completeStateless(_ text: String, system: String) async throws -> String {
+    /// Stateless, tool-free completion against the user's active provider (honors on-device
+    /// models). Used by lightweight features like recall summarization.
+    func completeStateless(_ text: String, system: String) async throws -> String {
         guard let config = Config.activeModel else {
             throw LLMError.missingAPIKey("No model configured")
         }

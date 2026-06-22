@@ -541,6 +541,8 @@ class AppState: ObservableObject, AppStateProtocol {
 
     // Tier 1 services
     let conversationStore = ConversationStore()
+    /// On-device FTS index over conversation turns for cross-session recall (Memory & Recall Phase 2).
+    let conversationIndex = ConversationIndex()
     let userMemory = SemanticMemoryStore()
     let documentStore = DocumentStore()
     let intentClassifier = IntentClassifier()
@@ -916,6 +918,17 @@ class AppState: ObservableObject, AppStateProtocol {
         // Configure Study Mode — generates decks from documents via the text→JSON LLM call;
         // camera enables the hands-free scan → OCR source.
         StudyService.shared.configure(llm: llmService, documentStore: documentStore, tts: speechService, camera: cameraService)
+
+        // Memory & Recall Phase 2 — index conversation turns; recall summarizes via the user's
+        // active provider (on-device when that's their choice). Backfill existing history once.
+        conversationStore.recallIndex = conversationIndex
+        if conversationIndex.count() == 0 { conversationStore.backfillIndex() }
+        RecallService.shared.configure(index: conversationIndex) { [weak self] question, hits in
+            guard let self else { return RecallService.fallbackSummary(hits) }
+            let prompt = RecallService.summarizationPrompt(question: question, hits: hits)
+            return (try? await self.llmService.completeStateless(prompt.user, system: prompt.system))
+                ?? RecallService.fallbackSummary(hits)
+        }
 
         // Field Assist Phase 5 (Plan K2): expert stream bridge for escalations. Transport
         // (MJPEG / WebRTC) is selected in Settings; MJPEG is the working default.
