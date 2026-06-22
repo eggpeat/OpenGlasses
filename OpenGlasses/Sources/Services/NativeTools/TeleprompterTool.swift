@@ -6,12 +6,15 @@ import Foundation
 @MainActor
 struct TeleprompterTool: NativeTool {
     let service: TeleprompterService
+    /// Optional source for starting from a saved knowledge-base document (Document-RAG adapter).
+    var documentStore: DocumentStore?
 
     let name = "teleprompter"
     let description = """
         Hands-free teleprompter on the in-lens HUD. Shows a script a window at a time and \
-        (in audio-paced mode) auto-advances by listening to you read. Can also capture a \
-        printed/written script via the glasses camera (action=scan, then start).
+        (in audio-paced mode) auto-advances by listening to you read. Sources: inline text, a \
+        saved script, a captured page (action=scan), or one of the user's saved documents \
+        (document=<name>).
         """
     let parametersSchema: [String: Any] = [
         "type": "object",
@@ -29,6 +32,10 @@ struct TeleprompterTool: NativeTool {
             "script": [
                 "type": "string",
                 "description": "Name of a previously-saved script to start (action=start)."
+            ],
+            "document": [
+                "type": "string",
+                "description": "Name of a saved knowledge-base document to prompt from (action=start)."
             ],
             "title": [
                 "type": "string",
@@ -48,6 +55,7 @@ struct TeleprompterTool: NativeTool {
         let text = (args["text"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         let title = (args["title"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         let scriptName = (args["script"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let documentName = (args["document"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         let mode = parseMode(args["mode"] as? String)
 
         switch action {
@@ -64,12 +72,23 @@ struct TeleprompterTool: NativeTool {
             if scriptName != nil {
                 return "I couldn't find a saved script named \"\(scriptName!)\". Say \"list\" to see saved scripts."
             }
+            if let documentName, !documentName.isEmpty {
+                guard let store = documentStore else { return "Documents aren't available right now." }
+                guard let doc = store.document(named: documentName), let raw = store.fullText(documentId: doc.id) else {
+                    return "I couldn't find a saved document named \"\(documentName)\"."
+                }
+                let parsed = TeleprompterScript.parse(title: doc.name,
+                                                      text: DocumentReconstructor.scriptLines(raw))
+                guard parsed.wordCount > 0 else { return "\"\(doc.name)\" had no readable text to prompt." }
+                service.start(parsed, mode: mode)
+                return "Teleprompter started from document: \(doc.name) (\(parsed.wordCount) words, \(service.mode.displayName))."
+            }
             if service.hasScannedPages {
                 let pages = service.scanPages
                 service.startScannedScript(title: title, mode: mode)
                 return "Teleprompter started from \(pages) scanned page\(pages == 1 ? "" : "s") (\(service.mode.displayName))."
             }
-            return "Provide the script text, a saved script name, or scan a page first."
+            return "Provide the script text, a saved script name, a document name, or scan a page first."
 
         case "stop":
             guard service.isActive else { return "The teleprompter isn't running." }

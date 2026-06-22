@@ -780,8 +780,9 @@ class AppState: ObservableObject, AppStateProtocol {
         translationTool.translationService = liveTranslation
         nativeToolRegistry.register(translationTool)
 
-        // Teleprompter tool (Phase 2): registered after the lazy service is available.
-        nativeToolRegistry.register(TeleprompterTool(service: teleprompterService))
+        // Teleprompter tool (Phase 2): registered after the lazy service is available. The
+        // document store enables prompting from a saved knowledge-base doc (Document-RAG source).
+        nativeToolRegistry.register(TeleprompterTool(service: teleprompterService, documentStore: documentStore))
 
         // Wire translation output to TTS
         liveTranslation.onTranslation = { [weak self] translation in

@@ -115,6 +115,24 @@ final class DocumentStore: ObservableObject {
 
     func list() -> [DocumentRef] { documents }
 
+    /// Resolve a document by name (exact then substring, case-insensitive).
+    func document(named name: String) -> DocumentRef? {
+        let needle = name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !needle.isEmpty else { return nil }
+        return documents.first { $0.name.lowercased() == needle }
+            ?? documents.first { $0.name.lowercased().contains(needle) }
+    }
+
+    /// Reconstruct a document's continuous text from its (overlapping) chunks, in order.
+    /// Used by sources that need the whole document, e.g. the teleprompter.
+    func fullText(documentId: String) -> String? {
+        let chunks = fetchChunks(namespace: nil, documentIds: [documentId])
+            .sorted { $0.chunkIndex < $1.chunkIndex }
+            .map(\.text)
+        guard !chunks.isEmpty else { return nil }
+        return DocumentReconstructor.deOverlap(chunks)
+    }
+
     func forget(documentId: String) {
         let id = escapedSQL(documentId)
         exec("DELETE FROM doc_chunks WHERE document_id = '\(id)'")

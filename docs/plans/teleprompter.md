@@ -129,8 +129,10 @@ Touch:
 4. **Vision capture (second)** ✅ — `teleprompter` tool `scan` action + Settings "Capture from
    camera": glasses camera → `OCRService` multi-page scan → buffer → `start`/`save`, mirroring
    the Study-Mode scan pattern (OCR is an injectable seam, so the flow is unit-tested). The
-   Document-RAG source adapter is deferred (the RAG store has no clean full-document-text
-   accessor — only semantic passages).
+   **Document-RAG source adapter is now built**: `teleprompter` tool `start` with
+   `document=<name>` pulls a saved doc's text via a new `DocumentStore.fullText` +
+   `DocumentReconstructor` (de-overlaps the chunker's overlapping chunks, then re-flows one
+   sentence per line for the paginator) — pure and unit-tested.
 
 ## Tests
 - Tokenizer: punctuation/case/number normalization; line/paragraph indices.
