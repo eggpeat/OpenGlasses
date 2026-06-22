@@ -945,9 +945,14 @@ class AppState: ObservableObject, AppStateProtocol {
         EscalationCoordinator.shared.bridge = ExpertStreamBridge(
             streamer: webRTCStreaming, framePublisher: cameraService.framePublisher)
 
-        // Plan M3: hand the audio session to a live expert call (pause TTS + wake word).
+        // Plan M3: hand the audio session to a live expert call (pause TTS + wake word), and
+        // refuse to start one while a realtime voice session (Gemini Live / OpenAI Realtime)
+        // already owns the mic — only one audio owner at a time.
         ExpertCallAudioCoordinator.shared.control = AppExpertCallAudioControl(
             wakeWord: wakeWordService, tts: speechService)
+        ExpertCallAudioCoordinator.shared.isRealtimeSessionActive = { [weak self] in
+            (self?.geminiLiveSession.isActive ?? false) || (self?.openAIRealtimeSession.isActive ?? false)
+        }
 
         // MCP Glasses server (Plan E, dev-only) — configure and start if both gates are on.
         MCPGlassesServer.shared.configure(camera: cameraService, tts: speechService)

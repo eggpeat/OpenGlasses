@@ -65,9 +65,11 @@ transitions). Keep the transition logic in a small, testable coordinator rather 
 > state machine; the real side-effects (stop TTS + pause wake word on begin, resume on end) live
 > behind `ExpertCallAudioControlling` (`AppExpertCallAudioControl`). `WebRTCPeerTransport` calls
 > `beginCall()`/`endCall()` on start/stop, and AppState injects the adapter. Transition logic is
-> unit-tested. **Not yet done:** precedence vs. an active Gemini/OpenAI realtime session (which owns
-> the mic), explicit `RTCAudioSession` category/echo-cancellation config, and on-device echo/
-> session-wedge testing — all of which need real hardware.
+> unit-tested. **Precedence shipped:** `beginCall()` now returns a `StartResult` and refuses
+> (`.blockedByRealtime`, pipeline untouched) when a Gemini/OpenAI realtime session owns the mic —
+> `isRealtimeSessionActive` is injected by AppState and `WebRTCPeerTransport.start()` guards on it;
+> unit-tested. **Still device-pending:** explicit `RTCAudioSession` category/echo-cancellation config
+> and on-device echo/session-wedge testing — both need real hardware.
 
 ---
 

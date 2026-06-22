@@ -20,17 +20,36 @@ protocol ExpertCallAudioControlling {
 final class ExpertCallAudioCoordinator {
     static let shared = ExpertCallAudioCoordinator()
 
+    /// Result of attempting to begin a call.
+    enum StartResult: Equatable {
+        case started            // pipeline handed to the call
+        case alreadyActive      // a call was already running
+        case blockedByRealtime  // a Gemini/OpenAI realtime session owns the mic — refused
+    }
+
     private(set) var isCallActive = false
     /// Injected by AppState; nil in tests that supply their own.
     var control: ExpertCallAudioControlling?
+    /// Whether a realtime (Gemini Live / OpenAI Realtime) session currently owns the mic.
+    /// Injected by AppState (Plan M3 precedence); nil ⇒ no realtime contention assumed.
+    var isRealtimeSessionActive: (() -> Bool)?
 
     init() {}
 
-    /// Begin a call: pause the voice pipeline. Idempotent — a second call is a no-op.
-    func beginCall() {
-        guard !isCallActive else { return }
+    /// True if starting a call right now would collide with a realtime session that owns the mic.
+    var isBlockedByRealtime: Bool {
+        !isCallActive && (isRealtimeSessionActive?() ?? false)
+    }
+
+    /// Begin a call: pause the voice pipeline. Idempotent. Refuses (without touching the pipeline)
+    /// when a realtime session owns the mic — only one audio owner at a time (Plan M3).
+    @discardableResult
+    func beginCall() -> StartResult {
+        guard !isCallActive else { return .alreadyActive }
+        if isRealtimeSessionActive?() == true { return .blockedByRealtime }
         isCallActive = true
         control?.pauseVoicePipeline()
+        return .started
     }
 
     /// End a call: resume the voice pipeline. Idempotent — ending when inactive is a no-op.

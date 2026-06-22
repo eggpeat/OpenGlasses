@@ -99,6 +99,11 @@ final class WebRTCPeerTransport: ExpertStreamTransport {
             throw ExpertStreamError.transportUnavailable(
                 "WebRTC needs a signaling server. Set the Expert Signaling URL in Field Assist settings, or use the MJPEG transport.")
         }
+        // Plan M3 precedence: a live expert call and a realtime voice session can't both own the mic.
+        guard !ExpertCallAudioCoordinator.shared.isBlockedByRealtime else {
+            throw ExpertStreamError.transportUnavailable(
+                "A live voice session (Gemini Live / OpenAI Realtime) is using the mic. End it before starting an expert call.")
+        }
         guard let signaling = ExpertSignalingClient(url: signalingURL) else {
             throw ExpertStreamError.transportUnavailable("Invalid signaling URL.")
         }
