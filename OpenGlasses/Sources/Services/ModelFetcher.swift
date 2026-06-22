@@ -8,6 +8,53 @@ enum ModelFetcher {
         let name: String    // display-friendly label
     }
 
+    /// Outcome of a lightweight "can I reach this endpoint?" probe (siri-and-local-server plan).
+    enum ConnectionTestResult: Equatable {
+        case ok(latencyMs: Int, modelCount: Int)
+        case httpError(Int)
+        case unreachable(String)
+        case insecure          // http:// blocked by App Transport Security
+
+        var isSuccess: Bool { if case .ok = self { return true }; return false }
+    }
+
+    /// Pure status → result mapping (no I/O) so it's unit-testable.
+    static func classify(statusCode: Int, modelCount: Int, latencyMs: Int) -> ConnectionTestResult {
+        (200...299).contains(statusCode) ? .ok(latencyMs: latencyMs, modelCount: modelCount)
+                                         : .httpError(statusCode)
+    }
+
+    /// Probe the provider's `/models` endpoint: reachable? how fast? how many models? The result
+    /// classification is the pure `classify(...)`; only the GET + error mapping live here.
+    static func testConnection(provider: LLMProvider, apiKey: String, baseURL: String) async -> ConnectionTestResult {
+        guard let url = URL(string: modelsEndpoint(from: baseURL)) else { return .unreachable("Invalid URL") }
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        if !apiKey.isEmpty { request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization") }
+        request.timeoutInterval = 15
+
+        let start = Date()
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            let latencyMs = Int(Date().timeIntervalSince(start) * 1000)
+            guard let http = response as? HTTPURLResponse else { return .unreachable("No HTTP response") }
+            return classify(statusCode: http.statusCode, modelCount: modelCount(in: data), latencyMs: latencyMs)
+        } catch let error as URLError {
+            if error.code == .appTransportSecurityRequiresSecureConnection { return .insecure }
+            return .unreachable(error.localizedDescription)
+        } catch {
+            return .unreachable(error.localizedDescription)
+        }
+    }
+
+    /// Count models in a `/models` (OpenAI `data[]`) or `/api/tags` (Ollama `models[]`) response.
+    private static func modelCount(in data: Data) -> Int {
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return 0 }
+        if let models = json["data"] as? [[String: Any]] { return models.count }
+        if let models = json["models"] as? [[String: Any]] { return models.count }
+        return 0
+    }
+
     /// Fetch models for a provider. Returns an empty array on failure.
     static func fetchModels(provider: LLMProvider, apiKey: String, baseURL: String) async -> [RemoteModel] {
         // Local OpenAI-compatible servers (Ollama, llama.cpp, LM Studio, vLLM…) usually

@@ -19,6 +19,11 @@ struct ModelFormView: View {
     /// When true, changing provider also resets the model ID to the new provider's default.
     var resetModelOnProviderChange: Bool = true
 
+    // Connection-test state (siri-and-local-server plan)
+    @State private var isTestingConnection = false
+    @State private var connectionStatus: String?
+    @State private var connectionOK = false
+
     var body: some View {
         Section {
             TextField("e.g. Claude Sonnet, GPT-4o", text: $name)
@@ -109,10 +114,22 @@ struct ModelFormView: View {
                 }
 
                 if selectedProvider.showBaseURL {
+                    Menu {
+                        ForEach(LocalServerPreset.allCases) { preset in
+                            Button(preset.displayName) {
+                                baseURL = preset.baseURL
+                                resetModelList()
+                                connectionStatus = nil
+                            }
+                        }
+                    } label: {
+                        Label("Local server preset", systemImage: "server.rack")
+                    }
+
                     TextField("Base URL", text: $baseURL)
                         .autocorrectionDisabled()
                         .textInputAutocapitalization(.never)
-                        .onChange(of: baseURL) { _, _ in resetModelList() }
+                        .onChange(of: baseURL) { _, _ in resetModelList(); connectionStatus = nil }
                 }
 
                 Button {
@@ -143,6 +160,29 @@ struct ModelFormView: View {
                     Label(error, systemImage: "xmark.circle")
                         .font(.footnote)
                         .foregroundStyle(.red)
+                }
+
+                if selectedProvider.showBaseURL {
+                    Button {
+                        Task { await testConnection() }
+                    } label: {
+                        HStack {
+                            if isTestingConnection {
+                                ProgressView().scaleEffect(0.8)
+                                Text("Testing…")
+                            } else {
+                                Image(systemName: "bolt.horizontal.circle")
+                                Text("Test Connection")
+                            }
+                        }
+                    }
+                    .disabled(baseURL.isEmpty || isTestingConnection)
+
+                    if let connectionStatus {
+                        Label(connectionStatus, systemImage: connectionOK ? "checkmark.circle.fill" : "xmark.circle")
+                            .font(.footnote)
+                            .foregroundStyle(connectionOK ? .green : .red)
+                    }
                 }
             } header: {
                 Text("API Key")
@@ -183,6 +223,24 @@ struct ModelFormView: View {
         availableModels = []
         keyValidated = false
         fetchError = nil
+    }
+
+    private func testConnection() async {
+        isTestingConnection = true
+        connectionStatus = nil
+        defer { isTestingConnection = false }
+        let result = await ModelFetcher.testConnection(provider: selectedProvider, apiKey: apiKey, baseURL: baseURL)
+        connectionOK = result.isSuccess
+        switch result {
+        case .ok(let latencyMs, let count):
+            connectionStatus = "Reachable — \(latencyMs) ms, \(count) model\(count == 1 ? "" : "s")"
+        case .httpError(let code):
+            connectionStatus = "Server returned HTTP \(code)"
+        case .insecure:
+            connectionStatus = "Blocked by App Transport Security — use https, or allow this host in Info.plist"
+        case .unreachable(let why):
+            connectionStatus = "Unreachable — \(why)"
+        }
     }
 
     private func fetchModels() async {
