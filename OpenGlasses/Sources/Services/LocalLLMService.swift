@@ -195,7 +195,8 @@ final class LocalLLMService: ObservableObject {
     func generate(
         userMessage: String,
         systemPrompt: String,
-        history: [(role: String, content: String)] = []
+        history: [(role: String, content: String)] = [],
+        onToken: ((String) -> Void)? = nil
     ) async throws -> String {
         // On-device inference runs on the GPU via Metal, which iOS forbids in the
         // background: submitting a command buffer there raises
@@ -281,6 +282,7 @@ final class LocalLLMService: ObservableObject {
             switch generation {
             case .chunk(let text):
                 output += text
+                onToken?(text)
             case .info:
                 break  // Generation complete info
             case .toolCall:

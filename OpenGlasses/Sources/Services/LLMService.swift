@@ -442,7 +442,10 @@ class LLMService: ObservableObject {
         return PromptInjectionPolicy.wrap(toolName: toolName, content: content)
     }
 
-    func sendMessage(_ text: String, locationContext: String? = nil, imageData: Data? = nil, memoryContext: String? = nil, agentContext: String? = nil, playbookContext: String? = nil, nowPlayingContext: String? = nil, shortcutsContext: String? = nil, promptSections: ConversationClassifier.PromptSections? = nil) async throws -> String {
+    /// - Parameter onToken: optional per-token callback for streaming the final assistant reply
+    ///   into the UI as it's generated. Currently honoured by the on-device (`local`) provider;
+    ///   cloud providers ignore it and return the full reply on completion.
+    func sendMessage(_ text: String, locationContext: String? = nil, imageData: Data? = nil, memoryContext: String? = nil, agentContext: String? = nil, playbookContext: String? = nil, nowPlayingContext: String? = nil, shortcutsContext: String? = nil, promptSections: ConversationClassifier.PromptSections? = nil, onToken: ((String) -> Void)? = nil) async throws -> String {
         isProcessing = true
         defer { isProcessing = false }
 
@@ -489,15 +492,15 @@ class LLMService: ObservableObject {
         let rawResponse: String
         switch provider {
         case .anthropic:
-            rawResponse = try await sendAnthropic(text, systemPrompt: fullPrompt, config: modelConfig, includeTools: includeTools, imageData: imageData)
+            rawResponse = try await sendAnthropic(text, systemPrompt: fullPrompt, config: modelConfig, includeTools: includeTools, imageData: imageData, onToken: onToken)
         case .gemini:
             rawResponse = try await sendGemini(text, systemPrompt: fullPrompt, config: modelConfig, includeTools: includeTools, imageData: imageData)
         case .local:
-            rawResponse = try await sendLocal(text, systemPrompt: fullPrompt, config: modelConfig, includeTools: includeTools, imageData: imageData)
+            rawResponse = try await sendLocal(text, systemPrompt: fullPrompt, config: modelConfig, includeTools: includeTools, imageData: imageData, onToken: onToken)
         case .appleOnDevice:
             rawResponse = try await sendAppleOnDevice(text, systemPrompt: fullPrompt)
         case .openai, .groq, .zai, .qwen, .minimax, .openrouter, .custom:
-            rawResponse = try await sendOpenAICompatible(text, systemPrompt: fullPrompt, config: modelConfig, includeTools: includeTools, imageData: imageData)
+            rawResponse = try await sendOpenAICompatible(text, systemPrompt: fullPrompt, config: modelConfig, includeTools: includeTools, imageData: imageData, onToken: onToken)
         }
 
         // Strip <think> tags: keep reasoning in history but don't speak it
@@ -1161,7 +1164,7 @@ class LLMService: ObservableObject {
         }
     }
 
-    private func sendAnthropic(_ text: String, systemPrompt: String, config: ModelConfig, includeTools: Bool, imageData: Data?) async throws -> String {
+    private func sendAnthropic(_ text: String, systemPrompt: String, config: ModelConfig, includeTools: Bool, imageData: Data?, onToken: ((String) -> Void)? = nil) async throws -> String {
         let apiKey = config.apiKey
         guard !apiKey.isEmpty else {
             throw LLMError.missingAPIKey("Anthropic API key not configured")
@@ -1214,27 +1217,36 @@ class LLMService: ObservableObject {
                 body["tools"] = tools
             }
 
+            if onToken != nil { body["stream"] = true }
             request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
-            let (data, response) = try await URLSession.shared.data(for: request)
+            // Final-reply turns stream into the Chat tab when a streaming caller passes `onToken`;
+            // the reconstructed content blocks + stop reason feed the existing tool loop unchanged.
+            let content: [[String: Any]]
+            let stopReason: String?
+            if let onToken {
+                (content, stopReason) = try await streamAnthropicContent(request: request, onToken: onToken)
+            } else {
+                let (data, response) = try await URLSession.shared.data(for: request)
 
-            guard let httpResponse = response as? HTTPURLResponse,
-                  httpResponse.statusCode == 200 else {
-                let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
-                if let errorJson = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                   let errorMsg = (errorJson["error"] as? [String: Any])?["message"] as? String {
-                    print("❌ Anthropic API error \(statusCode): \(errorMsg)")
-                    throw LLMError.apiError(provider: "Anthropic", statusCode: statusCode, message: errorMsg)
+                guard let httpResponse = response as? HTTPURLResponse,
+                      httpResponse.statusCode == 200 else {
+                    let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
+                    if let errorJson = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                       let errorMsg = (errorJson["error"] as? [String: Any])?["message"] as? String {
+                        print("❌ Anthropic API error \(statusCode): \(errorMsg)")
+                        throw LLMError.apiError(provider: "Anthropic", statusCode: statusCode, message: errorMsg)
+                    }
+                    throw LLMError.apiError(provider: "Anthropic", statusCode: statusCode, message: nil)
                 }
-                throw LLMError.apiError(provider: "Anthropic", statusCode: statusCode, message: nil)
-            }
 
-            guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let content = json["content"] as? [[String: Any]] else {
-                throw LLMError.invalidResponse("Anthropic")
+                guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let parsed = json["content"] as? [[String: Any]] else {
+                    throw LLMError.invalidResponse("Anthropic")
+                }
+                content = parsed
+                stopReason = json["stop_reason"] as? String
             }
-
-            let stopReason = json["stop_reason"] as? String
 
             // Check for tool use blocks
             if stopReason == "tool_use", includeTools {
@@ -1333,7 +1345,7 @@ class LLMService: ObservableObject {
 
     // MARK: - OpenAI-compatible
 
-    private func sendOpenAICompatible(_ text: String, systemPrompt: String, config: ModelConfig, includeTools: Bool, imageData: Data?) async throws -> String {
+    private func sendOpenAICompatible(_ text: String, systemPrompt: String, config: ModelConfig, includeTools: Bool, imageData: Data?, onToken: ((String) -> Void)? = nil) async throws -> String {
         let provider = config.llmProvider
         let apiKey = config.apiKey
         guard !apiKey.isEmpty else {
@@ -1434,6 +1446,7 @@ class LLMService: ObservableObject {
                 body["tools"] = tools
             }
 
+            if onToken != nil { body["stream"] = true }
             request.httpBody = try JSONSerialization.data(withJSONObject: body)
             request.timeoutInterval = 60 // 60s timeout to prevent app freezing
 
@@ -1443,34 +1456,40 @@ class LLMService: ObservableObject {
             let bodySize = request.httpBody?.count ?? 0
             print("🌐 \(provider.displayName) request: model=\(config.model) url=\(baseURL) messages=\(messageCount) hasImage=\(hasImage) bodySize=\(bodySize)")
 
-            let (data, response) = try await URLSession.shared.data(for: request)
+            // Final-reply turns stream into the Chat tab when a streaming caller passes `onToken`;
+            // the reconstructed `message` (content + tool_calls) feeds the existing tool loop unchanged.
+            let message: [String: Any]
+            if let onToken {
+                message = try await streamOpenAIMessage(request: request, provider: provider, onToken: onToken)
+            } else {
+                let (data, response) = try await URLSession.shared.data(for: request)
 
-            guard let httpResponse = response as? HTTPURLResponse,
-                  httpResponse.statusCode == 200 else {
-                let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
-                let rawBody = String(data: data, encoding: .utf8) ?? "(non-utf8)"
-                print("❌ \(provider.displayName) raw error response (\(statusCode)): \(rawBody.prefix(500))")
-                if let errorJson = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                   let errorObj = errorJson["error"] as? [String: Any],
-                   let errorMsg = errorObj["message"] as? String {
-                    print("❌ \(provider.displayName) API error \(statusCode): \(errorMsg)")
-                    throw LLMError.apiError(provider: provider.displayName, statusCode: statusCode, message: errorMsg)
+                guard let httpResponse = response as? HTTPURLResponse,
+                      httpResponse.statusCode == 200 else {
+                    let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
+                    let rawBody = String(data: data, encoding: .utf8) ?? "(non-utf8)"
+                    print("❌ \(provider.displayName) raw error response (\(statusCode)): \(rawBody.prefix(500))")
+                    if let errorJson = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                       let errorObj = errorJson["error"] as? [String: Any],
+                       let errorMsg = errorObj["message"] as? String {
+                        print("❌ \(provider.displayName) API error \(statusCode): \(errorMsg)")
+                        throw LLMError.apiError(provider: provider.displayName, statusCode: statusCode, message: errorMsg)
+                    }
+                    if let errorJson = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                       let errorMsg = errorJson["error"] as? String {
+                        print("❌ \(provider.displayName) error \(statusCode): \(errorMsg)")
+                        throw LLMError.apiError(provider: provider.displayName, statusCode: statusCode, message: errorMsg)
+                    }
+                    throw LLMError.apiError(provider: provider.displayName, statusCode: statusCode, message: nil)
                 }
-                if let errorJson = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                   let errorMsg = errorJson["error"] as? String {
-                    print("❌ \(provider.displayName) error \(statusCode): \(errorMsg)")
-                    throw LLMError.apiError(provider: provider.displayName, statusCode: statusCode, message: errorMsg)
+
+                guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let choices = json["choices"] as? [[String: Any]],
+                      let m = choices.first?["message"] as? [String: Any] else {
+                    throw LLMError.invalidResponse(provider.displayName)
                 }
-                throw LLMError.apiError(provider: provider.displayName, statusCode: statusCode, message: nil)
+                message = m
             }
-
-            guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let choices = json["choices"] as? [[String: Any]],
-                  let message = choices.first?["message"] as? [String: Any] else {
-                throw LLMError.invalidResponse(provider.displayName)
-            }
-
-            _ = choices.first?["finish_reason"] as? String
 
             // Check for tool calls
             if let toolCalls = message["tool_calls"] as? [[String: Any]], !toolCalls.isEmpty, includeTools {
@@ -1542,6 +1561,128 @@ class LLMService: ObservableObject {
         // Exhausted iterations
         toolCallStatus = .idle
         throw LLMError.invalidResponse("\(provider.displayName) (tool call loop exceeded)")
+    }
+
+    // MARK: - Streaming (SSE) — Chat tab live token delivery
+
+    /// Stream an OpenAI-compatible chat-completions response, invoking `onToken` for each text
+    /// delta, and return a reconstructed `message` dict (same shape as `choices[].message`) so the
+    /// caller's tool loop runs identically to the buffered path. Only used when a streaming caller
+    /// (the Chat tab) passes `onToken`; every other caller keeps the buffered path.
+    private func streamOpenAIMessage(request: URLRequest, provider: LLMProvider, onToken: @escaping (String) -> Void) async throws -> [String: Any] {
+        let (bytes, response) = try await URLSession.shared.bytes(for: request)
+        guard let http = response as? HTTPURLResponse else { throw LLMError.invalidResponse(provider.displayName) }
+        guard http.statusCode == 200 else {
+            var data = Data()
+            for try await b in bytes { data.append(b) }
+            let raw = String(data: data, encoding: .utf8) ?? "(non-utf8)"
+            let msg = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])
+                .flatMap { ($0["error"] as? [String: Any])?["message"] as? String }
+            print("❌ \(provider.displayName) stream error \(http.statusCode): \(raw.prefix(300))")
+            throw LLMError.apiError(provider: provider.displayName, statusCode: http.statusCode, message: msg)
+        }
+
+        var fullContent = ""
+        var toolAcc: [Int: (id: String, name: String, args: String)] = [:]  // tool_calls accumulate by index
+
+        for try await line in bytes.lines {
+            guard line.hasPrefix("data:") else { continue }
+            let payload = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
+            if payload.isEmpty { continue }
+            if payload == "[DONE]" { break }
+            guard let obj = try? JSONSerialization.jsonObject(with: Data(payload.utf8)) as? [String: Any],
+                  let choice = (obj["choices"] as? [[String: Any]])?.first,
+                  let delta = choice["delta"] as? [String: Any] else { continue }
+
+            if let chunk = delta["content"] as? String, !chunk.isEmpty {
+                fullContent += chunk
+                onToken(chunk)
+            }
+            if let calls = delta["tool_calls"] as? [[String: Any]] {
+                for call in calls {
+                    let idx = call["index"] as? Int ?? 0
+                    var entry = toolAcc[idx] ?? (id: "", name: "", args: "")
+                    if let id = call["id"] as? String { entry.id = id }
+                    if let fn = call["function"] as? [String: Any] {
+                        if let n = fn["name"] as? String { entry.name = n }
+                        if let a = fn["arguments"] as? String { entry.args += a }
+                    }
+                    toolAcc[idx] = entry
+                }
+            }
+        }
+
+        var message: [String: Any] = ["role": "assistant", "content": fullContent]
+        if !toolAcc.isEmpty {
+            message["tool_calls"] = toolAcc.sorted { $0.key < $1.key }.map { _, v in
+                ["id": v.id, "type": "function", "function": ["name": v.name, "arguments": v.args]] as [String: Any]
+            }
+        }
+        return message
+    }
+
+    /// Stream an Anthropic Messages response, invoking `onToken` for each text delta, and return
+    /// the reconstructed content blocks + stop reason so the caller's tool loop runs identically to
+    /// the buffered path. Only used when a streaming caller (the Chat tab) passes `onToken`.
+    private func streamAnthropicContent(request: URLRequest, onToken: @escaping (String) -> Void) async throws -> (content: [[String: Any]], stopReason: String?) {
+        let (bytes, response) = try await URLSession.shared.bytes(for: request)
+        guard let http = response as? HTTPURLResponse else { throw LLMError.invalidResponse("Anthropic") }
+        guard http.statusCode == 200 else {
+            var data = Data()
+            for try await b in bytes { data.append(b) }
+            let msg = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])
+                .flatMap { ($0["error"] as? [String: Any])?["message"] as? String }
+            throw LLMError.apiError(provider: "Anthropic", statusCode: http.statusCode, message: msg)
+        }
+
+        var blocks: [Int: [String: Any]] = [:]   // content blocks by index
+        var toolJSON: [Int: String] = [:]         // accumulated input_json per tool_use block
+        var stopReason: String?
+
+        for try await line in bytes.lines {
+            guard line.hasPrefix("data:") else { continue }
+            let payload = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
+            if payload.isEmpty { continue }
+            guard let obj = try? JSONSerialization.jsonObject(with: Data(payload.utf8)) as? [String: Any],
+                  let type = obj["type"] as? String else { continue }
+
+            switch type {
+            case "content_block_start":
+                let idx = obj["index"] as? Int ?? 0
+                if let cb = obj["content_block"] as? [String: Any] {
+                    blocks[idx] = cb
+                    if (cb["type"] as? String) == "tool_use" { toolJSON[idx] = "" }
+                }
+            case "content_block_delta":
+                let idx = obj["index"] as? Int ?? 0
+                if let delta = obj["delta"] as? [String: Any], let dtype = delta["type"] as? String {
+                    if dtype == "text_delta", let t = delta["text"] as? String {
+                        var b = blocks[idx] ?? ["type": "text", "text": ""]
+                        b["text"] = ((b["text"] as? String) ?? "") + t
+                        blocks[idx] = b
+                        onToken(t)
+                    } else if dtype == "input_json_delta", let pj = delta["partial_json"] as? String {
+                        toolJSON[idx, default: ""] += pj
+                    }
+                }
+            case "message_delta":
+                if let delta = obj["delta"] as? [String: Any], let sr = delta["stop_reason"] as? String {
+                    stopReason = sr
+                }
+            default:
+                break
+            }
+        }
+
+        // Finalize tool_use blocks: parse the accumulated partial JSON into `input`.
+        for (idx, jsonStr) in toolJSON {
+            guard var b = blocks[idx] else { continue }
+            b["input"] = (try? JSONSerialization.jsonObject(with: Data(jsonStr.utf8)) as? [String: Any]) ?? [:]
+            blocks[idx] = b
+        }
+
+        let content = blocks.sorted { $0.key < $1.key }.map { $0.value }
+        return (content, stopReason)
     }
 
     // MARK: - Google Gemini
@@ -1799,7 +1940,7 @@ class LLMService: ObservableObject {
     }
     #endif
 
-    private func sendLocal(_ text: String, systemPrompt: String, config: ModelConfig, includeTools: Bool, imageData: Data? = nil) async throws -> String {
+    private func sendLocal(_ text: String, systemPrompt: String, config: ModelConfig, includeTools: Bool, imageData: Data? = nil, onToken: ((String) -> Void)? = nil) async throws -> String {
         guard let localService = localLLMService else {
             throw LLMError.missingAPIKey("Local LLM service not initialized")
         }
@@ -1849,13 +1990,17 @@ class LLMService: ObservableObject {
         conversationHistory.append(["role": "user", "content": text])
         trimHistory()
 
-        // Generate response
+        // Generate response. Stream tokens to the UI as they're produced. In the (rare, the local
+        // tool prompt says "use sparingly") case where the model emits a <tool_call>, the preview
+        // briefly shows the markup before the cleaned final reply replaces it — acceptable for the
+        // common no-tool path, which streams cleanly.
         let response: String
         do {
             response = try await localService.generate(
                 userMessage: text,
                 systemPrompt: fullPrompt,
-                history: history
+                history: history,
+                onToken: onToken
             )
         } catch let error as LocalLLMError {
             // Propagate .backgrounded unwrapped so callers (e.g. AgentScheduler) can

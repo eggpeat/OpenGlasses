@@ -125,6 +125,19 @@ A set of self-contained capabilities that build on the shipped engines; each sco
 
 **Suggested sequence:** HUDPreviewView snapshot tests → ~~API keys → Keychain~~ ✅ → ~~BrainStore `needs`~~ ✅ → ~~Kokoro TTS~~ ✅ → shared `DeviceSession` → ~~alternative triggers~~ 🚧 core → (if shared-device) profiles+PIN → (deferred) widget board.
 
+## Round 8 — standalone phone app & on-device creation
+
+Make OpenGlasses a daily-driver app **even with the glasses off**: a first-class chat experience as the front door, plus the one on-device modality we're missing (image creation) and quality/organizing upgrades to the existing RAG. All four are mostly UI + wiring over already-shipped engines (`ConversationStore`, `LLMService`, `DocumentStore`/`Embedder`, the `Persona` system); the only new SPM dependency is `apple/ml-stable-diffusion` (image gen). All 📋 Planned.
+
+| Plan | Title | Effort | Reuses | Strategic fit |
+|---|---|---|---|---|
+| [Standalone Chat Experience](standalone-chat-experience.md) | First-class Chat tab — live thread, markdown/code rendering, token streaming, per-message actions, doc attach, inline model/persona switch | ~4–6 days | ChatInputBar, ConversationStore, LLMService, MainView, AppAccent | The front door for glasses-off use; turns a more-capable backend into a real chat app |
+| [On-Device Image Generation](on-device-image-generation.md) | Offline image creation (Apple `ml-stable-diffusion`, Core ML/ANE) via `image_generate` tool + results sheet (save/share/regenerate) | ~4–6 days | NativeTool/registry, CameraService Photos save, ShareSheet/`pendingShareItem`, model-store patterns | The only on-device AI modality not yet present; fully offline |
+| [Embedding Quality Upgrade](embedding-quality-upgrade.md) | `NLContextualEmbedding` (transformer, multilingual) behind the `Embedder` seam + version-stamp/re-embed migration; optional bundled MiniLM Core ML | ~2–3 days | Embedder, DocumentStore (O/P), SemanticMemoryStore, swift-transformers | Sharper RAG + memory recall, esp. multilingual; quality upgrade to shipped features |
+| [Projects (scoped contexts)](projects-scoped-contexts.md) | Persona + scoped documents (`namespace`) + persona-tagged conversations in one Project surface; conditional KB advertisement | ~3–4 days | Persona system, DocumentStore `namespace`, ConversationStore | Reusable "load this context" primitive; generalizes the museum-docent idea |
+
+**Suggested sequence:** Standalone Chat (front door) → Projects (scoped contexts the chat lives in) → Embedding upgrade (sharper retrieval for those contexts) → Image Generation (independent; can land any time). Image gen and the embedding upgrade are independent of the chat/projects pair.
+
 ## Dependency graph
 
 ```

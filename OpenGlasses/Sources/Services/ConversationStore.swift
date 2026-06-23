@@ -17,6 +17,14 @@ struct ConversationMessage: Codable, Identifiable {
     }
 }
 
+/// An assistant reply currently being streamed into a specific thread. Render-only — the
+/// persisted `ConversationMessage` is still appended on completion. `threadId` keys the live
+/// bubble to its thread so a reply never renders in the wrong conversation.
+struct StreamingTurn: Equatable {
+    let threadId: String
+    var text: String
+}
+
 /// A conversation thread with metadata.
 struct ConversationThread: Codable, Identifiable {
     let id: String
@@ -177,6 +185,17 @@ class ConversationStore: ObservableObject {
         NSLog("[ConversationStore] Ended thread")
     }
 
+    /// Give a still-default thread a title derived from its first user message. Safe to call
+    /// repeatedly — it only acts while the title is the placeholder. Used by the live Chat tab,
+    /// which never calls `endThread()` (the thread stays open as the user keeps chatting).
+    func applyAutoTitleIfNeeded(_ threadId: String) {
+        guard let idx = threads.firstIndex(where: { $0.id == threadId }),
+              threads[idx].title == "New Conversation",
+              let firstUser = threads[idx].messages.first(where: { $0.role == "user" }) else { return }
+        threads[idx].title = Self.generateTitle(from: firstUser.content)
+        save()
+    }
+
     // MARK: - Recency (one-shot entry points like Siri)
 
     /// True when `last` is within `window` seconds of `now`. Pure — unit-testable
@@ -229,6 +248,16 @@ class ConversationStore: ObservableObject {
     func deleteThread(_ threadId: String) {
         threads.removeAll { $0.id == threadId }
         if activeThreadId == threadId { activeThreadId = nil }
+        save()
+    }
+
+    /// Remove the message with `messageId` and every message after it in the thread. Used by the
+    /// Chat tab's edit/regenerate, which truncate the thread back to a point and resend from there.
+    func truncate(from messageId: String, in threadId: String) {
+        guard let tIdx = threads.firstIndex(where: { $0.id == threadId }),
+              let mIdx = threads[tIdx].messages.firstIndex(where: { $0.id == messageId }) else { return }
+        threads[tIdx].messages.removeSubrange(mIdx...)
+        threads[tIdx].updatedAt = Date()
         save()
     }
 

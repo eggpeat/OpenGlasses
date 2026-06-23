@@ -448,6 +448,10 @@ class AppState: ObservableObject, AppStateProtocol {
     }
     @Published var currentTranscription: String = ""
     @Published var lastResponse: String = ""
+    /// In-flight assistant reply for the Chat tab, streamed token-by-token where the provider
+    /// supports it (on-device models today). The Chat thread renders this as a live bubble, then
+    /// swaps it for the persisted message on completion. Nil when no reply is streaming.
+    @Published var streamingTurn: StreamingTurn?
     @Published var errorMessage: String?
     @Published var currentMode: AppMode = Config.appMode
     @Published var activePersona: Persona? {
@@ -2733,6 +2737,10 @@ class AppState: ObservableObject, AppStateProtocol {
         isProcessing = true
         speechService.startThinkingSound()
 
+        // Live-stream the reply into the Chat thread (where the provider supports it).
+        let streamThreadId = conversationStore.activeThreadId
+        if let streamThreadId { streamingTurn = StreamingTurn(threadId: streamThreadId, text: "") }
+
         do {
             // Use provided image, or fall back to smart camera if no image attached
             let image: Data?
@@ -2747,11 +2755,16 @@ class AppState: ObservableObject, AppStateProtocol {
                 imageData: image,
                 memoryContext: Config.userMemoryEnabled ? userMemory.systemPromptContext() : nil,
                 playbookContext: playbookStore.playbookContext(),
-                shortcutsContext: ShortcutsCatalog.shared.promptBlock()
+                shortcutsContext: ShortcutsCatalog.shared.promptBlock(),
+                onToken: { [weak self] chunk in
+                    guard let self, let id = streamThreadId else { return }
+                    if self.streamingTurn?.threadId == id { self.streamingTurn?.text += chunk }
+                }
             )
 
             let response = Config.userMemoryEnabled ? userMemory.parseAndExecuteCommands(in: rawResponse) : rawResponse
             lastResponse = response
+            streamingTurn = nil  // clear before persisting so the live bubble doesn't duplicate the saved message
 
             if Config.conversationPersistenceEnabled {
                 conversationStore.appendMessage(role: "assistant", content: response)
@@ -2769,6 +2782,7 @@ class AppState: ObservableObject, AppStateProtocol {
                 stopStopListener()
             }
         } catch {
+            streamingTurn = nil
             errorMessage = "Failed to get response: \(error.localizedDescription)"
             if speakResponse {
                 await speechService.speak("Sorry, I encountered an error.")

@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Root tab view — Voice / Modes / History / Settings.
+/// Root tab view — Voice / Modes / Chat / Settings.
 ///
 /// Replaces the previous single-screen modal design with a proper
 /// tab bar matching the OpenVision-style navigation.
@@ -36,10 +36,8 @@ struct MainView: View {
                     }
                 }
 
-                Tab("History", systemImage: "clock.arrow.circlepath", value: 2) {
-                    NavigationStack {
-                        ConversationHistoryView()
-                    }
+                Tab("Chat", systemImage: "bubble.left.and.bubble.right", value: 2) {
+                    ChatListView()
                 }
 
                 Tab("Settings", systemImage: "gearshape.fill", value: 3) {

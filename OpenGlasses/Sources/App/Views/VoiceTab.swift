@@ -1,5 +1,4 @@
 import SwiftUI
-import PhotosUI
 
 /// Voice tab — the primary interaction screen.
 ///
@@ -285,146 +284,16 @@ struct StatusPillsRow: View {
 
 // MARK: - Chat Input Bar
 
-/// Text + image input bar — replaces the hero capsule when active.
-/// Lets users type messages and attach photos from library or glasses camera.
+/// Voice-tab inline chat input — the hero capsule's typed-message alternative.
+/// A thin wrapper over the shared `ChatComposer`: the mic button switches back to voice,
+/// and sends route through the standard voice pipeline (spoken reply preserved).
 struct ChatInputBar: View {
     @EnvironmentObject var appState: AppState
-    @Environment(\.appAccent) private var accent
     @Binding var showChatInput: Bool
 
-    @State private var messageText = ""
-    @State private var attachedImage: UIImage?
-    @State private var attachedImageData: Data?
-    @State private var selectedPhotoItem: PhotosPickerItem?
-    @FocusState private var isTextFieldFocused: Bool
-
-    private var visionEnabled: Bool {
-        Config.activeModel?.visionEnabled ?? false
-    }
-
     var body: some View {
-        VStack(spacing: 8) {
-            // Attached image preview
-            if let image = attachedImage {
-                HStack {
-                    Image(uiImage: image)
-                        .resizable()
-                        .scaledToFill()
-                        .frame(width: 60, height: 60)
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
-                        .overlay(
-                            Button {
-                                attachedImage = nil
-                                attachedImageData = nil
-                            } label: {
-                                Image(systemName: "xmark.circle.fill")
-                                    .font(.system(size: 18))
-                                    .foregroundStyle(.white)
-                                    .shadow(radius: 2)
-                            }
-                            .accessibilityLabel("Remove attached photo")
-                            .offset(x: 8, y: -8),
-                            alignment: .topTrailing
-                        )
-                    Spacer()
-                }
-                .padding(.horizontal, 16)
-            }
-
-            // Input row
-            HStack(spacing: 10) {
-                // Keyboard dismiss — only while editing. Lives in the bar (not the keyboard
-                // toolbar, which overlays the Send button) and sits leading so it never
-                // collides with the trailing Send control.
-                if isTextFieldFocused {
-                    Button {
-                        isTextFieldFocused = false
-                    } label: {
-                        Image(systemName: "keyboard.chevron.compact.down")
-                            .font(.system(size: 16, weight: .medium))
-                            .foregroundStyle(Color(.label))
-                            .frame(width: 36, height: 36)
-                            .glassEffect(in: .circle)
-                    }
-                    .accessibilityLabel("Dismiss keyboard")
-                    .transition(.opacity)
-                }
-
-                // Close button
-                Button {
-                    showChatInput = false
-                } label: {
-                    Image(systemName: "mic.fill")
-                        .font(.system(size: 16, weight: .medium))
-                        .foregroundStyle(Color(.label))
-                        .frame(width: 36, height: 36)
-                        .glassEffect(in: .circle)
-                }
-                .accessibilityLabel("Switch to voice input")
-
-                // Photo attach (only for vision-capable models)
-                if visionEnabled {
-                    PhotosPicker(selection: $selectedPhotoItem, matching: .images) {
-                        Image(systemName: "photo.on.rectangle")
-                            .font(.system(size: 16, weight: .medium))
-                            .foregroundStyle(Color(.label))
-                            .frame(width: 36, height: 36)
-                            .glassEffect(in: .circle)
-                    }
-                    .accessibilityLabel("Attach photo")
-                    .onChange(of: selectedPhotoItem) { _, item in
-                        Task {
-                            guard let item else { return }
-                            if let data = try? await item.loadTransferable(type: Data.self) {
-                                attachedImageData = data
-                                attachedImage = UIImage(data: data)
-                            }
-                            selectedPhotoItem = nil
-                        }
-                    }
-                }
-
-                // Text field
-                TextField("Type a message...", text: $messageText, axis: .vertical)
-                    .textFieldStyle(.plain)
-                    .lineLimit(1...4)
-                    .focused($isTextFieldFocused)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .glassEffect(in: .rect(cornerRadius: 20))
-                    .onSubmit { sendMessage() }
-
-                // Send button
-                Button {
-                    sendMessage()
-                } label: {
-                    Image(systemName: "arrow.up.circle.fill")
-                        .font(.system(size: 32))
-                        .foregroundStyle(canSend ? accent : Color(.tertiaryLabel))
-                }
-                .disabled(!canSend)
-                .accessibilityLabel("Send message")
-            }
-            .padding(.horizontal, 16)
-        }
-        .padding(.top, 8)
-        .padding(.bottom, 8)
-        .onAppear { isTextFieldFocused = true }
-    }
-
-    private var canSend: Bool {
-        !messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !appState.isProcessing
-    }
-
-    private func sendMessage() {
-        let text = messageText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
-        let image = attachedImageData
-        messageText = ""
-        attachedImage = nil
-        attachedImageData = nil
-        Task {
-            await appState.sendTextMessage(text, imageData: image)
+        ChatComposer(autoFocus: true, voiceAction: { showChatInput = false }) { text, image in
+            Task { await appState.sendTextMessage(text, imageData: image) }
         }
     }
 }
