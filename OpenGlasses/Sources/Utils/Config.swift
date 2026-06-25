@@ -163,10 +163,15 @@ struct GatewayConfig: Codable, Identifiable, Equatable {
     var lanHost: String                 // LAN/local IP or hostname
     var port: Int                       // Default 18789
     var tunnelHost: String              // Tailscale or tunnel URL
-    var token: String                   // Gateway auth token
+    var token: String                   // Pre-shared gateway auth token (legacy/manual path)
     var connectionMode: String          // "auto", "lan", "tunnel"
     var enabled: Bool
     var priority: Int                   // Lower = tried first
+    // Device pairing (optional w/ nil default → backward-compatible with previously-saved
+    // gateways and with every existing memberwise-init call site):
+    var deviceToken: String? = nil      // Per-device token issued by the gateway after approval
+    var deviceId: String? = nil         // Stable per-device identity sent in the handshake
+    var setupCode: String? = nil        // Transient bootstrap code, cleared once a device token lands
 
     var gatewayProvider: GatewayProvider {
         GatewayProvider(rawValue: provider) ?? .custom
@@ -188,8 +193,11 @@ struct GatewayConfig: Codable, Identifiable, Equatable {
         tunnelHost.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
     }
 
+    /// True when there's a usable credential (shared token *or* a paired device token) and a
+    /// host to reach. A device-paired gateway needs no shared token.
     var isConfigured: Bool {
-        !token.isEmpty && (!lanHost.isEmpty || !tunnelHost.isEmpty)
+        let hasCredential = !token.isEmpty || !(deviceToken ?? "").isEmpty
+        return hasCredential && (!lanHost.isEmpty || !tunnelHost.isEmpty)
     }
 
     /// Create a new gateway with defaults for a given provider.
@@ -1871,6 +1879,40 @@ struct Config {
     static func setSavedGateways(_ gateways: [GatewayConfig]) {
         guard let data = try? JSONEncoder().encode(gateways) else { return }
         KeychainService.setData(data, for: "savedGateways")
+    }
+
+    // MARK: - Device pairing persistence
+
+    /// Persist the pairing result for a gateway: store the per-device token (clearing the
+    /// transient setup code once it lands) and/or the device id.
+    static func setDeviceCredentials(gatewayId: String, deviceToken: String? = nil, deviceId: String? = nil) {
+        var gateways = savedGateways
+        guard let idx = gateways.firstIndex(where: { $0.id == gatewayId }) else { return }
+        if let deviceToken {
+            gateways[idx].deviceToken = deviceToken
+            gateways[idx].setupCode = nil
+        }
+        if let deviceId { gateways[idx].deviceId = deviceId }
+        setSavedGateways(gateways)
+    }
+
+    /// Store a setup code on a gateway so the next connect attempts bootstrap pairing.
+    static func setGatewaySetupCode(gatewayId: String, setupCode: String) {
+        var gateways = savedGateways
+        guard let idx = gateways.firstIndex(where: { $0.id == gatewayId }) else { return }
+        gateways[idx].setupCode = setupCode
+        setSavedGateways(gateways)
+    }
+
+    /// The stable device id for a gateway, generating + persisting one if absent.
+    static func deviceId(forGateway gatewayId: String) -> String {
+        var gateways = savedGateways
+        guard let idx = gateways.firstIndex(where: { $0.id == gatewayId }) else { return "" }
+        if let existing = gateways[idx].deviceId, !existing.isEmpty { return existing }
+        let newId = UUID().uuidString
+        gateways[idx].deviceId = newId
+        setSavedGateways(gateways)
+        return newId
     }
 
     /// Enabled gateways only, in priority order.

@@ -5,6 +5,8 @@ import Foundation
 /// and listens for heartbeat/cron events to speak through TTS.
 class OpenClawEventClient {
     var onNotification: ((String) -> Void)?
+    /// Surfaces live pairing/connection state to the gateway settings UI.
+    var onPairingStatusChange: ((PairingStatus) -> Void)?
 
     private var webSocketTask: URLSessionWebSocketTask?
     private var session: URLSession?
@@ -12,6 +14,8 @@ class OpenClawEventClient {
     private var shouldReconnect = false
     private var reconnectDelay: TimeInterval = 2
     private let maxReconnectDelay: TimeInterval = 30
+    /// The gateway resolved for the current connection — its credential drives the handshake.
+    private var currentGateway: GatewayConfig?
 
     func connect() {
         guard Config.isOpenClawConfigured else {
@@ -30,7 +34,21 @@ class OpenClawEventClient {
         webSocketTask = nil
         session?.invalidateAndCancel()
         session = nil
+        onPairingStatusChange?(.disconnected)
         NSLog("[OpenClawWS] Disconnected")
+    }
+
+    /// Begin device pairing with a setup code: store it on the active gateway and reconnect, so
+    /// the handshake presents the bootstrap token. The gateway returns a per-device token once
+    /// the device is approved (captured in `handleConnectResponse` / the `device.paired` event).
+    func startPairing(setupCode: String) {
+        guard let gateway = Self.activeGateway() else {
+            onPairingStatusChange?(.error("No gateway configured"))
+            return
+        }
+        Config.setGatewaySetupCode(gatewayId: gateway.id, setupCode: setupCode)
+        disconnect()
+        connect()
     }
 
     // MARK: - Private
@@ -41,6 +59,8 @@ class OpenClawEventClient {
             NSLog("[OpenClawWS] No configured gateway found, skipping")
             return
         }
+        currentGateway = gateway
+        onPairingStatusChange?(.connecting)
 
         let wsURL = Self.webSocketURL(for: gateway)
         guard let url = URL(string: wsURL) else {
@@ -145,18 +165,34 @@ class OpenClawEventClient {
         if type == "event" {
             handleEvent(json)
         } else if type == "res" {
-            let ok = json["ok"] as? Bool ?? false
-            if ok {
-                NSLog("[OpenClawWS] Connected and authenticated")
-                isConnected = true
-                reconnectDelay = 2
-            } else {
-                let error = json["error"] as? [String: Any]
-                let msg = error?["message"] as? String ?? "unknown"
-                let code = error?["code"] as? Int
-                NSLog("[OpenClawWS] Connect failed: %@ (code: %@, full response: %@)", msg, code.map { "\($0)" } ?? "nil", text)
-            }
+            handleConnectResponse(json, rawText: text)
         }
+    }
+
+    /// Map a connect `res` to a pairing outcome: persist a freshly-issued device token, update
+    /// connection state, and surface the status. Pure interpretation lives in
+    /// `PairingResponseInterpreter`; this applies its side effects.
+    private func handleConnectResponse(_ json: [String: Any], rawText: String) {
+        let outcome = PairingResponseInterpreter.interpretResponse(json)
+
+        if let token = outcome.deviceToken, let gatewayId = currentGateway?.id {
+            Config.setDeviceCredentials(gatewayId: gatewayId, deviceToken: token)
+            NSLog("[OpenClawWS] Device paired — per-device token saved")
+        }
+
+        switch outcome.status {
+        case .paired:
+            isConnected = true
+            reconnectDelay = 2
+            NSLog("[OpenClawWS] Connected and authenticated")
+        case .waitingApproval:
+            NSLog("[OpenClawWS] Device pairing pending — awaiting approval on the gateway")
+        case .error(let msg):
+            NSLog("[OpenClawWS] Connect failed: %@ (full response: %@)", msg, rawText)
+        case .disconnected, .connecting:
+            break
+        }
+        onPairingStatusChange?(outcome.status)
     }
 
     private func handleEvent(_ json: [String: Any]) {
@@ -166,6 +202,13 @@ class OpenClawEventClient {
         switch event {
         case "connect.challenge":
             sendConnectHandshake()
+        case "device.paired":
+            if let outcome = PairingResponseInterpreter.interpretPairedEvent(payload),
+               let token = outcome.deviceToken, let gatewayId = currentGateway?.id {
+                Config.setDeviceCredentials(gatewayId: gatewayId, deviceToken: token)
+                NSLog("[OpenClawWS] Device paired via event — token saved")
+                onPairingStatusChange?(.paired)
+            }
         case "heartbeat":
             handleHeartbeatEvent(payload)
         case "cron":
@@ -176,6 +219,32 @@ class OpenClawEventClient {
     }
 
     private func sendConnectHandshake() {
+        // Present the ACTIVE gateway's credential (device token > bootstrap > shared token),
+        // not the legacy global token — this both fixes wrong-credential sends on multi-gateway
+        // setups and enables device pairing. Falls back to the global token if no gateway was
+        // resolved, so the default path is unchanged.
+        let token: String
+        var deviceId = ""
+        if let gateway = currentGateway {
+            token = GatewayAuthSelector.credential(
+                deviceToken: gateway.deviceToken,
+                setupCode: gateway.setupCode,
+                sharedToken: gateway.token
+            )
+            deviceId = Config.deviceId(forGateway: gateway.id)
+        } else {
+            token = Config.openClawGatewayToken
+        }
+
+        var client: [String: Any] = [
+            "id": "gateway-client",
+            "displayName": "OpenGlasses",
+            "version": Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0",
+            "platform": "ios",
+            "mode": "node"
+        ]
+        if !deviceId.isEmpty { client["deviceId"] = deviceId }
+
         let connectMsg: [String: Any] = [
             "type": "req",
             "id": UUID().uuidString,
@@ -183,15 +252,9 @@ class OpenClawEventClient {
             "params": [
                 "minProtocol": 3,
                 "maxProtocol": 3,
-                "client": [
-                    "id": "gateway-client",
-                    "displayName": "OpenGlasses",
-                    "version": Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0",
-                    "platform": "ios",
-                    "mode": "node"
-                ] as [String: Any],
+                "client": client,
                 "auth": [
-                    "token": Config.openClawGatewayToken
+                    "token": token
                 ]
             ] as [String: Any]
         ]

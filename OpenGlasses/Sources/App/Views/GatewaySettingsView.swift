@@ -248,6 +248,8 @@ struct EditGatewaySheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.appAccent) private var accent
     @State private var testStatus: String = ""
+    @State private var setupCodeInput: String = ""
+    @State private var pairingMessage: String = ""
 
     var body: some View {
         NavigationStack {
@@ -274,7 +276,46 @@ struct EditGatewaySheet: View {
                 } header: {
                     Text("Authentication")
                 } footer: {
-                    Text("The gateway token from your server's config.")
+                    Text("The gateway token from your server's config — or leave blank and pair this device below.")
+                }
+
+                Section {
+                    if let deviceToken = gateway.deviceToken, !deviceToken.isEmpty {
+                        HStack {
+                            Label("Paired", systemImage: "checkmark.seal.fill")
+                                .foregroundStyle(.green)
+                            Spacer()
+                            Text("This device").font(.caption).foregroundStyle(.secondary)
+                        }
+                        Button("Unpair This Device", role: .destructive) {
+                            gateway.deviceToken = nil
+                            gateway.deviceId = nil
+                            gateway.setupCode = nil
+                            pairingMessage = "Unpaired. Save to apply."
+                        }
+                    } else {
+                        TextField("Setup Code", text: $setupCodeInput, axis: .vertical)
+                            .autocorrectionDisabled()
+                            .textInputAutocapitalization(.never)
+                            .font(.system(.footnote, design: .monospaced))
+                        Button("Pair With Setup Code") {
+                            let trimmed = setupCodeInput.trimmingCharacters(in: .whitespacesAndNewlines)
+                            if SetupCode.decode(trimmed) != nil {
+                                gateway.setupCode = trimmed
+                                pairingMessage = "Setup code saved. Save the gateway, then approve this device on your gateway to finish pairing."
+                            } else {
+                                pairingMessage = "That setup code isn't valid."
+                            }
+                        }
+                        .disabled(setupCodeInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }
+                    if !pairingMessage.isEmpty {
+                        Text(pairingMessage).font(.caption).foregroundStyle(.secondary)
+                    }
+                } header: {
+                    Text("Device Pairing")
+                } footer: {
+                    Text("Pair with a one-time setup code instead of a shared token. The gateway issues a per-device token you can revoke independently.")
                 }
 
                 Section {
