@@ -138,6 +138,18 @@ Make OpenGlasses a daily-driver app **even with the glasses off**: a first-class
 
 **Suggested sequence:** Standalone Chat (front door) → Projects (scoped contexts the chat lives in) → Embedding upgrade (sharper retrieval for those contexts) → Image Generation (independent; can land any time). Image gen and the embedding upgrade are independent of the chat/projects pair.
 
+## Round 9 — reliability & connectivity hardening
+
+Three self-contained hardening workstreams over already-shipped paths (the gateway client, the live-audio managers, the speech stack). Each is mostly a deterministic, fully-testable core plus a thin live edge that is device-/backend-pending — same posture as the rest of the speech/agent work. Independent of each other; ship in any order. All 📋 Planned (diarization was already drafted).
+
+| Plan | Title | Effort | Reuses | Strategic fit |
+|---|---|---|---|---|
+| [Gateway Device Pairing](gateway-device-pairing.md) | Setup-code → approval → per-device token over the protocol-v3 handshake; live `PairingStatus` in Settings; per-device identity & revocation | ~2–3 days core + UI | OpenClawEventClient (v3 handshake), GatewayConfig/multi-gateway, KeychainService, scan_code (QR) | Replaces shared-secret onboarding with scan-and-approve; per-device revocation. Folds in a latent multi-gateway handshake-token fix. **Backend prereq:** gateway must support the pairing handshake; degrades to today's shared-token flow otherwise. |
+| [Audio-Session Resilience](audio-session-resilience.md) | Remove 9 force-unwrapped `AVAudioFormat` inits in the two realtime audio managers; typed errors; mic-permission gating; `setActive` fallback | ~1 day | WakeWordService (the reference pattern), GeminiLive/OpenAIRealtime audio managers | Kills a latent hard crash on Bluetooth/LE-Audio mic routes mid-call; graceful session degradation. No happy-path behaviour change, no new dependency. |
+| [Speaker Diarization](speaker-diarization.md) | Deepgram "who said what" — diarized live captions + batch-diarized recordings, speaker naming, brain attribution | ~3–4 days | shared audio engine, AmbientCaptionService, AudioRecordingService/MeetingAssistant, KeychainService, BrainStore | Closes the long-standing diarization gap; turns transcripts into attributed records. Off by default (cloud egress); HIPAA mode hard-disables. (Drafted earlier — listed here for the round.) |
+
+**Suggested sequence:** Audio-Session Resilience (smallest, pure win) → Speaker Diarization (deterministic core first) → Gateway Device Pairing (gate on confirming backend support).
+
 ## Dependency graph
 
 ```

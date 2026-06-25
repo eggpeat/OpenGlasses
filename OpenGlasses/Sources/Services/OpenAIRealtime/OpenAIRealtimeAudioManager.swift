@@ -43,15 +43,20 @@ class OpenAIRealtimeAudioManager {
     /// Configure the audio session for OpenAI Realtime.
     func setupAudioSession(useIPhoneMode: Bool = false) throws {
         let session = AVAudioSession.sharedInstance()
+        guard AVAudioApplication.shared.recordPermission != .denied else {
+            throw AudioSessionError.microphonePermissionDenied
+        }
         let mode: AVAudioSession.Mode = useIPhoneMode ? .voiceChat : .videoChat
-        try session.setCategory(
-            .playAndRecord,
+        try AudioSessionActivator.activate(
+            session,
+            category: .playAndRecord,
             mode: mode,
             options: [.defaultToSpeaker, .allowBluetoothHFP, .allowBluetoothA2DP]
-        )
-        try session.setPreferredSampleRate(Self.sampleRate)
-        try session.setPreferredIOBufferDuration(0.064)
-        try session.setActive(true)
+        ) { session in
+            // Preferred rate/buffer are hints — a rejected hint must not abort activation.
+            try? session.setPreferredSampleRate(Self.sampleRate)
+            try? session.setPreferredIOBufferDuration(0.064)
+        }
         NSLog("[OpenAI Audio] Session mode: %@", useIPhoneMode ? "voiceChat" : "videoChat")
     }
 
@@ -60,12 +65,13 @@ class OpenAIRealtimeAudioManager {
         guard !isCapturing else { return }
 
         audioEngine.attach(playerNode)
-        let playerFormat = AVAudioFormat(
-            commonFormat: .pcmFormatFloat32,
+        let playerFormat = try AudioFormatFactory.pcm(
+            .pcmFormatFloat32,
             sampleRate: Self.sampleRate,
             channels: Self.channels,
-            interleaved: false
-        )!
+            interleaved: false,
+            context: "playback"
+        )
         audioEngine.connect(playerNode, to: audioEngine.mainMixerNode, format: playerFormat)
 
         let inputNode = audioEngine.inputNode
@@ -80,15 +86,20 @@ class OpenAIRealtimeAudioManager {
 
         sendQueue.async { self.accumulatedData = Data() }
 
+        // Build the resample target format once and reuse it for every tap buffer (it's
+        // constant), rather than reconstructing — and force-unwrapping — it per buffer.
         var converter: AVAudioConverter?
+        var targetFormat: AVAudioFormat?
         if needsResample {
-            let targetFormat = AVAudioFormat(
-                commonFormat: .pcmFormatFloat32,
+            let format = try AudioFormatFactory.pcm(
+                .pcmFormatFloat32,
                 sampleRate: Self.sampleRate,
                 channels: Self.channels,
-                interleaved: false
-            )!
-            converter = AVAudioConverter(from: inputNativeFormat, to: targetFormat)
+                interleaved: false,
+                context: "capture resampling"
+            )
+            targetFormat = format
+            converter = AVAudioConverter(from: inputNativeFormat, to: format)
         }
 
         inputNode.installTap(onBus: 0, bufferSize: 4096, format: inputNativeFormat) { [weak self] buffer, _ in
@@ -97,13 +108,7 @@ class OpenAIRealtimeAudioManager {
             let pcmData: Data
             let amplitudeBuffer: AVAudioPCMBuffer
 
-            if let converter {
-                let targetFormat = AVAudioFormat(
-                    commonFormat: .pcmFormatFloat32,
-                    sampleRate: Self.sampleRate,
-                    channels: Self.channels,
-                    interleaved: false
-                )!
+            if let converter, let targetFormat {
                 guard let resampled = self.convertBuffer(buffer, using: converter, targetFormat: targetFormat) else {
                     return
                 }
@@ -148,12 +153,16 @@ class OpenAIRealtimeAudioManager {
     func playAudio(data: Data) {
         guard isCapturing, !data.isEmpty else { return }
 
-        let playerFormat = AVAudioFormat(
-            commonFormat: .pcmFormatFloat32,
+        guard let playerFormat = try? AudioFormatFactory.pcm(
+            .pcmFormatFloat32,
             sampleRate: Self.sampleRate,
             channels: Self.channels,
-            interleaved: false
-        )!
+            interleaved: false,
+            context: "playback"
+        ) else {
+            NSLog("[OpenAI Audio] Invalid playback format — dropping %d bytes", data.count)
+            return
+        }
 
         let frameCount = UInt32(data.count) / (Self.bitsPerSample / 8 * Self.channels)
         guard frameCount > 0 else { return }

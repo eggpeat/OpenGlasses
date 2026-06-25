@@ -11,35 +11,29 @@ class GeminiLiveAudioManager {
     private let playerNode = AVAudioPlayerNode()
     private var isCapturing = false
 
-    private let outputFormat: AVAudioFormat
-
     // Accumulate resampled PCM into ~100ms chunks before sending
     private let sendQueue = DispatchQueue(label: "audio.accumulator")
     private var accumulatedData = Data()
     private let minSendBytes = 3200  // 100ms at 16kHz mono Int16 = 1600 frames × 2 bytes
 
-    init() {
-        self.outputFormat = AVAudioFormat(
-            commonFormat: .pcmFormatInt16,
-            sampleRate: Config.geminiLiveOutputSampleRate,
-            channels: Config.geminiLiveAudioChannels,
-            interleaved: true
-        )!
-    }
-
     /// Configure the audio session for Gemini Live.
     /// - Parameter useIPhoneMode: `true` for `.voiceChat` (iPhone mic), `false` for `.videoChat` (glasses mic).
     func setupAudioSession(useIPhoneMode: Bool = false) throws {
         let session = AVAudioSession.sharedInstance()
+        guard AVAudioApplication.shared.recordPermission != .denied else {
+            throw AudioSessionError.microphonePermissionDenied
+        }
         let mode: AVAudioSession.Mode = useIPhoneMode ? .voiceChat : .videoChat
-        try session.setCategory(
-            .playAndRecord,
+        try AudioSessionActivator.activate(
+            session,
+            category: .playAndRecord,
             mode: mode,
             options: [.defaultToSpeaker, .allowBluetoothHFP, .allowBluetoothA2DP]
-        )
-        try session.setPreferredSampleRate(Config.geminiLiveInputSampleRate)
-        try session.setPreferredIOBufferDuration(0.064)
-        try session.setActive(true)
+        ) { session in
+            // Preferred rate/buffer are hints — a rejected hint must not abort activation.
+            try? session.setPreferredSampleRate(Config.geminiLiveInputSampleRate)
+            try? session.setPreferredIOBufferDuration(0.064)
+        }
         NSLog("[Audio] Session mode: %@", useIPhoneMode ? "voiceChat (iPhone)" : "videoChat (glasses)")
     }
 
@@ -49,12 +43,13 @@ class GeminiLiveAudioManager {
 
         // Attach player node for playback
         audioEngine.attach(playerNode)
-        let playerFormat = AVAudioFormat(
-            commonFormat: .pcmFormatFloat32,
+        let playerFormat = try AudioFormatFactory.pcm(
+            .pcmFormatFloat32,
             sampleRate: Config.geminiLiveOutputSampleRate,
             channels: Config.geminiLiveAudioChannels,
-            interleaved: false
-        )!
+            interleaved: false,
+            context: "playback"
+        )
         audioEngine.connect(playerNode, to: audioEngine.mainMixerNode, format: playerFormat)
 
         let inputNode = audioEngine.inputNode
@@ -72,15 +67,20 @@ class GeminiLiveAudioManager {
 
         sendQueue.async { self.accumulatedData = Data() }
 
+        // Build the resample target format once and reuse it for every tap buffer
+        // (it's constant), rather than reconstructing — and force-unwrapping — it per buffer.
         var converter: AVAudioConverter?
+        var resampleFormat: AVAudioFormat?
         if needsResample {
-            let resampleFormat = AVAudioFormat(
-                commonFormat: .pcmFormatFloat32,
+            let format = try AudioFormatFactory.pcm(
+                .pcmFormatFloat32,
                 sampleRate: Config.geminiLiveInputSampleRate,
                 channels: Config.geminiLiveAudioChannels,
-                interleaved: false
-            )!
-            converter = AVAudioConverter(from: inputNativeFormat, to: resampleFormat)
+                interleaved: false,
+                context: "capture resampling"
+            )
+            resampleFormat = format
+            converter = AVAudioConverter(from: inputNativeFormat, to: format)
         }
 
         var tapCount = 0
@@ -90,13 +90,7 @@ class GeminiLiveAudioManager {
             tapCount += 1
             let pcmData: Data
 
-            if let converter {
-                let resampleFormat = AVAudioFormat(
-                    commonFormat: .pcmFormatFloat32,
-                    sampleRate: Config.geminiLiveInputSampleRate,
-                    channels: Config.geminiLiveAudioChannels,
-                    interleaved: false
-                )!
+            if let converter, let resampleFormat {
                 guard let resampled = self.convertBuffer(buffer, using: converter, targetFormat: resampleFormat) else {
                     if tapCount <= 3 { NSLog("[Audio] Resample failed for tap #%d", tapCount) }
                     return
@@ -129,12 +123,16 @@ class GeminiLiveAudioManager {
     func playAudio(data: Data) {
         guard isCapturing, !data.isEmpty else { return }
 
-        let playerFormat = AVAudioFormat(
-            commonFormat: .pcmFormatFloat32,
+        guard let playerFormat = try? AudioFormatFactory.pcm(
+            .pcmFormatFloat32,
             sampleRate: Config.geminiLiveOutputSampleRate,
             channels: Config.geminiLiveAudioChannels,
-            interleaved: false
-        )!
+            interleaved: false,
+            context: "playback"
+        ) else {
+            NSLog("[Audio] Invalid playback format — dropping %d bytes", data.count)
+            return
+        }
 
         let frameCount = UInt32(data.count) / (Config.geminiLiveAudioBitsPerSample / 8 * Config.geminiLiveAudioChannels)
         guard frameCount > 0 else { return }

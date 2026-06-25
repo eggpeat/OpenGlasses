@@ -60,8 +60,8 @@ protocol DiarizationProvider: AnyObject {
   `confidence`. Pure value type.
 - `DeepgramResponseParser` — **the tested core.** Deepgram JSON → `DiarizedSegment`. Computes
   the **majority speaker across the segment's words** (handles a speaker switching
-  mid-segment — the same idea as VisionClaw's Android `DeepgramSTTService`), distinguishes
-  interim vs `is_final`, tolerates missing `speaker` fields. Pure function → heavily tested.
+  mid-segment), distinguishes interim vs `is_final`, tolerates missing `speaker` fields. Pure
+  function → heavily tested.
 - `SpeakerRegistry` — stable `Int` id → optional name + a deterministic display colour;
   persists names; merges ids when two are named the same. Pure + persisted.
 - `SpeakerSegmentMerger` — coalesces consecutive same-speaker finals into readable turns for
@@ -159,7 +159,5 @@ captions, recorded meetings, and the brain's social memory. "Who said what" turn
 transcript into a usable record (assign action items, recall who proposed what, brief on a
 person from real quotes). It's cheap and low-risk: the hard part (response → labeled segments)
 is a pure, fully-testable function, it reuses the entire audio + caption + recording stack
-already built, and it degrades cleanly to today's behaviour when off. Reference: the VisionClaw
-fork's Android `DeepgramSTTService` proves the streaming-diarization shape end to end (it is a
-*reference* only — Meta-licensed sample code; the iOS client is written fresh against
-Deepgram's documented API).
+already built, and it degrades cleanly to today's behaviour when off. The iOS client is written
+fresh against Deepgram's documented streaming + batch API.
