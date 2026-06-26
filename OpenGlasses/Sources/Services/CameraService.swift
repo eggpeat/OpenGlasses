@@ -255,7 +255,7 @@ class CameraService: ObservableObject {
 
         // Start the session if not already running
         if session.state == .stopped {
-            await session.start()
+            session.start()  // DAT 0.8.0: Stream.start() is synchronous
         }
 
         // Wait for streaming state
@@ -419,7 +419,7 @@ class CameraService: ObservableObject {
         guard isStreaming else { return }
         stopStallDetection()
         if let session = streamSession {
-            await session.stop()
+            session.stop()
         }
         isStreaming = false
         latestFrame = nil
@@ -480,7 +480,7 @@ class CameraService: ObservableObject {
     /// Reset the session completely (for error recovery).
     private func resetSession() async {
         if let session = streamSession {
-            await session.stop()
+            session.stop()
         }
         deviceSession?.stop()
         stateListenerToken = nil
