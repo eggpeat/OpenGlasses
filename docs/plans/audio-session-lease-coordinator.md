@@ -1,9 +1,18 @@
 # Plan — Audio-Session Lease Coordinator (single owner of the shared `AVAudioSession`)
 
-**Status:** 🚧 Foundation + first adopters shipped (this branch). The deterministic `AudioSessionLedger`
-core is headless-tested; the live `AudioSessionCoordinator` seam is in place and adopted by the two
-realtime managers. Broad adoption (always-on wake word, TTS, live translation, transcription,
+**Status:** 🚧 Foundation + realtime + wake-word adopters shipped. The deterministic
+`AudioSessionLedger` core is headless-tested; the live `AudioSessionCoordinator` seam is in place and
+adopted by the two realtime managers (`acquire`/`release`) and the always-on wake-word baseline
+(`assumeOwnership`/`release`). Remaining adoption (TTS duck, live translation, transcription, trimming
 AppState orchestration) is the documented next increment. No new SPM dependency.
+
+**Update (wake-word increment):** `WakeWordService` now registers as the baseline `.wakeWord` owner
+via a new register-only `AudioSessionCoordinator.assumeOwnership(_:)` — it keeps its hand-tuned
+`mixWithOthers` activation and pause/resume **exactly as-is** (those must not change) and only records
+ownership after a successful `configureAudioSession`, so a live session supersedes it cleanly and its
+CarPlay-dismissal deactivation now routes through `release` (deactivates only if still current — it
+can no longer tear down a live session that preempted it). All three exclusive owners
+(`.wakeWord`/`.geminiLive`/`.openAIRealtime`) are now arbitrated by one ledger.
 
 Follow-up to [Audio-Session Resilience P2](audio-session-resilience-p2.md). P2 made each realtime
 manager *self-heal*; this plan makes the **whole app agree on who owns the mic**.
@@ -52,10 +61,14 @@ Wraps the ledger behind a serial state queue and performs the real work:
   They're the highest-contention exclusive owners, already reworked in P2, and *should* deactivate on
   stop so the listener resumes cleanly — the lowest-risk, most-correct first adoption.
 
-**Deferred (documented next increments — the risky/always-on live edge):**
-- **`WakeWordService`** — the always-on baseline owner with the reference-counted pause/resume hold.
-  It should acquire `.wakeWord` (lowest precedence) and yield to a live session, but it's the
-  highest-risk path (core always-on UX) and earns its own careful step.
+**Now adopted (wake-word increment):**
+- **`WakeWordService`** — registers as the baseline `.wakeWord` owner via the register-only
+  `assumeOwnership(_:)` after each successful `configureAudioSession`, and routes its
+  CarPlay-dismissal deactivation through `release`. Its tuned `mixWithOthers` activation and
+  reference-counted `pauseOtherAudio`/`resumeOtherAudio` hold are **untouched** — they manage the
+  `mixWithOthers` option while wake word owns the session, not ownership itself.
+
+**Deferred (documented next increments):**
 - **`LiveTranslationService`** — uses `.measurement` + `.mixWithOthers` by design (gentle
   coexistence) and never deactivates on stop; routing it through the coordinator changes that
   semantic, so it needs a deliberate decision.
@@ -70,8 +83,9 @@ Wraps the ledger behind a serial state queue and performs the real work:
 2. **Coordinator** — serial-queue wrapper + real activation/deactivation through `AudioSessionActivator`. ✅
 3. **Realtime adoption** — acquire/release in both managers; reset re-acquires (same owner, new
    generation) so a mid-session reset never double-deactivates. ✅
-4. **(Next)** wake-word adoption with precedence, then translation/transcription/TTS, then trim
-   `switchMode`.
+4. **Wake-word adoption** — register-only `assumeOwnership(.wakeWord)` after each successful
+   `configureAudioSession`; deactivation through `release`; tuned activation + pause/resume untouched. ✅
+5. **(Next)** TTS duck + translation/transcription, then trim `switchMode`.
 
 ## Tests
 - `AudioSessionLedger`: acquire on free session (no preemption, generation 1); second acquire

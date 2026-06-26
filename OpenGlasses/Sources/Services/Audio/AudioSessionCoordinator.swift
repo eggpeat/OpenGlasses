@@ -26,6 +26,18 @@ final class AudioSessionCoordinator: @unchecked Sendable {
         stateQueue.sync { ledger.current?.owner }
     }
 
+    /// Record `owner` as the current holder **without** performing activation — for subsystems
+    /// that manage their own hand-tuned session configuration (notably the always-on wake-word
+    /// listener, whose `mixWithOthers` pause/resume behaviour must stay exactly as-is) but still
+    /// need the coordinator to know who owns the mic. Supersedes any prior holder, just like
+    /// `acquire`. Return the lease to `release` later.
+    @discardableResult
+    func assumeOwnership(_ owner: AudioSessionOwner) -> AudioSessionLease {
+        let lease = stateQueue.sync { ledger.acquire(owner, token: UUID()).lease }
+        NSLog("[AudioCoordinator] ownership assumed by %@ (self-activated)", owner.rawValue)
+        return lease
+    }
+
     /// Acquire the shared session for `owner`, configuring and activating it. Supersedes any prior
     /// holder. On activation failure the lease is rolled back (so a failed acquire never leaves the
     /// caller recorded as owner) and the error is rethrown.

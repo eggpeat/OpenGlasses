@@ -153,7 +153,7 @@ Three self-contained hardening workstreams over already-shipped paths (the gatew
 
 **Follow-up:** [Audio-Session Resilience P2](audio-session-resilience-p2.md) continues the #114 workstream — interruption/route-change recovery and Bluetooth-input selection in the two realtime managers. Same posture: pure policy core first, live wiring device-pending.
 
-**Follow-up:** [Audio-Session Lease Coordinator](audio-session-lease-coordinator.md) — single owner of the shared `AVAudioSession` across the mic-contending subsystems. 🚧 Foundation shipped: pure `AudioSessionLedger` (generation-gated, stale-release-suppressing; 8 tests) + `AudioSessionCoordinator` seam + adopted in the two realtime managers. Broad adoption (always-on wake word, TTS, live translation, transcription, AppState orchestration) is the documented next increment.
+**Follow-up:** [Audio-Session Lease Coordinator](audio-session-lease-coordinator.md) — single owner of the shared `AVAudioSession` across the mic-contending subsystems. 🚧 Foundation + realtime + wake-word shipped: pure `AudioSessionLedger` (generation-gated, stale-release-suppressing; 9 tests) + `AudioSessionCoordinator` seam (`acquire`/`release` + register-only `assumeOwnership`); adopted in the two realtime managers and the always-on wake-word baseline (all three exclusive owners now arbitrated by one ledger, wake word's tuned `mixWithOthers` activation untouched). Remaining adoption (TTS duck, live translation, transcription, trimming AppState orchestration) is the documented next increment.
 
 ## Dependency graph
 

@@ -49,6 +49,10 @@ class WakeWordService: NSObject, ObservableObject {
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
     private var audioSessionConfigured: Bool = false
+    /// Our claim on the shared session with the coordinator. Wake word is the always-on baseline
+    /// owner: it self-activates with its tuned config and registers ownership so a live session
+    /// (Gemini/OpenAI) supersedes it cleanly, and its release deactivates only if still current.
+    private var sessionLease: AudioSessionLease?
     /// When true, don't start continuous wake word listening — only listen when explicitly triggered.
     /// Set to true when CarPlay is active so we don't hold a recording session open.
     var carPlayMode: Bool = false
@@ -216,6 +220,10 @@ class WakeWordService: NSObject, ObservableObject {
                 audioSessionConfigured = true
                 print("🎤 Mic source: \(useGlassesMic ? "glasses (Bluetooth)" : "phone (built-in)")")
             }
+
+            // Register as the baseline owner. We self-activated above (keeping the tuned
+            // mixWithOthers config), so this only records ownership; it supersedes any prior lease.
+            sessionLease = AudioSessionCoordinator.shared.assumeOwnership(.wakeWord)
 
             let route = audioSession.currentRoute
             for input in route.inputs {
@@ -391,11 +399,19 @@ class WakeWordService: NSObject, ObservableObject {
         cleanupAudioEngine()
         isListening = false
         audioSessionConfigured = false
-        do {
-            try AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
-            print("🎤 Audio session deactivated (CarPlay voice ended)")
-        } catch {
-            print("🎤 Failed to deactivate audio session: \(error)")
+        if let lease = sessionLease {
+            // Release through the coordinator: it deactivates only if wake word is still the
+            // current owner, so this can't tear down a live Gemini/OpenAI session that preempted us.
+            sessionLease = nil
+            AudioSessionCoordinator.shared.release(lease)
+            print("🎤 Audio session released (CarPlay voice ended)")
+        } else {
+            do {
+                try AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+                print("🎤 Audio session deactivated (CarPlay voice ended)")
+            } catch {
+                print("🎤 Failed to deactivate audio session: \(error)")
+            }
         }
     }
 

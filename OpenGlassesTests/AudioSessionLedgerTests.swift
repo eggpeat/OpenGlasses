@@ -66,6 +66,25 @@ final class AudioSessionLedgerTests: XCTestCase {
         XCTAssertEqual([g1, g2, g3], [1, 2, 3])
     }
 
+    /// The real handoff this enables: the always-on wake-word baseline is preempted by a live
+    /// session, the live session's release deactivates, and wake word re-assumes ownership.
+    func testWakeWordToLiveSessionHandoff() {
+        var ledger = AudioSessionLedger()
+        // Wake word is the baseline owner.
+        let wake1 = ledger.acquire(.wakeWord, token: UUID()).lease
+        // A live session starts, preempting wake word.
+        let gemini = ledger.acquire(.geminiLive, token: UUID())
+        XCTAssertEqual(gemini.preempted, wake1)
+        // Wake word's stale teardown (if any) must not deactivate the live session.
+        XCTAssertEqual(ledger.release(wake1), .superseded(by: .geminiLive))
+        XCTAssertEqual(ledger.current, gemini.lease)
+        // Live session ends → deactivate; then wake word re-assumes the baseline.
+        XCTAssertEqual(ledger.release(gemini.lease), .deactivate)
+        XCTAssertNil(ledger.current)
+        let wake2 = ledger.acquire(.wakeWord, token: UUID()).lease
+        XCTAssertEqual(ledger.current, wake2)
+    }
+
     func testReacquireBySameOwnerSupersedesItsOwnEarlierLease() {
         var ledger = AudioSessionLedger()
         let first = ledger.acquire(.geminiLive, token: tokenA).lease
