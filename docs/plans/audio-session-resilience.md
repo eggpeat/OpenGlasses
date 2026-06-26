@@ -1,8 +1,9 @@
 # Plan — Audio-Session Resilience (realtime managers: no force-unwrap, graceful fallback)
 
-**Status:** 📋 Planned (not built). Small, defensive, no behaviour change on the happy path.
-The typed-error surface + format-construction helpers are headless-testable; the
-session-activation fallback is device-pending but low-risk. No new SPM dependency.
+**Status:** ✅ Shipped ([#114](https://github.com/straff2002/OpenGlasses/pull/114)). Both
+realtime managers hardened via `AudioFormatFactory` / `AudioSessionError` /
+`AudioSessionActivator`; 10 tests; Debug + Release green. Small, defensive, no behaviour change
+on the happy path; no new SPM dependency. Nothing deferred.
 
 The live-conversation audio paths — `GeminiLiveAudioManager` and `OpenAIRealtimeAudioManager` —
 each **force-unwrap every `AVAudioFormat(...)` initializer** (9 across the two files) and call a

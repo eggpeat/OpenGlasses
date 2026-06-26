@@ -1,10 +1,12 @@
 # Plan — Speaker Diarization (Deepgram "who said what")
 
-**Status:** 📋 Planned (not built). The deterministic core (response parsing, speaker
-registry, segment merging) is fully headless-testable; only the live WebSocket stream +
-mic audio are device-pending — same posture as the rest of the speech work. Closes the
-long-standing gap noted in `CLAUDE.md` ("Speaker Diarization — NOT YET DONE (needs Deepgram
-integration)").
+**Status:** 🚧 Core shipped ([#115](https://github.com/straff2002/OpenGlasses/pull/115)). The
+deterministic core (response parsing, speaker registry, segment merging, PCM conversion, the
+provider seam) is built and tested (24 tests); the `DeepgramSTTService`/`DeepgramBatchService`
+transport + flag-gated `AmbientCaptionService` path + `DiarizationSettingsView` are in. Off by
+default; HIPAA mode hard-disables. **Deferred (device-pending):** the live WebSocket stream +
+mic audio, and on-device speaker-naming-from-chip. Closes the long-standing gap noted in
+`CLAUDE.md` ("Speaker Diarization — NOT YET DONE (needs Deepgram integration)").
 
 Today every transcript — live ambient captions, recorded-meeting `.m4a` transcripts,
 meeting summaries — is an undifferentiated wall of text. Diarization labels **who** said

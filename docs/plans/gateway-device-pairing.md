@@ -1,10 +1,12 @@
 # Plan — Gateway Device Pairing (setup-code → approval → per-device token)
 
-**Status:** 📋 Planned (not built). The deterministic core (setup-code parse/encode, auth-mode
-selection, response → pairing-state mapping, per-device identity) is fully headless-testable;
-only the live approval round-trip is gateway-pending. **Backend prerequisite** — see Open
-questions: the gateway must implement the bootstrap → approval → device-token handshake; until
-it does, this degrades cleanly to today's shared-token flow.
+**Status:** 🚧 Core shipped ([#116](https://github.com/straff2002/OpenGlasses/pull/116)). The
+deterministic core (setup-code parse/encode, auth-mode selection, response → pairing-state
+mapping, per-device identity) is built and tested (23 tests); `GatewayConfig` device fields, the
+handshake credential fix (active gateway, not the global token), pairing-response capture, and
+the `GatewaySettingsView` pairing UI are in. **Deferred — backend prerequisite:** the live
+approval round-trip needs the gateway to implement the bootstrap → approval → device-token
+handshake; until it does, this degrades cleanly to today's shared-token flow.
 
 Today a user connects to an OpenClaw gateway by pasting a **single shared gateway token**
 (`GatewayConfig.token`, a `SecureField` in `GatewaySettingsView`). Every device that connects
