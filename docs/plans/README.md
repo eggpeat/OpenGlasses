@@ -155,6 +155,23 @@ Three self-contained hardening workstreams over already-shipped paths (the gatew
 
 **Follow-up:** [Audio-Session Lease Coordinator](audio-session-lease-coordinator.md) — single owner of the shared `AVAudioSession` across the mic-contending subsystems. 🚧 Foundation + all exclusive owners + coexisting riders shipped: pure `AudioSessionLedger` (generation-gated, stale-release-suppressing, + non-exclusive coexisting holds; 13 tests) + `AudioSessionCoordinator` seam (`acquire`/`release`, register-only `assumeOwnership`, `beginCoexisting`/`endCoexisting` + `audioActivity`). Exclusive owners (wake word + the two realtime managers) are arbitrated by one ledger; coexisting riders (live translation, TTS) register without preempting or deactivating, so the coordinator is the complete source of truth. Only remaining item: trimming `AppState.switchMode`'s hardware-settling sleep (on-device validation needed).
 
+## Round 10 — live-vision efficiency & self-improvement
+
+Four self-contained capabilities surfaced by surveying adjacent multimodal-agent work, mapped onto
+OpenGlasses' live-vision path, multi-provider billing, and static skills. Each is a deterministic,
+fully-testable core first with the model/device edge deferred — same posture as the rest. All 📋 Planned.
+
+| Plan | Title | Effort | Reuses | Strategic fit |
+|---|---|---|---|---|
+| [Content-Aware Frame Gate](frame-dedup-change-gate.md) | dHash perceptual gate that drops near-duplicate frames before the LLM (adaptive threshold + heartbeat) | ~1–2 days | FrameThrottler, Gemini Live frame path | Cuts the biggest repeated live-session cost — static-scene frames — with a <1 ms/frame pure gate. Foundation for visual state memory. |
+| [LLM Cost & Usage Tracker](llm-cost-usage-tracker.md) | Per-session/model token + estimated-spend tracking, surfaced in Insights | ~2–3 days | LLMService usage blocks, InsightsView/InsightsService, on-device SQLite | Table-stakes for a BYO-key multi-provider app; the data already arrives and is discarded today. |
+| [Visual State Memory](visual-state-memory.md) | Rolling keyframe scene memory ("what was I just looking at") injected into the live agent | ~3–4 days | Frame Gate (keyframe source), analyzeFrame/structured vision, GeminiLiveSessionManager, BrainStore | Turns stateless per-frame vision into scene continuity — the point of always-on glasses. |
+| [Skill Self-Evolution](skill-self-evolution.md) | Learn new skills from failed turns; **propose → human-approve**, Agent-Mode-gated, Plan-R-screened | ~1.5–2 wks | AgentRunner/NativeToolRouter, InstalledSkillStore, Plan R screen, `agentModeEnabled` | The one genuinely self-improving capability; the assistant gets better at what *this* user keeps needing. |
+
+**Suggested sequence:** Frame Gate (cheap, foundational) → Cost Tracker (independent, high-value) →
+Visual State Memory (rides the Frame Gate) → Skill Self-Evolution (largest, safety-sensitive; sequence
+last). The Frame Gate and Cost Tracker are small single-PR wins; the latter two are richer features.
+
 ## Dependency graph
 
 ```
