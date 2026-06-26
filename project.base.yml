@@ -58,7 +58,7 @@ options:
 packages:
   meta-wearables-dat-ios:
     url: https://github.com/facebook/meta-wearables-dat-ios.git
-    from: "0.7.0"
+    from: "0.8.0"
   HaishinKit:
     url: https://github.com/shogo4405/HaishinKit.swift.git
     from: "2.2.5"
