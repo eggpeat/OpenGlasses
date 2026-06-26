@@ -1,0 +1,99 @@
+# Plan — Audio-Session Lease Coordinator (single owner of the shared `AVAudioSession`)
+
+**Status:** 🚧 Foundation + first adopters shipped (this branch). The deterministic `AudioSessionLedger`
+core is headless-tested; the live `AudioSessionCoordinator` seam is in place and adopted by the two
+realtime managers. Broad adoption (always-on wake word, TTS, live translation, transcription,
+AppState orchestration) is the documented next increment. No new SPM dependency.
+
+Follow-up to [Audio-Session Resilience P2](audio-session-resilience-p2.md). P2 made each realtime
+manager *self-heal*; this plan makes the **whole app agree on who owns the mic**.
+
+## The problem
+Seven subsystems each activate the one shared `AVAudioSession` independently — `WakeWordService`
+(always-on baseline, with a reference-counted `pauseOtherAudio`/`resumeOtherAudio` hold),
+`GeminiLiveAudioManager`, `OpenAIRealtimeAudioManager`, `LiveTranslationService`,
+`TranscriptionService` (rides the wake-word engine), and `TextToSpeechService` (ducks via the
+wake-word hold). There is **no central ownership**: each calls `setActive(true)` on its own, and the
+only mutual exclusion is `AppState.switchMode`'s manual *stop-old → sleep 500 ms → start-new* dance.
+Two failure modes fall out of that:
+- A preempted subsystem's **late, asynchronous teardown** (an interruption reset, a delayed
+  `stopCapture`) calls `setActive(false)` and **deactivates the session a newer owner just acquired**.
+- After a live session ends, whether the session is left active or deactivated is incidental, so the
+  always-on listener's resume depends on timing rather than a defined handoff.
+
+## What we build
+A single arbiter the subsystems go through instead of touching `setActive` directly.
+
+### Deterministic core — `AudioSessionLedger` (pure, tested)
+Last-acquire-wins ownership with the one invariant that matters:
+- `acquire(owner, token)` supersedes any prior holder and bumps a monotonic generation; returns the
+  new lease + the lease it preempted.
+- `release(lease)` returns `.deactivate` **only if `lease` is still current**, else
+  `.superseded(by:)` (a newer owner holds it — do nothing) or `.alreadyReleased`.
+
+That release rule *is* the fix: a preempted owner can never tear the session out from under whoever
+took it. Fully unit-tested (`AudioSessionLedgerTests`) — no hardware, no session.
+
+### Live seam — `AudioSessionCoordinator` (singleton)
+Wraps the ledger behind a serial state queue and performs the real work:
+- `acquire(owner, category, mode, options, configure)` → `ledger.acquire` + `AudioSessionActivator.activate`
+  (preferred → `.default` fallback preserved); rolls the lease back and rethrows on activation failure.
+- `release(lease)` → `ledger.release`; on `.deactivate`, `setActive(false, .notifyOthersOnDeactivation)`
+  on a dedicated deactivation queue; `.superseded` / `.alreadyReleased` are logged no-ops.
+- `currentOwner` snapshot for diagnostics.
+
+## Scope
+**In (this PR):**
+- `AudioSessionLedger.swift` (pure core: `AudioSessionOwner`, `AudioSessionLease`,
+  `AudioSessionReleaseDecision`, the ledger) + `AudioSessionLedgerTests`.
+- `AudioSessionCoordinator.swift` (live singleton seam).
+- **Adopt in the two realtime managers** — `GeminiLiveAudioManager` / `OpenAIRealtimeAudioManager`
+  acquire (`.geminiLive` / `.openAIRealtime`) in `setupAudioSession` and release in `stopCapture`.
+  They're the highest-contention exclusive owners, already reworked in P2, and *should* deactivate on
+  stop so the listener resumes cleanly — the lowest-risk, most-correct first adoption.
+
+**Deferred (documented next increments — the risky/always-on live edge):**
+- **`WakeWordService`** — the always-on baseline owner with the reference-counted pause/resume hold.
+  It should acquire `.wakeWord` (lowest precedence) and yield to a live session, but it's the
+  highest-risk path (core always-on UX) and earns its own careful step.
+- **`LiveTranslationService`** — uses `.measurement` + `.mixWithOthers` by design (gentle
+  coexistence) and never deactivates on stop; routing it through the coordinator changes that
+  semantic, so it needs a deliberate decision.
+- **`TranscriptionService`** — reuses the wake-word engine; follows wake-word adoption.
+- **`TextToSpeechService`** — a ducking rider, not an exclusive owner; map onto the coordinator as a
+  non-exclusive "duck" rather than a session claim.
+- **`AppState.switchMode`** — once owners hand off through the coordinator, the manual
+  *stop → sleep 500 ms → start* can be tightened/removed.
+
+## Build order
+1. **Ledger + tests** — pure arbitration, fully tested. ✅
+2. **Coordinator** — serial-queue wrapper + real activation/deactivation through `AudioSessionActivator`. ✅
+3. **Realtime adoption** — acquire/release in both managers; reset re-acquires (same owner, new
+   generation) so a mid-session reset never double-deactivates. ✅
+4. **(Next)** wake-word adoption with precedence, then translation/transcription/TTS, then trim
+   `switchMode`.
+
+## Tests
+- `AudioSessionLedger`: acquire on free session (no preemption, generation 1); second acquire
+  preempts + bumps generation; release-current → `.deactivate` + frees; **stale release after
+  preemption → `.superseded(by:)`, current unchanged**; release when free → `.alreadyReleased`;
+  double-release → deactivate once then no-op; generation monotonic; re-acquire by the same owner
+  supersedes its own earlier lease. Pure, no hardware.
+
+## Open questions / decisions needed
+- **Precedence enforcement** — today the coordinator is pure last-acquire-wins (acquire always
+  succeeds, preempting). Should a low-precedence acquire (wake word) be *rejected* while a high one
+  (a live call) holds, or always granted? Last-acquire-wins matches the existing `switchMode` flow
+  (which tears down first); enforced precedence is a later option once wake word is wired.
+- **Preemption callback** — should the coordinator notify a preempted owner so it can tear itself
+  down, rather than relying on `AppState` to stop it first? Useful once >2 subsystems participate.
+- **TTS modelling** — exclusive lease vs a non-exclusive "duck" that nests under the current owner
+  (its current `pauseHoldCount` behaviour). Lean duck.
+
+## Why this matters
+With every subsystem managing the shared session independently, "who owns the mic" is implicit and
+timing-dependent — the root of sessions going silent after a preemption. A single ledger with
+generation-gated release makes ownership explicit and makes the dangerous case (a stale teardown
+deactivating a live session) structurally impossible. Landing the pure core + the two realtime
+adopters first keeps the always-on wake-word path — the riskiest to disturb — for a deliberate
+follow-up, with the hard part (the arbitration invariant) already proven in tests.

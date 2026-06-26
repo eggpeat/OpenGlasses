@@ -33,6 +33,8 @@ final class OpenAIRealtimeAudioManager {
     private var useIPhoneMode = false
     /// Bumped on every (re)start and teardown; tags tap buffers so stale ones are dropped.
     private var audioGraphGeneration: UInt64 = 0
+    /// Our claim on the shared session, held while the conversation owns the mic.
+    private var sessionLease: AudioSessionLease?
 
     // Audio format: 24kHz PCM16 mono for both directions
     static let sampleRate: Double = 24000
@@ -78,8 +80,10 @@ final class OpenAIRealtimeAudioManager {
             throw AudioSessionError.microphonePermissionDenied
         }
         let mode: AVAudioSession.Mode = useIPhoneMode ? .voiceChat : .videoChat
-        try AudioSessionActivator.activate(
-            session,
+        // Acquire the shared session through the coordinator (single owner); supersedes any prior
+        // holder and lets a clean `release` deactivate it for whoever runs next (e.g. wake word).
+        sessionLease = try AudioSessionCoordinator.shared.acquire(
+            .openAIRealtime,
             category: .playAndRecord,
             mode: mode,
             options: [.defaultToSpeaker, .allowBluetoothHFP, .allowBluetoothA2DP]
@@ -276,6 +280,12 @@ final class OpenAIRealtimeAudioManager {
             tearDownEngineGraphOnQueue(flushPendingAudio: true)
         }
         removeObservers()
+        // Release our claim on the shared session; the coordinator deactivates it only if no newer
+        // owner has acquired since (so a late stop can't stomp the next session).
+        if let lease = sessionLease {
+            sessionLease = nil
+            AudioSessionCoordinator.shared.release(lease)
+        }
     }
 
     // MARK: - Audio Interruption & Route Change Handling
