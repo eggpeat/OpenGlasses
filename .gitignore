@@ -30,11 +30,14 @@ Pods/
 Carthage/Build/
 
 # Claude settings
-.claude/
+.claude/*
 
 # Dev tooling — keep local, don't push
-.claude/
+.claude/*
 .cursor/
+
+# …but DO track project rule docs (loaded as guidance; belong in the repo)
+!.claude/rules/
 .github/
 .impeccable.md
 CLAUDE.md
