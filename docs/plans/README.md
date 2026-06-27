@@ -166,11 +166,32 @@ fully-testable core first with the model/device edge deferred — same posture a
 | [Content-Aware Frame Gate](frame-dedup-change-gate.md) | dHash perceptual gate that drops near-duplicate frames before the LLM (adaptive threshold + heartbeat) | ~1–2 days | FrameThrottler, Gemini Live frame path | Cuts the biggest repeated live-session cost — static-scene frames — with a <1 ms/frame pure gate. Foundation for visual state memory. |
 | [LLM Cost & Usage Tracker](llm-cost-usage-tracker.md) | Per-session/model token + estimated-spend tracking, surfaced in Insights | ~2–3 days | LLMService usage blocks, InsightsView/InsightsService, on-device SQLite | Table-stakes for a BYO-key multi-provider app; the data already arrives and is discarded today. |
 | [Visual State Memory](visual-state-memory.md) | Rolling keyframe scene memory ("what was I just looking at") injected into the live agent | ~3–4 days | Frame Gate (keyframe source), analyzeFrame/structured vision, GeminiLiveSessionManager, BrainStore | Turns stateless per-frame vision into scene continuity — the point of always-on glasses. |
-| [Skill Self-Evolution](skill-self-evolution.md) | Learn new skills from failed turns; **propose → human-approve**, Agent-Mode-gated, Plan-R-screened | ~1.5–2 wks | AgentRunner/NativeToolRouter, InstalledSkillStore, Plan R screen, `agentModeEnabled` | The one genuinely self-improving capability; the assistant gets better at what *this* user keeps needing. |
+| [Skill Self-Evolution](skill-self-evolution.md) | Learn new skills from failed turns; **propose → human-approve**, Agent-Mode-gated, Plan-R-screened. **+ companion: embedding-based skill retrieval** — inject only the skills relevant to the turn (via `Embedder`) once the bank grows | ~1.5–2 wks | AgentRunner/NativeToolRouter, InstalledSkillStore, Plan R screen, `Embedder`, `agentModeEnabled` | The one genuinely self-improving capability; the assistant gets better at what *this* user keeps needing. |
 
 **Suggested sequence:** Frame Gate (cheap, foundational) → Cost Tracker (independent, high-value) →
 Visual State Memory (rides the Frame Gate) → Skill Self-Evolution (largest, safety-sensitive; sequence
 last). The Frame Gate and Cost Tracker are small single-PR wins; the latter two are richer features.
+
+## Round 11 — adaptive long-term memory
+
+A typed memory layer surfaced by surveying adjacent agent-memory work, mapped onto OpenGlasses' three
+existing on-device stores (`BrainStore` graph, `SemanticMemoryStore` vectors, `DocumentStore`
+passages). The gap those three leave is a **kind** dimension — nothing models user **preferences** or
+**project state**, and recall is one-size-fits-all. Same posture as the rest: a deterministic,
+fully-testable core (classifier + retrieval policy + formatter, **zero LLM calls**) with the
+prompt-injection edge behind a default-off flag. 📋 Planned.
+
+| Plan | Title | Effort | Reuses | Strategic fit |
+|---|---|---|---|---|
+| [Typed Memory Taxonomy](memory-taxonomy.md) | Type memories as preference / project / episodic / semantic; recall each kind on its own terms (preferences always, project while active, semantic by relevance, episodic by recency) | ~3–4 days | BrainStore (`ingest`, `brain.sqlite`), Embedder, FieldSessionService, LLMService prompt builder | Closes the "no typed long-term memory" gap — the assistant remembers *how you like things done* and *what you're mid-way through*, not just facts that happen to match. Pairs with Visual State Memory (episodic) + Embedding Upgrade (semantic). |
+
+**Related (folded into Round 10):** embedding-based **skill retrieval** lives in the
+[Skill Self-Evolution](skill-self-evolution.md) plan — it rides the same `Embedder` seam and only earns
+its keep once evolution grows the skill bank.
+
+**Suggested sequence:** independent of Round 10; can land any time. If sequencing with Round 10, do the
+[Embedding Quality Upgrade](embedding-quality-upgrade.md) first so both the taxonomy's semantic recall
+and skill retrieval get the sharper transformer embeddings.
 
 ## Dependency graph
 

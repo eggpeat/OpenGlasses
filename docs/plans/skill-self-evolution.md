@@ -112,6 +112,54 @@ the decisions that matter (when to evolve, is it a dup, is it well-formed) are p
 - **Edit-on-approve** — let the user tweak the wording before accepting; treat the LLM output as a
   draft, not a verdict.
 
+## Companion: embedding-based skill retrieval
+
+Evolution has a tail problem. Every approved skill is injected into **every** system prompt, because
+both skill stores dump their whole library unconditionally today:
+- `VoiceSkillStore.promptContext()` emits a `LEARNED SKILLS` block listing *all* voice skills.
+- `InstalledSkillStore.promptContext()` does the same for ClawHub/installed skills.
+
+That's fine at three skills. But the whole point of evolution is that the bank **grows** with what
+this user keeps needing — and a 30-skill dump bloats the prompt, burns tokens, and dilutes attention
+across instructions that are irrelevant to the turn at hand. The fix is to inject only the skills
+**relevant to the current turn**, selected on-device with the `Embedder` we already ship.
+
+### The deterministic core (pure, tested)
+- **`SkillRetriever`** — `select(turn:, candidates:, similarity:, topK:, alwaysIncludeTriggerMatches:)
+  -> [skill]`. Pure ranking:
+  - **Always** include any skill whose explicit `trigger` substring-matches the turn — an exact
+    voice trigger must *never* be dropped by a similarity cutoff (the current behaviour is exact-match
+    on trigger, and we preserve it).
+  - Then fill the remaining budget with the top-`k` candidates by injected cosine similarity between
+    the turn and the skill's `trigger + instruction` text.
+  - Stable, deterministic ordering; similarity injected so it's testable without a model.
+- A unified `SkillCandidate` view (`{ id, trigger, body, source }`) so voice, installed/ClawHub, and
+  `evolved` skills rank in one pool against one budget.
+
+### How it flows
+`promptContext()` gains a `for turn:` variant on both stores that runs the candidates through
+`SkillRetriever` (embedding the turn via `Embedder`) and formats only the survivors — same block
+shape as today, fewer lines. Gated by `skillRetrievalEnabled` (default off) **and** a count floor: below
+`skillRetrievalMinCount` skills, dump-all is cheaper and clearer, so retrieval only kicks in once the
+library is large enough to matter — which is exactly when evolution has been doing its job.
+
+### Scope (additive to this plan)
+In: `Sources/Services/Skills/SkillRetriever.swift` (+ `SkillCandidate`); `for turn:` overloads on
+`VoiceSkillStore`/`InstalledSkillStore`/`EvolvedSkillStore`; `Config.skillRetrievalEnabled`,
+`skillRetrievalTopK`, `skillRetrievalMinCount`. Out: re-ranking by recency/usage (start with
+relevance only); a cross-store usage counter (a later salience signal).
+
+### Tests
+- `SkillRetriever.select`: a turn containing a skill's `trigger` always includes it regardless of
+  similarity; the rest are the top-k by injected similarity; below `minCount` → all returned (today's
+  behaviour, no change); empty candidates → empty; ties break stably.
+
+### Why fold it in here
+Retrieval isn't worth building for a hand-curated handful of skills — dump-all is fine there. It
+becomes necessary *because* evolution grows the bank, so it belongs with the feature that creates the
+pressure. It also rides the same `Embedder` seam as the [memory taxonomy](memory-taxonomy.md)'s
+semantic recall, and the same default-off-flag posture as the rest of this plan.
+
 ## Why this matters
 It's the one genuinely *self-improving* capability in the set: the assistant gets better at the things
 *this* user keeps needing, by harvesting fixes that are already sitting in the transcript. The risk —

@@ -54,6 +54,8 @@ OpenGlasses ships App Intents + Siri Shortcuts, so you can drive it straight fro
 | "Hey Siri, OpenGlasses take a photo" | Captures via the glasses and describes the scene |
 | "Hey Siri, OpenGlasses describe surroundings" | Accessibility scene description |
 
+Beyond the pre-made phrases above, **Capture Glasses Photo** (a silent capture saved to your library) and **Record Glasses Video** are available as **Shortcuts actions** you can add to Siri, the Action button, or your own automations.
+
 The first time, iOS surfaces these in the **Shortcuts** app and the Siri phrase picker (you can rename the phrase to anything you like). A **persona name** can ride in the phrase ("ask Claude…") because it's a fixed, resolvable choice; the **question** can't (iOS only lets App Shortcut phrases embed fixed choices, not free-form text), so it's asked **two-step** — Siri prompts and awaits your spoken reply. Consecutive asks within a few minutes continue the **same conversation thread**, and Siri shows the answer in a result card. The intent runs in the background and speaks the result — no need to bring the app forward. If Siri ever says OpenGlasses isn't running, enable **Settings → Voice → Open App for Siri Questions** to have it launch the app first.
 
 ### On-Device Local LLM
@@ -300,7 +302,7 @@ Assign models to **Fast**, **Balanced**, and **Best** tiers, then let OpenGlasse
 ### CarPlay & Apple Watch
 
 - **CarPlay** — hands-free voice assistant on your car's display.
-- **Apple Watch** — companion app and widget for quick control and glanceable status.
+- **Apple Watch** — companion app and widget for quick control and glanceable status, including **taking a photo or starting/stopping a video recording on the glasses** straight from your wrist.
 
 ---
 

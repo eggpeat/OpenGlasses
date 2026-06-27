@@ -336,8 +336,8 @@ final class GlassesDisplayService: ObservableObject {
     private func renderClear() async throws {
         // Nothing to clear if we never started a session.
         guard let display else { return }
-        let empty = FlexBox(direction: .column) {}
-        try await display.send(empty)
+        // DAT 0.8.0: explicit clear instead of sending an empty FlexBox.
+        try await display.clearDisplay()
     }
 
     private func renderScreen(_ screen: HUDScreen) async throws {

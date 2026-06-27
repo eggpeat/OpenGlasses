@@ -242,9 +242,22 @@ class CameraService: ObservableObject {
 
         errorListenerToken = session.errorPublisher.listen { [weak self] error in
             Task { @MainActor in
-                let message = Self.friendlyErrorMessage(error)
+                guard let self else { return }
+                let message = CameraErrorPolicy.message(for: error)
                 NSLog("[Camera] Error: %@", message)
-                self?.onDebugEvent?("Camera error: \(message)")
+                self.onDebugEvent?("Camera error: \(message)")
+
+                // Fail a pending capture fast on a terminal error (hinges closed, thermal/battery
+                // shutdown, device gone) instead of waiting out the 5s timeout below.
+                if CameraErrorPolicy.abortsCapture(error), let cont = self.photoContinuation {
+                    self.photoContinuation = nil
+                    if let fallback = self.latestFrameAsJPEG() {
+                        NSLog("[Camera] Terminal error during capture — using latest video frame")
+                        cont.resume(returning: fallback)
+                    } else {
+                        cont.resume(throwing: CameraError.captureFailed)
+                    }
+                }
             }
         }
     }
@@ -572,22 +585,7 @@ class CameraService: ObservableObject {
         // No-op: audio session management is handled by WakeWordService
     }
 
-    // MARK: - Error Mapping
-
-    /// Map StreamSession errors to user-friendly descriptions.
-    private static func friendlyErrorMessage(_ error: any Error) -> String {
-        let description = String(describing: error).lowercased()
-        if description.contains("hingesclosed") {
-            return "Glasses hinges are closed — open them to use the camera"
-        } else if description.contains("thermalcritical") || description.contains("thermal") {
-            return "Glasses are too hot — let them cool down"
-        } else if description.contains("permission") {
-            return "Camera permission required"
-        } else if description.contains("devicenotavailable") || description.contains("notavailable") {
-            return "Glasses camera not available — check Bluetooth connection"
-        }
-        return error.localizedDescription
-    }
+    // Error mapping now lives in the pure, typed `CameraErrorPolicy` (DAT 0.8.0 unified errors).
 }
 
 enum CameraError: LocalizedError {
