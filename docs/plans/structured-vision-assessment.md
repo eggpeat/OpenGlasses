@@ -10,7 +10,11 @@ Shipped: the pure core (`AssessmentCard`/`AssessmentTier`/`AssessmentFinding`/`I
 deterministic life-safety tier/action from reported vitals); ~~Gemini `responseSchema` translation~~ ✅
 shipped (`GeminiSchemaTranslator` — JSON Schema → Gemini's uppercase-typed `responseSchema`, wired into
 both `analyzeFrameStructured` and `completeStructured` so Gemini gets *enforced* JSON like
-Anthropic/OpenAI forced tool-use). CaptureFlow `voice_number` auto-fill still pending.
+Anthropic/OpenAI forced tool-use); ~~CaptureFlow `voice_number` auto-fill~~ ✅ shipped
+(`CaptureFlowRunner.answer(reading:)` + pure `numberValue` convert-to-step-unit via `UnitNormalizer`,
+range-validated; `CaptureFlowService.fillCurrentStep(with:)`; `vision_assess` routes an
+`instrument_reading` into an active `voice_number` step → read instead of dictate). **AD complete** —
+all follow-ups shipped.
 
 **Strategic fit:** Today every camera-reasoning feature funnels through
 [`LLMService.analyzeFrame`](../../OpenGlasses/Sources/Services/LLMService.swift) (line 848), which returns

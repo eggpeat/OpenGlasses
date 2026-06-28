@@ -104,6 +104,33 @@ final class CaptureFlowRunner {
         }
     }
 
+    /// Fill the current `voice_number` step from an instrument reading instead of dictation
+    /// (Plan AD × U): convert the reading to the step's unit, range-validate, and store with
+    /// `instrument_reading` provenance. Rejected when the active step isn't a number step or the
+    /// reading's unit can't be converted (the caller then asks the user to read it aloud).
+    func answer(reading: InstrumentReading) -> AnswerOutcome {
+        guard let step = currentStep, step.binding.type == .voiceNumber else {
+            return .rejected(reason: "The current step doesn't take a meter reading.")
+        }
+        guard let n = Self.numberValue(for: step, reading: reading) else {
+            let want = step.binding.unit ?? "the required unit"
+            return .rejected(reason: "I read \(short(reading.value)) \(reading.unit) but couldn't convert it to \(want) — read it aloud instead.")
+        }
+        if let range = step.completion?.range, range.count == 2, (n < range[0] || n > range[1]) {
+            return .rejected(reason: "that's out of range (\(short(range[0]))–\(short(range[1]))) — \(step.prompt)")
+        }
+        return store(step, .number(n, unit: step.binding.unit), method: "instrument_reading")
+    }
+
+    /// The number to store for a `voice_number` `step` from an instrument `reading`, converted into
+    /// the step's unit. Same unit (or no unit) → the value as-is; otherwise [[UnitNormalizer]] converts.
+    /// Nil when the units are incompatible. Pure.
+    static func numberValue(for step: FlowStep, reading: InstrumentReading) -> Double? {
+        guard let target = step.binding.unit, !target.isEmpty else { return reading.value }
+        if reading.unit.caseInsensitiveCompare(target) == .orderedSame { return reading.value }
+        return UnitNormalizer.convert(reading.value, from: reading.unit, to: target)
+    }
+
     /// Advance without capturing (a required field left blank will block `finish`).
     func skip() -> AnswerOutcome {
         guard currentStep != nil else { return .finished }

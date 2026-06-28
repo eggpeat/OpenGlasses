@@ -45,7 +45,14 @@ final class VisionAssessTool: NativeTool {
 
         do {
             let card = try await StructuredVisionService.shared.assessCurrentFrame(kind: kind, note: note)
-            return Self.summarize(card)
+            var response = Self.summarize(card)
+            // Plan AD × U: if a capture flow is waiting on a voice_number step, the reading fills it
+            // (converted to the step's unit, range-validated) instead of dictation, and advances.
+            if kind == "instrument_reading", let reading = card.readings.first,
+               let flowMessage = CaptureFlowService.shared.fillCurrentStep(with: reading) {
+                response += "\n\n\(flowMessage)"
+            }
+            return response
         } catch StructuredVisionError.noFrame {
             return "I couldn't get a camera frame. Make sure the glasses camera is streaming and the subject is in view."
         } catch StructuredVisionError.analysisFailed {

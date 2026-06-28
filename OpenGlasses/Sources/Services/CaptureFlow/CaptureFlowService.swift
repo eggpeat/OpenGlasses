@@ -72,6 +72,19 @@ final class CaptureFlowService: ObservableObject {
         }
     }
 
+    /// If a capture flow is waiting on a `voice_number` step, fill it from an instrument `reading`
+    /// (converted to the step's unit, range-validated) and return the resulting message; otherwise
+    /// `nil` (the reading wasn't consumed — there's no active number step). Lets the `instrument_reading`
+    /// path auto-advance a flow instead of requiring the user to dictate the number.
+    func fillCurrentStep(with reading: InstrumentReading) -> String? {
+        guard let r = runner, r.currentStep?.binding.type == .voiceNumber else { return nil }
+        switch r.answer(reading: reading) {
+        case .accepted(let next):   return next
+        case .rejected(let reason): return reason
+        case .finished:             return "All steps captured. Say finish to save the record."
+        }
+    }
+
     func skip() -> String {
         guard let r = runner else { return "No capture flow is running." }
         if case .accepted(let next) = r.skip() { return "Skipped. " + next }
