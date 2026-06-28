@@ -1,76 +1,55 @@
 import Foundation
 import NaturalLanguage
 
-/// On-device text embedding for semantic search over document chunks.
+/// On-device text embedding for semantic search over document chunks and memory.
 ///
-/// Prefers `NLEmbedding.sentenceEmbedding` (markedly better for multi-sentence passages) and
-/// falls back to averaged word vectors only when no sentence model exists for the language.
-/// The mode is fixed at init, so every vector a given instance produces has the same dimension —
-/// queries and stored chunks are always comparable.
-///
-/// Kept separate from `SemanticMemoryStore`'s word-average embedding on purpose: documents live
-/// in their own store with their own vectors, so this can use the better sentence model without a
-/// re-embed migration of existing memory vectors.
+/// A thin façade over a swappable [[EmbeddingBackend]]: it prefers the transformer
+/// `NLContextualEmbedding` ([[NLContextualBackend]]) when enabled and its asset is on-device, and
+/// otherwise falls back to `NLEmbedding` ([[NLEmbeddingBackend]] — sentence model preferred, word
+/// average otherwise). The active backend is fixed at init, so every vector a given instance produces
+/// shares one dimension and `modelId`: queries and stored vectors stay comparable, and a model swap is
+/// caught by the version stamp ([[EmbeddingVersion]]) which triggers a re-embed.
 struct Embedder {
 
     let language: NLLanguage
-    private let sentenceEmbedding: NLEmbedding?
-    private let wordEmbedding: NLEmbedding?
+    private let backend: EmbeddingBackend?
 
     init(language: NLLanguage = .english) {
         self.language = language
-        self.sentenceEmbedding = NLEmbedding.sentenceEmbedding(for: language)
-        self.wordEmbedding = NLEmbedding.wordEmbedding(for: language)
+        self.backend = Embedder.selectBackend(language: language)
+    }
+
+    /// The contextual model when enabled and its asset is present; otherwise the NLEmbedding baseline.
+    private static func selectBackend(language: NLLanguage) -> EmbeddingBackend? {
+        if Config.contextualEmbeddingEnabled, let contextual = NLContextualBackend.ready(for: language) {
+            return contextual
+        }
+        return NLEmbeddingBackend(language: language)
     }
 
     /// True if some embedding model is available for the language.
-    var isAvailable: Bool { sentenceEmbedding != nil || wordEmbedding != nil }
+    var isAvailable: Bool { backend != nil }
 
-    /// True when the (better) sentence model backs this instance.
-    var usesSentenceModel: Bool { sentenceEmbedding != nil }
+    /// True when the NLEmbedding **sentence** model backs this instance. False for the word-average
+    /// fallback and for the contextual backend (which is better still).
+    var usesSentenceModel: Bool { (backend as? NLEmbeddingBackend)?.usesSentenceModel ?? false }
 
     /// Vector dimension produced by this instance, or 0 if no model is available.
-    var dimension: Int { sentenceEmbedding?.dimension ?? wordEmbedding?.dimension ?? 0 }
+    var dimension: Int { backend?.dimension ?? 0 }
 
-    /// Stable id for the model backing this instance — `nl-sentence.<lang>` when the sentence model is
-    /// present, else `nl-word.<lang>`. Used to stamp persisted vectors so a later model swap re-embeds
-    /// rather than silently comparing across embedding spaces. See [[EmbeddingVersion]].
-    var modelId: String {
-        let backend = usesSentenceModel ? "nl-sentence" : "nl-word"
-        return "\(backend).\(language.rawValue)"
-    }
+    /// Stable id for the active model — `nl-sentence.<lang>`, `nl-word.<lang>`, or
+    /// `nl-contextual.<modelIdentifier>`. Stamps persisted vectors so a model swap re-embeds rather
+    /// than silently comparing across embedding spaces. See [[EmbeddingVersion]].
+    var modelId: String { backend?.modelId ?? "none.\(language.rawValue)" }
 
     /// The version stamp (model id + dimension) for vectors this instance produces.
     var version: EmbeddingVersion { EmbeddingVersion(modelId: modelId, dim: dimension) }
 
     /// Embed text into a vector, or nil if the model can't represent it (or none is available).
-    /// Never mixes models: sentence-backed instances return sentence vectors (or nil), word-backed
-    /// instances return word-average vectors (or nil).
     func embed(_ text: String) -> [Float]? {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
-
-        if let sentence = sentenceEmbedding {
-            guard let vec = sentence.vector(for: trimmed) else { return nil }
-            return vec.map { Float($0) }
-        }
-        return wordAverage(trimmed)
-    }
-
-    private func wordAverage(_ text: String) -> [Float]? {
-        guard let model = wordEmbedding else { return nil }
-        let words = text.lowercased()
-            .components(separatedBy: .whitespacesAndNewlines)
-            .filter { !$0.isEmpty }
-        var sum = [Double](repeating: 0, count: model.dimension)
-        var count = 0
-        for word in words {
-            guard let vec = model.vector(for: word) else { continue }
-            for i in 0..<min(vec.count, sum.count) { sum[i] += vec[i] }
-            count += 1
-        }
-        guard count > 0 else { return nil }
-        return sum.map { Float($0 / Double(count)) }
+        return backend?.embed(trimmed)
     }
 
     /// Cosine similarity in [-1, 1]; 0 when dimensions differ or a vector is empty/zero.
@@ -84,5 +63,13 @@ struct Embedder {
         }
         let denom = na.squareRoot() * nb.squareRoot()
         return denom > 0 ? dot / denom : 0
+    }
+
+    /// Kick off the contextual model's OTA asset download in the background when enabled, so it
+    /// becomes the active backend on the next `Embedder()` once present. No-op when disabled or the
+    /// asset is already local. Call once at launch.
+    static func prepareContextualAssetsIfEnabled(language: NLLanguage = .english) async {
+        guard Config.contextualEmbeddingEnabled else { return }
+        await NLContextualBackend.prepareAssets(for: language)
     }
 }
