@@ -8,6 +8,7 @@ struct InsightsView: View {
 
     @State private var days = 7
     @State private var report: InsightsReport?
+    @State private var usage: UsageRollup.Result?
 
     var body: some View {
         Form {
@@ -53,6 +54,27 @@ struct InsightsView: View {
                                        systemImage: "chart.bar",
                                        description: Text("Have a few conversations and your usage recap will show up here."))
             }
+
+            if let usage, !usage.perModel.isEmpty {
+                Section {
+                    ForEach(usage.perModel, id: \.model) { m in
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack {
+                                Text(m.model).font(.subheadline)
+                                Spacer()
+                                Text(Self.costLabel(m.costUSD)).foregroundStyle(.secondary)
+                            }
+                            Text("\(Self.tokenLabel(m.tokensIn)) in · \(Self.tokenLabel(m.tokensOut)) out")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    row("Estimated total", Self.costLabel(usage.totalUSD))
+                } header: {
+                    Text("Tokens & estimated cost")
+                } footer: {
+                    Text("Estimated from each provider's reported token usage at list prices. Local-only — never leaves your device. Realtime voice sessions and streamed Chat replies aren't counted yet.")
+                }
+            }
         }
         .navigationTitle("Insights")
         .navigationBarTitleDisplayMode(.inline)
@@ -61,6 +83,7 @@ struct InsightsView: View {
 
     private func refresh() {
         report = InsightsService.shared.report(days: days)
+        usage = UsageTracker.shared.rollup(days: days)
     }
 
     private func row(_ label: String, _ value: String) -> some View {
@@ -68,6 +91,24 @@ struct InsightsView: View {
             Text(label)
             Spacer()
             Text(value).foregroundStyle(.secondary)
+        }
+    }
+
+    /// "$1.23", "<$0.01" for a tiny non-zero cost, or "—" when unpriced.
+    private static func costLabel(_ usd: Double?) -> String {
+        guard let usd else { return "—" }
+        if usd > 0 && usd < 0.01 { return "<$0.01" }
+        return String(format: "$%.2f", usd)
+    }
+
+    /// Compact token count: "1,234", "12.3K", "1.2M".
+    private static func tokenLabel(_ count: Int) -> String {
+        switch count {
+        case 1_000_000...: return String(format: "%.1fM", Double(count) / 1_000_000)
+        case 10_000...: return String(format: "%.1fK", Double(count) / 1_000)
+        default:
+            let f = NumberFormatter(); f.numberStyle = .decimal
+            return f.string(from: NSNumber(value: count)) ?? "\(count)"
         }
     }
 }

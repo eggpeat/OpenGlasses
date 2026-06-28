@@ -1180,6 +1180,21 @@ class LLMService: ObservableObject {
         }
     }
 
+    /// Capture the token usage block from a provider's response JSON and hand it to
+    /// the cost tracker (Plan AU). Parsing is pure/synchronous here; only the resulting
+    /// integer counts cross to the main actor (the non-Sendable JSON does not). A
+    /// missing usage block is a silent no-op — never throws, never blocks the reply.
+    /// Streaming turns (Chat tab `onToken`) don't carry a usage block on this path and
+    /// are not yet captured.
+    private func recordUsage(provider: LLMProvider, model: String, json: [String: Any]) {
+        guard let tokens = UsageTracker.parseTokens(provider: provider, json: json),
+              tokens.tokensIn + tokens.tokensOut > 0 else { return }
+        Task { @MainActor in
+            UsageTracker.shared.record(provider: provider, model: model,
+                                       tokensIn: tokens.tokensIn, tokensOut: tokens.tokensOut)
+        }
+    }
+
     private func sendAnthropic(_ text: String, systemPrompt: String, config: ModelConfig, includeTools: Bool, imageData: Data?, onToken: ((String) -> Void)? = nil) async throws -> String {
         let apiKey = config.apiKey
         guard !apiKey.isEmpty else {
@@ -1262,6 +1277,7 @@ class LLMService: ObservableObject {
                 }
                 content = parsed
                 stopReason = json["stop_reason"] as? String
+                recordUsage(provider: .anthropic, model: config.model, json: json)
             }
 
             // Check for tool use blocks
@@ -1505,6 +1521,7 @@ class LLMService: ObservableObject {
                     throw LLMError.invalidResponse(provider.displayName)
                 }
                 message = m
+                recordUsage(provider: provider, model: config.model, json: json)
             }
 
             // Check for tool calls
@@ -1815,6 +1832,7 @@ class LLMService: ObservableObject {
                   let parts = content["parts"] as? [[String: Any]] else {
                 throw LLMError.invalidResponse("Gemini")
             }
+            recordUsage(provider: .gemini, model: config.model, json: json)
 
             // Check for function calls in parts
             let functionCallParts = parts.filter { $0["functionCall"] != nil }

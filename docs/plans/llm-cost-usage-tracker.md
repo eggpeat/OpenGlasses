@@ -1,9 +1,12 @@
 # Plan AU — LLM Cost & Usage Tracker (per-session/model token + spend)
 
-**Status:** 📋 Planned (not built). Net-new — OpenGlasses currently tracks **no** API usage or cost.
-Deterministic core (pricing × tokens) is pure and fully headless-testable; the only live wiring is
-reading each provider's usage block in `LLMService`. Surfaces in the existing `InsightsView`. No new
-SPM dependency.
+**Status:** 🚧 Core shipped. Pure `ModelPricing` (bundled prefix-matched table + runtime override,
+unknown→nil) + `UsageRollup` (per-model/total, nil-aware) + SQLite `UsageStore` (mirrors `OfflineQueue`)
++ a `UsageTracker` facade are built and tested; `LLMService` captures the usage block at each cloud
+provider's non-streaming decode (Anthropic/OpenAI-compatible/Gemini), and `InsightsView` gains a
+"Tokens & estimated cost" section over the existing day-window picker. 13 tests green in Release. No new
+SPM dependency. Deferred: streamed-Chat (`onToken`) + realtime-voice token capture (those paths don't
+surface a usage block here); a Settings pricing editor (the `ModelPricing.overrides` seam exists).
 
 ## The problem
 OpenGlasses is a **multi-provider, bring-your-own-key** app — Anthropic, Gemini, OpenAI, plus custom
