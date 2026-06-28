@@ -1,6 +1,13 @@
 # Plan AM — Embedding Quality Upgrade (better RAG & memory retrieval)
 
-**Status: 📋 Planned.**
+**Status: 🚧 Substrate shipping (PR A).** The version-stamp + migration substrate (build-order steps
+1–2) is built: pure `EmbeddingVersion` + `EmbeddingMigrationPolicy` + `Embedder.version`, and
+`DocumentStore` now stamps every chunk, backfills legacy rows, and **self-heals** outdated vectors —
+lazy re-embed on query + eager `reindexOutdated()` + `invalidateEmbeddings()`. Behaviour-preserving
+(still `NLEmbedding`); it's the safety net that makes the model swap reversible. **PR B (next):** the
+`Embedder` strategy protocol + `NLContextualEmbedding` (transformer) behind the seam with an
+`NLEmbedding` fallback, routing `SemanticMemoryStore` through the same seam, and a `recall@k`
+benchmark to pick the default (steps 3–5).
 
 **Builds on:** the [`Embedder`](../../OpenGlasses/Sources/Services/RAG/Embedder.swift) seam, [`DocumentStore`](../../OpenGlasses/Sources/Services/RAG/DocumentStore.swift) (Plan [O](O-document-rag.md)/[P](P-chunk-citations.md)), and [`SemanticMemoryStore`](../../OpenGlasses/Sources/Services/SemanticMemoryStore.swift). This is a **quality upgrade to existing features**, not a new capability.
 
