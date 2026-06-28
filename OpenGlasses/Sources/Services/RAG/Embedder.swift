@@ -32,6 +32,17 @@ struct Embedder {
     /// Vector dimension produced by this instance, or 0 if no model is available.
     var dimension: Int { sentenceEmbedding?.dimension ?? wordEmbedding?.dimension ?? 0 }
 
+    /// Stable id for the model backing this instance — `nl-sentence.<lang>` when the sentence model is
+    /// present, else `nl-word.<lang>`. Used to stamp persisted vectors so a later model swap re-embeds
+    /// rather than silently comparing across embedding spaces. See [[EmbeddingVersion]].
+    var modelId: String {
+        let backend = usesSentenceModel ? "nl-sentence" : "nl-word"
+        return "\(backend).\(language.rawValue)"
+    }
+
+    /// The version stamp (model id + dimension) for vectors this instance produces.
+    var version: EmbeddingVersion { EmbeddingVersion(modelId: modelId, dim: dimension) }
+
     /// Embed text into a vector, or nil if the model can't represent it (or none is available).
     /// Never mixes models: sentence-backed instances return sentence vectors (or nil), word-backed
     /// instances return word-average vectors (or nil).

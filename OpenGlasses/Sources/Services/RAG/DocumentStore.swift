@@ -82,10 +82,12 @@ final class DocumentStore: ObservableObject {
         insertDocument(id: docId, name: safeName, sourceType: sourceType, namespace: namespace,
                        createdAt: now, chunkCount: chunks.count, charCount: cleaned.count)
 
+        let versionTag = embedder.version.tag
         for chunk in chunks {
             let embedding = embedder.embed(chunk.text)
             insertChunk(documentId: docId, index: chunk.index, text: chunk.text,
-                        embedding: embedding.map(vecToData), page: chunk.page, section: chunk.section, createdAt: now)
+                        embedding: embedding.map(vecToData), page: chunk.page, section: chunk.section,
+                        createdAt: now, version: embedding != nil ? versionTag : nil)
             progress?(chunk.index + 1, chunks.count)
             await Task.yield()
         }
@@ -101,9 +103,26 @@ final class DocumentStore: ObservableObject {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, let qv = embedder.embed(trimmed) else { return [] }
 
+        let current = embedder.version
         let rows = fetchChunks(namespace: namespace, documentIds: documentIds)
         let scored = rows.compactMap { row -> Passage? in
-            guard let emb = row.embedding else { return nil }
+            // A chunk embedded by a different model can't be compared against `qv`. Re-embed it from
+            // its text with the active model and persist the result, so the store self-heals after a
+            // model swap (lazy migration). Compatible chunks use their stored vector as-is.
+            let stored = EmbeddingVersion(tag: row.embeddingVersion)
+            let vec: [Float]?
+            switch EmbeddingMigrationPolicy.action(stored: stored, current: current) {
+            case .reuse:
+                vec = row.embedding
+            case .reembed:
+                if let fresh = embedder.embed(row.text) {
+                    writeBackEmbedding(chunkId: row.id, vector: fresh, versionTag: current.tag)
+                    vec = fresh
+                } else {
+                    vec = nil
+                }
+            }
+            guard let emb = vec else { return nil }
             let sim = Embedder.cosineSimilarity(qv, emb)
             guard sim > minSimilarity else { return nil }
             return Passage(documentId: row.documentId, documentName: row.documentName,
@@ -147,6 +166,65 @@ final class DocumentStore: ObservableObject {
         NSLog("[DocumentStore] Cleared all documents")
     }
 
+    // MARK: - Embedding migration
+
+    /// The version stamp the active embedder produces. Chunks tagged differently are "outdated" and
+    /// will be re-embedded on access (or eagerly via `reindexOutdated`).
+    var currentEmbeddingVersionTag: String { embedder.version.tag }
+
+    /// How many stored chunks were embedded by a model other than the active one (or are unstamped).
+    /// Drives a "re-index now" affordance and lets tests assert migration progress.
+    var outdatedChunkCount: Int {
+        let current = embedder.version
+        return fetchChunks(namespace: nil, documentIds: nil).reduce(0) { acc, row in
+            row.embedding == nil ? acc
+                : EmbeddingMigrationPolicy.action(stored: EmbeddingVersion(tag: row.embeddingVersion),
+                                                  current: current) == .reembed ? acc + 1 : acc
+        }
+    }
+
+    /// Eagerly re-embed every chunk whose stamp doesn't match the active model and persist the result.
+    /// Use after a deliberate model change for an explicit "re-index now" with progress. Returns the
+    /// number of chunks re-embedded. Yields between chunks so a large re-index doesn't block.
+    @discardableResult
+    func reindexOutdated(progress: ((Int, Int) -> Void)? = nil) async -> Int {
+        let current = embedder.version
+        let rows = fetchChunks(namespace: nil, documentIds: nil)
+            .filter { $0.embedding != nil &&
+                EmbeddingMigrationPolicy.action(stored: EmbeddingVersion(tag: $0.embeddingVersion),
+                                                current: current) == .reembed }
+        var done = 0
+        for row in rows {
+            if let fresh = embedder.embed(row.text) {
+                writeBackEmbedding(chunkId: row.id, vector: fresh, versionTag: current.tag)
+            }
+            done += 1
+            progress?(done, rows.count)
+            await Task.yield()
+        }
+        if done > 0 { NSLog("[DocumentStore] Re-embedded %d outdated chunk(s) → %@", done, current.tag) }
+        return done
+    }
+
+    /// Force every chunk to be treated as outdated (clears the stamp) so the next query/reindex
+    /// re-embeds it. The honest way to invalidate vectors after changing the embedding model.
+    func invalidateEmbeddings() {
+        exec("UPDATE doc_chunks SET embedding_version = NULL")
+    }
+
+    /// Persist a freshly-computed vector + stamp for one chunk (lazy-migration write-back).
+    private func writeBackEmbedding(chunkId: String, vector: [Float], versionTag: String) {
+        let sql = "UPDATE doc_chunks SET embedding = ?, embedding_version = ? WHERE id = ?"
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+        defer { sqlite3_finalize(stmt) }
+        let data = vecToData(vector)
+        _ = data.withUnsafeBytes { sqlite3_bind_blob(stmt, 1, $0.baseAddress, Int32(data.count), SQLITE_TRANSIENT) }
+        sqlite3_bind_text(stmt, 2, versionTag, -1, SQLITE_TRANSIENT)
+        sqlite3_bind_text(stmt, 3, chunkId, -1, SQLITE_TRANSIENT)
+        _ = sqlite3_step(stmt)
+    }
+
     // MARK: - SQLite setup
 
     private func openDatabase() {
@@ -185,6 +263,16 @@ final class DocumentStore: ObservableObject {
         // ALTER fails harmlessly if the column already exists; exec swallows the error.
         exec("ALTER TABLE doc_chunks ADD COLUMN page INTEGER")
         exec("ALTER TABLE doc_chunks ADD COLUMN section TEXT")
+        // Embedding version stamp (see [[EmbeddingVersion]]) — lets a later model swap re-embed rather
+        // than silently compare across embedding spaces.
+        exec("ALTER TABLE doc_chunks ADD COLUMN embedding_version TEXT")
+        // One-time backfill: rows ingested before the stamp were produced by the *current* model (this
+        // migration doesn't change the model), so tag them as current — no re-embed needed. A genuine
+        // model change later is what flips these to outdated. Only when a usable model is present.
+        if embedder.dimension > 0 {
+            exec("UPDATE doc_chunks SET embedding_version = '\(escapedSQL(embedder.version.tag))' "
+                 + "WHERE embedding_version IS NULL AND embedding IS NOT NULL")
+        }
         exec("CREATE INDEX IF NOT EXISTS idx_chunk_doc ON doc_chunks(document_id)")
         exec("CREATE INDEX IF NOT EXISTS idx_doc_ns ON documents(namespace)")
     }
@@ -208,8 +296,8 @@ final class DocumentStore: ObservableObject {
     }
 
     private func insertChunk(documentId: String, index: Int, text: String, embedding: Data?,
-                             page: Int?, section: String?, createdAt: Double) {
-        let sql = "INSERT INTO doc_chunks (id, document_id, chunk_index, text, embedding, page, section, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+                             page: Int?, section: String?, createdAt: Double, version: String?) {
+        let sql = "INSERT INTO doc_chunks (id, document_id, chunk_index, text, embedding, page, section, created_at, embedding_version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
         defer { sqlite3_finalize(stmt) }
@@ -225,12 +313,15 @@ final class DocumentStore: ObservableObject {
         if let page { sqlite3_bind_int(stmt, 6, Int32(page)) } else { sqlite3_bind_null(stmt, 6) }
         if let section { sqlite3_bind_text(stmt, 7, section, -1, SQLITE_TRANSIENT) } else { sqlite3_bind_null(stmt, 7) }
         sqlite3_bind_double(stmt, 8, createdAt)
+        // Only stamp a version when there is actually an embedding to tag.
+        if let version, embedding != nil { sqlite3_bind_text(stmt, 9, version, -1, SQLITE_TRANSIENT) } else { sqlite3_bind_null(stmt, 9) }
         _ = sqlite3_step(stmt)
     }
 
     // MARK: - Fetches
 
     private struct ChunkRow {
+        let id: String
         let documentId: String
         let documentName: String
         let chunkIndex: Int
@@ -238,11 +329,12 @@ final class DocumentStore: ObservableObject {
         let embedding: [Float]?
         let page: Int?
         let section: String?
+        let embeddingVersion: String?
     }
 
     private func fetchChunks(namespace: String?, documentIds: [String]?) -> [ChunkRow] {
         var sql = """
-        SELECT c.document_id, d.name, c.chunk_index, c.text, c.embedding, c.page, c.section
+        SELECT c.id, c.document_id, d.name, c.chunk_index, c.text, c.embedding, c.page, c.section, c.embedding_version
         FROM doc_chunks c JOIN documents d ON c.document_id = d.id
         """
         var clauses: [String] = []
@@ -258,19 +350,21 @@ final class DocumentStore: ObservableObject {
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return rows }
         defer { sqlite3_finalize(stmt) }
         while sqlite3_step(stmt) == SQLITE_ROW {
-            let docId = String(cString: sqlite3_column_text(stmt, 0))
-            let name = String(cString: sqlite3_column_text(stmt, 1))
-            let idx = Int(sqlite3_column_int(stmt, 2))
-            let text = String(cString: sqlite3_column_text(stmt, 3))
+            let id = String(cString: sqlite3_column_text(stmt, 0))
+            let docId = String(cString: sqlite3_column_text(stmt, 1))
+            let name = String(cString: sqlite3_column_text(stmt, 2))
+            let idx = Int(sqlite3_column_int(stmt, 3))
+            let text = String(cString: sqlite3_column_text(stmt, 4))
             var emb: [Float]? = nil
-            if sqlite3_column_type(stmt, 4) != SQLITE_NULL, let ptr = sqlite3_column_blob(stmt, 4) {
-                let len = sqlite3_column_bytes(stmt, 4)
+            if sqlite3_column_type(stmt, 5) != SQLITE_NULL, let ptr = sqlite3_column_blob(stmt, 5) {
+                let len = sqlite3_column_bytes(stmt, 5)
                 emb = dataToVec(Data(bytes: ptr, count: Int(len)))
             }
-            let page = sqlite3_column_type(stmt, 5) != SQLITE_NULL ? Int(sqlite3_column_int(stmt, 5)) : nil
-            let section = sqlite3_column_type(stmt, 6) != SQLITE_NULL ? String(cString: sqlite3_column_text(stmt, 6)) : nil
-            rows.append(ChunkRow(documentId: docId, documentName: name, chunkIndex: idx, text: text,
-                                 embedding: emb, page: page, section: section))
+            let page = sqlite3_column_type(stmt, 6) != SQLITE_NULL ? Int(sqlite3_column_int(stmt, 6)) : nil
+            let section = sqlite3_column_type(stmt, 7) != SQLITE_NULL ? String(cString: sqlite3_column_text(stmt, 7)) : nil
+            let version = sqlite3_column_type(stmt, 8) != SQLITE_NULL ? String(cString: sqlite3_column_text(stmt, 8)) : nil
+            rows.append(ChunkRow(id: id, documentId: docId, documentName: name, chunkIndex: idx, text: text,
+                                 embedding: emb, page: page, section: section, embeddingVersion: version))
         }
         return rows
     }
