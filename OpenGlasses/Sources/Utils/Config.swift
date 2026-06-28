@@ -2487,10 +2487,13 @@ struct Config {
     // MARK: - Project Memory
 
     /// When `true`, notes scoped to the active Field Assist job (see [[ProjectMemory]]) are injected
-    /// into the prompt while that job is active. Default **off** — additive context, gated so the
-    /// prompt is unchanged until switched on. Naturally empty when no job is active or no notes exist.
+    /// into the prompt while that job is active. **Default on** (beta) — purely additive context that
+    /// only appears with an active job and saved notes; without it, `project_note` would save notes
+    /// that never surface. Flag is the kill-switch.
     static var projectMemoryEnabled: Bool {
-        UserDefaults.standard.bool(forKey: "projectMemoryEnabled")   // defaults to false
+        let key = "projectMemoryEnabled"
+        if UserDefaults.standard.object(forKey: key) == nil { return true }
+        return UserDefaults.standard.bool(forKey: key)
     }
 
     static func setProjectMemoryEnabled(_ enabled: Bool) {
@@ -2501,10 +2504,13 @@ struct Config {
 
     /// When `true`, the shared-memory injection passes the current turn as a query to
     /// `SemanticMemoryStore.systemPromptContext(query:)`, so only the facts relevant to the turn are
-    /// injected (its existing top-8 semantic search) instead of dumping every fact. Default **off**;
-    /// when off the call passes `query: nil`, reproducing today's dump-all behaviour exactly.
+    /// injected (its existing top-8 semantic search) instead of dumping every fact. **Default on**
+    /// (beta) — leaner token use; falls back to a full dump when the search returns nothing. Set off
+    /// to restore the unconditional dump.
     static var userMemoryRetrievalEnabled: Bool {
-        UserDefaults.standard.bool(forKey: "userMemoryRetrievalEnabled")   // defaults to false
+        let key = "userMemoryRetrievalEnabled"
+        if UserDefaults.standard.object(forKey: key) == nil { return true }
+        return UserDefaults.standard.bool(forKey: key)
     }
 
     static func setUserMemoryRetrievalEnabled(_ enabled: Bool) {
