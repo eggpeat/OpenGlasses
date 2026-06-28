@@ -2517,6 +2517,21 @@ struct Config {
         UserDefaults.standard.set(enabled, forKey: "userMemoryRetrievalEnabled")
     }
 
+    // MARK: - Contextual Embeddings
+
+    /// When `true`, [[Embedder]] prefers the transformer `NLContextualEmbedding` over the lookup-based
+    /// `NLEmbedding` for semantic search (sharper RAG + memory retrieval). **Default off** — it downloads
+    /// an OTA asset on first use and, being a different model, re-embeds stored vectors via the version
+    /// stamp (a one-time cost). Until the asset is present, `Embedder` transparently falls back to
+    /// `NLEmbedding`, so flipping this on is safe. Enable on-device to validate the quality lift.
+    static var contextualEmbeddingEnabled: Bool {
+        UserDefaults.standard.bool(forKey: "contextualEmbeddingEnabled")   // defaults to false
+    }
+
+    static func setContextualEmbeddingEnabled(_ enabled: Bool) {
+        UserDefaults.standard.set(enabled, forKey: "contextualEmbeddingEnabled")
+    }
+
     // MARK: - Siri "Ask a Question" Behavior
 
     /// When `true`, the Siri "Ask OpenGlasses a question" intent brings the app to
