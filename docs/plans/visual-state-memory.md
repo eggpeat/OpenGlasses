@@ -1,4 +1,4 @@
-# Plan — Visual State Memory (rolling keyframe scene memory for the live agent)
+# Plan AV — Visual State Memory (rolling keyframe scene memory for the live agent)
 
 **Status:** 📋 Planned (not built). Builds on [Content-Aware Frame Gate](frame-dedup-change-gate.md)
 (its distinct frames are the keyframe source). The buffer + context-builder are pure and

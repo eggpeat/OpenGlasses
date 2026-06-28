@@ -1,4 +1,4 @@
-# Plan — Projects (scoped persona + documents + conversations)
+# Plan AN — Projects (scoped persona + documents + conversations)
 
 **Status: 📋 Planned.**
 

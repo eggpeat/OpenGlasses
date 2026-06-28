@@ -1,4 +1,4 @@
-# Vehicle / EV Status Tool
+# Plan AZ — Vehicle / EV Status Tool
 
 **Status:** ✅ v1 shipped on `feat/vehicle-tool` (Home Assistant path).
 

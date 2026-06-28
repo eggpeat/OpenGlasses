@@ -1,4 +1,4 @@
-# Plan — Skill Self-Evolution (learn new skills from failed turns, with human review)
+# Plan AW — Skill Self-Evolution (learn new skills from failed turns, with human review)
 
 **Status:** 📋 Planned (not built). The largest of these four plans and the most
 safety-sensitive. **Agent-Mode-gated** and **human-in-the-loop by design** — the loop *proposes*
@@ -114,11 +114,12 @@ the decisions that matter (when to evolve, is it a dup, is it well-formed) are p
 
 ## Companion: embedding-based skill retrieval
 
-**Status: 🚧 core shipped on `feat/skill-retrieval` (ahead of the rest of this plan).** The pure
-`SkillRetriever` + `SkillCandidate`, `for turn:` overloads on both skill stores, the three
-`Config.skillRetrieval*` flags (default off), and the `turn`-threading into `LLMService` are built and
-tested. The evolution loop above is still 📋 Planned; retrieval shipped first because it stands alone
-and fixes a bloat issue that exists today.
+**Status: ✅ shipped ([#127](https://github.com/straff2002/OpenGlasses/pull/127), default-on
+[#129](https://github.com/straff2002/OpenGlasses/pull/129)).** The pure `SkillRetriever` +
+`SkillCandidate`, `for turn:` overloads on both skill stores, the three `Config.skillRetrieval*` flags
+(now default on for beta), and the `turn`-threading into `LLMService` are built, tested, and merged.
+The evolution loop above is still 📋 Planned; retrieval shipped first because it stands alone and fixes
+a bloat issue that exists today.
 
 Evolution has a tail problem. Every approved skill is injected into **every** system prompt, because
 both skill stores dump their whole library unconditionally today:

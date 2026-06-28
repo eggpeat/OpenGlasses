@@ -1,4 +1,4 @@
-# Plan — Gateway Device Pairing (setup-code → approval → per-device token)
+# Plan AR — Gateway Device Pairing (setup-code → approval → per-device token)
 
 **Status:** 🚧 Core shipped ([#116](https://github.com/straff2002/OpenGlasses/pull/116)). The
 deterministic core (setup-code parse/encode, auth-mode selection, response → pairing-state

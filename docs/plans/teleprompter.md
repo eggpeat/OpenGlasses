@@ -1,4 +1,4 @@
-# Plan — Teleprompter (audio-paced HUD script)
+# Plan AG — Teleprompter (audio-paced HUD script)
 
 **Status:** ✅ Built (Phases 1–4). Pure core (PR #95), audio-paced live mode + ingestion
 (tool/Settings/store/App-Intent/paste, PR #96), Share Extension (PR #98), and vision/OCR

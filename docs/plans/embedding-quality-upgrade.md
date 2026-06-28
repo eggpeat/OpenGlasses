@@ -1,4 +1,4 @@
-# Plan — Embedding Quality Upgrade (better RAG & memory retrieval)
+# Plan AM — Embedding Quality Upgrade (better RAG & memory retrieval)
 
 **Status: 📋 Planned.**
 

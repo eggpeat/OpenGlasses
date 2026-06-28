@@ -1,4 +1,4 @@
-# Plan — Audio-Session Lease Coordinator (single owner of the shared `AVAudioSession`)
+# Plan AS — Audio-Session Lease Coordinator (single owner of the shared `AVAudioSession`)
 
 **Status:** 🚧 Foundation + all exclusive owners + coexisting riders shipped. The deterministic
 `AudioSessionLedger` core is headless-tested; the live `AudioSessionCoordinator` seam is in place and

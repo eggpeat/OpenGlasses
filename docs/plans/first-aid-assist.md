@@ -1,4 +1,4 @@
-# Plan — First-Aid / Emergency Assist
+# Plan AA — First-Aid / Emergency Assist
 
 **Status: ✅ shipped (on-device behaviour device-pending).** Runs on the engines we already ship.
 Accessibility/Medical-tier, life-safety. The tested core is in

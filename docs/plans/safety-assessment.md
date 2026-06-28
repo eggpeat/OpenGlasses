@@ -1,4 +1,4 @@
-# Plan — Safety Assessment (High-Energy Control Assessment)
+# Plan AC — Safety Assessment (High-Energy Control Assessment)
 
 **Status: ✅ Shipped (PR 1–3) on the structured-vision substrate.**
 Plan refined 2026-06-18 (structured-output + catalog); built 2026-06-19 across three PRs on the

@@ -1,4 +1,4 @@
-# Plan — Memory, Recall & Self-Improvement (the closed learning loop)
+# Plan AY — Memory, Recall & Self-Improvement (the closed learning loop)
 
 **Status:** ✅ Shipped (Phases 1–4) on `main`. Phase 1 pure core (FTS index, query builder,
 nudge/skill analyzers, insights aggregator, PR #100); Phase 2 cross-session recall

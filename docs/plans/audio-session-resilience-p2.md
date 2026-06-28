@@ -1,4 +1,4 @@
-# Plan — Audio-Session Resilience P2 (self-healing realtime audio: interruptions, route changes, Bluetooth input)
+# Plan AP — Audio-Session Resilience P2 (self-healing realtime audio: interruptions, route changes, Bluetooth input)
 
 **Status:** 🚧 Core shipped (this branch). Follow-up to [Audio-Session Resilience](audio-session-resilience.md)
 (#114). Pure `AudioInterruptionPolicy` + `AudioRoutePolicy` + both realtime managers reworked

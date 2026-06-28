@@ -1,10 +1,14 @@
-# Plan — Typed Memory Taxonomy (project-scoped recall + relevance over the existing stores)
+# Plan AX — Typed Memory Taxonomy (project-scoped recall + relevance over the existing stores)
 
-**Status:** 📋 Planned (not built). **Re-scoped after auditing the code** — most of what an earlier
-draft proposed already exists, so this plan now targets only the genuine gaps. The classifier and the
-selection logic are pure and headless-testable; the wiring into the prompt builder is the live edge.
-**Zero LLM calls** (pattern-based, precision-over-recall, mirroring `BrainRelationExtractor`). No new
-SPM dependency. Strictly on-device.
+**Status: 🚧 Core shipped ([#128](https://github.com/straff2002/OpenGlasses/pull/128)).** **Re-scoped
+after auditing the code** — most of what an earlier draft proposed already exists, so this plan targets
+only the genuine gaps. Shipped in #128: **project-scoped memory** (`ProjectMemory` +
+`ProjectMemoryScope`/`ProjectMemoryFormatter` + `project_memory` table on `BrainStore` + `project_note`
+tool + flag-gated injection) and **relevance retrieval** (threading the turn into
+`SemanticMemoryStore.systemPromptContext(query:)` at all call sites); both default-on for beta. The
+audit also retired the dead `UserMemoryStore` (its only live replacement is `SemanticMemoryStore`).
+Deterministic cores are pure and tested; **zero LLM calls**. Still planned: an optional `project` kind
+classifier and unifying the two fact stores. No new SPM dependency. Strictly on-device.
 
 ## What already exists (and why the original plan shrank)
 An audit of the memory subsystem found three of the four "kinds" already modelled, plus the
