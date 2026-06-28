@@ -1,20 +1,26 @@
 # Plan AM — Embedding Quality Upgrade (better RAG & memory retrieval)
 
-**Status: 🚧 Substrate ✅ (PR A, [#130](https://github.com/straff2002/OpenGlasses/pull/130)); model swap shipping (PR B).**
-- **PR A (merged):** version-stamp + migration substrate (steps 1–2) — pure `EmbeddingVersion` +
-  `EmbeddingMigrationPolicy` + `Embedder.version`; `DocumentStore` stamps chunks, backfills legacy
-  rows, self-heals (lazy re-embed on query + eager `reindexOutdated()` + `invalidateEmbeddings()`).
-- **PR B (this):** the `Embedder` strategy seam (steps 3 + 5) — `EmbeddingBackend` protocol with
-  `NLEmbeddingBackend` (baseline) and `NLContextualBackend` (transformer `NLContextualEmbedding`,
-  mean-pooled token vectors, process-wide cache + OTA asset prep). `Embedder` now prefers contextual
-  when `Config.contextualEmbeddingEnabled` and the asset is on-device, else falls back transparently.
-  Pure `EmbeddingBenchmark` (recall@k / MRR + a built-in smoke corpus) to pick the default from
-  evidence. Default **off** (the asset downloads OTA and a different model re-embeds stored vectors via
-  the stamp — one-time). DocumentStore/RAG + skill retrieval get the lift automatically (they use the
-  `Embedder` seam).
-- **PR C (remaining, step 4):** route `SemanticMemoryStore` through the same seam (it still uses its
-  own word-average `NLEmbedding`), with its own stamp + migration — upgrades the memory recall path
-  and the relevance retrieval enabled in #128.
+**Status: ✅ Code-complete across three PRs** (model-quality validation is on-device, gated behind a
+default-off flag — the deferred edge).
+- **PR A ([#130](https://github.com/straff2002/OpenGlasses/pull/130), merged):** version-stamp +
+  migration substrate (steps 1–2) — pure `EmbeddingVersion` + `EmbeddingMigrationPolicy` +
+  `Embedder.version`; `DocumentStore` stamps chunks, backfills legacy rows, self-heals (lazy re-embed
+  on query + eager `reindexOutdated()` + `invalidateEmbeddings()`).
+- **PR B ([#131](https://github.com/straff2002/OpenGlasses/pull/131), merged):** the `Embedder`
+  strategy seam (steps 3 + 5) — `EmbeddingBackend` protocol with `NLEmbeddingBackend` (baseline) and
+  `NLContextualBackend` (transformer `NLContextualEmbedding`, mean-pooled token vectors, process-wide
+  cache + OTA asset prep). `Embedder` prefers contextual when `Config.contextualEmbeddingEnabled` and
+  the asset is on-device, else falls back transparently. Pure `EmbeddingBenchmark` (recall@k / MRR +
+  smoke corpus). Default **off**. DocumentStore/RAG + skill retrieval get the lift automatically.
+- **PR C (this, step 4):** route `SemanticMemoryStore` through the same seam — its raw word-average
+  `NLEmbedding` (the weakest path, backing recall + the relevance retrieval from #128) is gone;
+  `embed()` delegates to `Embedder`. `memories` + `diary` carry a stamp (not backfilled — old vectors
+  are word-average, so they re-embed on next search); `semanticSearch`/`relevantDiary` self-heal.
+
+**Remaining (device-only):** enable `contextualEmbeddingEnabled` on a device, let the OTA asset
+download, and read `EmbeddingBenchmark` recall@k to confirm the lift before flipping the default on.
+An optional bundled MiniLM Core ML path (build-order step 6) stays deferred unless the benchmark shows
+`NLContextualEmbedding` isn't enough.
 
 **Builds on:** the [`Embedder`](../../OpenGlasses/Sources/Services/RAG/Embedder.swift) seam, [`DocumentStore`](../../OpenGlasses/Sources/Services/RAG/DocumentStore.swift) (Plan [O](O-document-rag.md)/[P](P-chunk-citations.md)), and [`SemanticMemoryStore`](../../OpenGlasses/Sources/Services/SemanticMemoryStore.swift). This is a **quality upgrade to existing features**, not a new capability.
 
