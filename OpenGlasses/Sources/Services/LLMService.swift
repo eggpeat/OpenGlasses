@@ -169,7 +169,7 @@ class LLMService: ObservableObject {
     /// Build the full system prompt, optionally including location, tools, memory, and vision context.
     /// When `promptSections` is provided (from the ConversationClassifier), irrelevant sections are
     /// stripped to reduce token count. When nil, all sections are included (backward compatible).
-    private static func buildSystemPrompt(locationContext: String?, includeTools: Bool, includeOpenClaw: Bool, hasImage: Bool, nativeToolNames: [String] = [], gatewayToolNames: [String] = [], memoryContext: String? = nil, agentContext: String? = nil, playbookContext: String? = nil, nowPlayingContext: String? = nil, shortcutsContext: String? = nil, promptSections: ConversationClassifier.PromptSections? = nil) async -> String {
+    private static func buildSystemPrompt(locationContext: String?, includeTools: Bool, includeOpenClaw: Bool, hasImage: Bool, nativeToolNames: [String] = [], gatewayToolNames: [String] = [], memoryContext: String? = nil, agentContext: String? = nil, playbookContext: String? = nil, nowPlayingContext: String? = nil, shortcutsContext: String? = nil, promptSections: ConversationClassifier.PromptSections? = nil, turn: String? = nil) async -> String {
         // Agent personality mode: soul.md + skills.md + memory.md replace the standard prompt
         var prompt: String
         if Config.agentModeEnabled, let agentContext, !agentContext.isEmpty {
@@ -409,7 +409,7 @@ class LLMService: ObservableObject {
             prompt += "\n\n\(nowPlaying)"
         }
         // Inject voice-taught skills
-        if shouldInclude(.tools), let skills = VoiceSkillStore.shared.promptContext() {
+        if shouldInclude(.tools), let skills = VoiceSkillStore.shared.promptContext(for: turn) {
             prompt += "\n\n\(skills)"
         }
         // Inject Field Assist vault content when a session is active.
@@ -422,7 +422,7 @@ class LLMService: ObservableObject {
             prompt += "\n\n\(social)"
         }
         // Inject installed ClawHub skills
-        if shouldInclude(.openClaw), let skillContext = InstalledSkillStore.shared.promptContext() {
+        if shouldInclude(.openClaw), let skillContext = InstalledSkillStore.shared.promptContext(for: turn) {
             prompt += "\n\n\(skillContext)"
         }
         // Always append the prompt-injection / untrusted-content policy. This is a security
@@ -467,7 +467,7 @@ class LLMService: ObservableObject {
         let includeTools = hasNativeTools || includeOpenClaw
         let nativeToolNames = nativeToolRouter?.registry.toolNames ?? []
         let gatewayToolNames = openClawBridge?.availableToolNames ?? []
-        let fullPrompt = await Self.buildSystemPrompt(locationContext: locationContext, includeTools: includeTools, includeOpenClaw: includeOpenClaw, hasImage: imageData != nil, nativeToolNames: nativeToolNames, gatewayToolNames: gatewayToolNames, memoryContext: memoryContext, agentContext: agentContext, playbookContext: playbookContext, nowPlayingContext: nowPlayingContext, shortcutsContext: shortcutsContext, promptSections: promptSections)
+        let fullPrompt = await Self.buildSystemPrompt(locationContext: locationContext, includeTools: includeTools, includeOpenClaw: includeOpenClaw, hasImage: imageData != nil, nativeToolNames: nativeToolNames, gatewayToolNames: gatewayToolNames, memoryContext: memoryContext, agentContext: agentContext, playbookContext: playbookContext, nowPlayingContext: nowPlayingContext, shortcutsContext: shortcutsContext, promptSections: promptSections, turn: text)
 
         var toolsLabel = ""
         if hasNativeTools { toolsLabel += " [NativeTools]" }
@@ -2092,7 +2092,8 @@ class LLMService: ObservableObject {
             includeOpenClaw: false,
             hasImage: false,
             nativeToolNames: nativeToolNames,
-            memoryContext: memoryContext
+            memoryContext: memoryContext,
+            turn: text
         )
 
         // If a cloud model config is selected as the agent, route through it

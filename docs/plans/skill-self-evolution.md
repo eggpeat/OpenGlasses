@@ -114,6 +114,12 @@ the decisions that matter (when to evolve, is it a dup, is it well-formed) are p
 
 ## Companion: embedding-based skill retrieval
 
+**Status: 🚧 core shipped on `feat/skill-retrieval` (ahead of the rest of this plan).** The pure
+`SkillRetriever` + `SkillCandidate`, `for turn:` overloads on both skill stores, the three
+`Config.skillRetrieval*` flags (default off), and the `turn`-threading into `LLMService` are built and
+tested. The evolution loop above is still 📋 Planned; retrieval shipped first because it stands alone
+and fixes a bloat issue that exists today.
+
 Evolution has a tail problem. Every approved skill is injected into **every** system prompt, because
 both skill stores dump their whole library unconditionally today:
 - `VoiceSkillStore.promptContext()` emits a `LEARNED SKILLS` block listing *all* voice skills.

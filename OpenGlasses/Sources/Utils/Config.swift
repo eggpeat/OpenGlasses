@@ -2453,6 +2453,34 @@ struct Config {
         UserDefaults.standard.set(enabled, forKey: "userMemoryEnabled")
     }
 
+    // MARK: - Skill Retrieval
+
+    /// When `true`, the skill stores inject only the skills relevant to the current turn (exact
+    /// trigger matches + top-K by embedding similarity) instead of dumping the whole library.
+    /// Default **off** — dump-all is the current behaviour and is fine for a small library; retrieval
+    /// only earns its keep once the bank grows (e.g. via Skill Self-Evolution). See [[SkillRetriever]].
+    static var skillRetrievalEnabled: Bool {
+        UserDefaults.standard.bool(forKey: "skillRetrievalEnabled")   // defaults to false
+    }
+
+    static func setSkillRetrievalEnabled(_ enabled: Bool) {
+        UserDefaults.standard.set(enabled, forKey: "skillRetrievalEnabled")
+    }
+
+    /// Soft budget: how many skills to inject when retrieval is on (exact trigger matches are always
+    /// kept and may exceed this). Falls back to a sensible default when unset.
+    static var skillRetrievalTopK: Int {
+        let v = UserDefaults.standard.integer(forKey: "skillRetrievalTopK")
+        return v > 0 ? v : 6
+    }
+
+    /// Floor below which retrieval is a no-op (dumping a handful is cheaper than ranking them).
+    static var skillRetrievalMinCount: Int {
+        let key = "skillRetrievalMinCount"
+        if UserDefaults.standard.object(forKey: key) == nil { return 8 }
+        return UserDefaults.standard.integer(forKey: key)
+    }
+
     // MARK: - Siri "Ask a Question" Behavior
 
     /// When `true`, the Siri "Ask OpenGlasses a question" intent brings the app to

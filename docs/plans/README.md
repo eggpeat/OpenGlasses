@@ -183,11 +183,12 @@ prompt-injection edge behind a default-off flag. 📋 Planned.
 
 | Plan | Title | Effort | Reuses | Strategic fit |
 |---|---|---|---|---|
-| [Typed Memory Taxonomy](memory-taxonomy.md) | Type memories as preference / project / episodic / semantic; recall each kind on its own terms (preferences always, project while active, semantic by relevance, episodic by recency) | ~3–4 days | BrainStore (`ingest`, `brain.sqlite`), Embedder, FieldSessionService, LLMService prompt builder | Closes the "no typed long-term memory" gap — the assistant remembers *how you like things done* and *what you're mid-way through*, not just facts that happen to match. Pairs with Visual State Memory (episodic) + Embedding Upgrade (semantic). |
+| [Typed Memory Taxonomy](memory-taxonomy.md) | **Re-scoped after a code audit** — most of the taxonomy already exists (`SemanticMemoryStore` facts + relevance retrieval + diary/episodic; `UserMemoryStore` preferences). Now targets only the real gaps: **project-scoped memory** (active-job context) + **relevance retrieval for `UserMemoryStore`** (it still dumps-all) | ~2–3 days | BrainStore (`brain.sqlite`), Embedder, FieldSessionService, SemanticMemoryStore (pattern to mirror) | Holds "what you're mid-way through" as a scoped context and stops the JSON fact store bloating every prompt — without duplicating the stores that already work. |
 
 **Related (folded into Round 10):** embedding-based **skill retrieval** lives in the
 [Skill Self-Evolution](skill-self-evolution.md) plan — it rides the same `Embedder` seam and only earns
-its keep once evolution grows the skill bank.
+its keep once evolution grows the skill bank. 🚧 **Its core shipped first** (`feat/skill-retrieval`):
+`SkillRetriever` + `for turn:` store overloads + default-off `skillRetrieval*` flags.
 
 **Suggested sequence:** independent of Round 10; can land any time. If sequencing with Round 10, do the
 [Embedding Quality Upgrade](embedding-quality-upgrade.md) first so both the taxonomy's semantic recall

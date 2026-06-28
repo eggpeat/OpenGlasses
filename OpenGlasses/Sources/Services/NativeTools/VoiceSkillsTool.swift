@@ -113,8 +113,41 @@ class VoiceSkillStore {
     }
 
     /// Generate the [LEARNED_SKILLS] prompt block for injection into the system prompt.
-    func promptContext() -> String? {
+    ///
+    /// When `turn` is supplied and `Config.skillRetrievalEnabled` is on (and the library is past the
+    /// `skillRetrievalMinCount` floor), only the skills relevant to the turn are injected — exact
+    /// trigger matches plus the top-K by embedding similarity. Otherwise every skill is dumped, the
+    /// original behaviour. See [[SkillRetriever]].
+    func promptContext(for turn: String? = nil) -> String? {
         let skills = all()
+        guard !skills.isEmpty else { return nil }
+        return Self.formatBlock(Self.retrieved(skills, turn: turn))
+    }
+
+    /// Narrow a skill set to those relevant to `turn`, or pass it through unchanged when retrieval is
+    /// off / not applicable. The embedding model is built per-call (skills are few); the ranking
+    /// itself is the pure `SkillRetriever`.
+    private static func retrieved(_ skills: [VoiceSkill], turn: String?) -> [VoiceSkill] {
+        guard Config.skillRetrievalEnabled,
+              let turn, !turn.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return skills }
+        let embedder = Embedder()
+        guard embedder.isAvailable, let turnVec = embedder.embed(turn) else { return skills }
+
+        let candidates = skills.map {
+            SkillCandidate(id: $0.id, trigger: $0.trigger,
+                           matchText: "\($0.trigger) \($0.instruction)", source: .voice)
+        }
+        let selected = SkillRetriever.select(
+            turn: turn, candidates: candidates,
+            similarity: { c in embedder.embed(c.matchText).map { Embedder.cosineSimilarity(turnVec, $0) } ?? 0 },
+            topK: Config.skillRetrievalTopK, minCount: Config.skillRetrievalMinCount
+        )
+        let keepIds = Set(selected.map(\.id))
+        return skills.filter { keepIds.contains($0.id) }
+    }
+
+    private static func formatBlock(_ skills: [VoiceSkill]) -> String? {
         guard !skills.isEmpty else { return nil }
         var block = "\nLEARNED SKILLS (voice-taught by the user — apply automatically when trigger is detected):"
         for skill in skills {

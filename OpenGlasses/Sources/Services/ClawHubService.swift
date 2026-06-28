@@ -604,13 +604,19 @@ class InstalledSkillStore: ObservableObject {
         return items.count
     }
 
-    /// Generate prompt context from all enabled installed skills.
-    func promptContext() -> String? {
+    /// Generate prompt context from the enabled installed skills.
+    ///
+    /// When `turn` is supplied and `Config.skillRetrievalEnabled` is on (and the enabled set is past
+    /// the `skillRetrievalMinCount` floor), only the skills relevant to the turn are injected — an
+    /// exact name match plus the top-K by embedding similarity over name+description. Otherwise every
+    /// enabled skill is dumped, the original behaviour. Each installed skill's body is the full
+    /// `SKILL.md`, so trimming the set is the biggest single prompt-size win. See [[SkillRetriever]].
+    func promptContext(for turn: String? = nil) -> String? {
         let enabled = installedSkills.filter(\.enabled)
         guard !enabled.isEmpty else { return nil }
 
         var context = "INSTALLED SKILLS (from ClawHub):\n"
-        for skill in enabled {
+        for skill in Self.retrieved(enabled, turn: turn) {
             // Strip the YAML frontmatter, keep the markdown body
             let body = stripFrontmatter(skill.content)
             context += "\n--- \(skill.name) ---\n"
@@ -618,6 +624,30 @@ class InstalledSkillStore: ObservableObject {
             context += "\n"
         }
         return context
+    }
+
+    /// Narrow the enabled skills to those relevant to `turn`, or pass them through unchanged when
+    /// retrieval is off / not applicable. Ranks on the compact name+description (not the full body),
+    /// which is what the sentence embedding can meaningfully compare; the ranking is the pure
+    /// `SkillRetriever`.
+    private static func retrieved(_ skills: [InstalledSkill], turn: String?) -> [InstalledSkill] {
+        guard Config.skillRetrievalEnabled,
+              let turn, !turn.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return skills }
+        let embedder = Embedder()
+        guard embedder.isAvailable, let turnVec = embedder.embed(turn) else { return skills }
+
+        let candidates = skills.map {
+            SkillCandidate(id: $0.slug, trigger: $0.name,
+                           matchText: "\($0.name) \($0.description)", source: .installed)
+        }
+        let selected = SkillRetriever.select(
+            turn: turn, candidates: candidates,
+            similarity: { c in embedder.embed(c.matchText).map { Embedder.cosineSimilarity(turnVec, $0) } ?? 0 },
+            topK: Config.skillRetrievalTopK, minCount: Config.skillRetrievalMinCount
+        )
+        let keepSlugs = Set(selected.map(\.id))
+        return skills.filter { keepSlugs.contains($0.slug) }
     }
 
     // MARK: - Persistence

@@ -1,185 +1,147 @@
-# Plan — Typed Memory Taxonomy (episodic / semantic / preference / project recall)
+# Plan — Typed Memory Taxonomy (project-scoped recall + relevance over the existing stores)
 
-**Status:** 📋 Planned (not built). A typed layer over the existing on-device memory stores that adds
-the two memory kinds we don't model today — **preferences** and **project state** — and a
-*differentiated* recall policy so the right kind of memory reaches the prompt for the right reason.
-The classifier, the retrieval policy, and the store round-trip are pure and headless-testable;
-embedding similarity rides the existing `Embedder`. **Zero LLM calls** (pattern-based classification,
-mirroring `BrainRelationExtractor`'s precision-over-recall posture). No new SPM dependency. Strictly
-on-device, never synced to the gateway — same posture as `BrainStore`.
+**Status:** 📋 Planned (not built). **Re-scoped after auditing the code** — most of what an earlier
+draft proposed already exists, so this plan now targets only the genuine gaps. The classifier and the
+selection logic are pure and headless-testable; the wiring into the prompt builder is the live edge.
+**Zero LLM calls** (pattern-based, precision-over-recall, mirroring `BrainRelationExtractor`). No new
+SPM dependency. Strictly on-device.
 
-## The problem
-OpenGlasses already has three memory substrates, but each answers only one shape of question:
-- **`BrainStore`** (`brain.sqlite`) — a relational graph: entities, typed edges ("Alice works_at
-  Acme"), person **encounters**, and follow-up **needs**. Great for "who works at Acme?".
-- **`SemanticMemoryStore`** — flat facts retrieved by vector similarity ("what facts resemble this?").
-- **`DocumentStore`** — passages from loaded files.
+## What already exists (and why the original plan shrank)
+An audit of the memory subsystem found three of the four "kinds" already modelled, plus the
+relevance-retrieval mechanism the first draft proposed to build:
 
-What none of them models is the **kind** of a memory, and two kinds in particular are simply absent:
-- **Preferences** — "I prefer metric units", "always read me the urgent line first", "I take my
-  coffee black". Durable, low-volume, and they should bias *every* turn — but today they'd land as an
-  undifferentiated fact (if at all) and only surface when a query happens to resemble them.
-- **Project state** — "I'm mid-way through the walk-in cooler job at Site 7; compressor swap is next".
-  Ongoing, scoped to an active context, and should clear/yield when the user switches projects.
+- **`SemanticMemoryStore`** (SQLite + embeddings) already holds key→value **facts** with vectors, and
+  `systemPromptContext(query:)` **already relevance-filters** them via `semanticSearch` (top-8 by
+  cosine) — exactly the "differentiated recall" idea. It also has an **agent diary**
+  (`writeDiary` / `relevantDiary(for:)`) which *is* episodic memory, already retrieved by relevance.
+- **`UserMemoryStore`** (JSON) holds the same key→value **facts/preferences**, LLM-managed via
+  `[REMEMBER: key = value]` — but **dumps all of them** into every prompt (char-budgeted, sorted by
+  key); it has **no** relevance retrieval.
+- **`BrainStore`** (graph) holds typed relations, encounters, and needs.
 
-Without a kind dimension, recall is one-size-fits-all: everything competes in the same vector top-k.
-Preferences get out-ranked by a topically-closer fact; project state isn't pinned while a job is
-active; episodic events ("what did I do this morning") aren't retrievable by recency. The fix isn't a
-bigger model — it's **typing** the memory and recalling each kind on its own terms.
+So against the four kinds an earlier draft wanted to introduce:
+
+| Kind | Reality |
+|---|---|
+| **semantic** facts | ✅ already modelled (both stores) |
+| **episodic** | ✅ already exists (the diary, relevance-retrieved) |
+| **preference** | ✅ already captured as facts (LLM-tagged) |
+| **project state (active-scoped)** | ❌ **genuinely missing** — the gap this plan fills |
+
+A standalone `TypedMemoryStore` would therefore largely **duplicate `SemanticMemoryStore`**. Dropped.
+What's actually missing is narrow and concrete.
+
+## The two real gaps
+1. **Project-scoped memory.** Nothing models "what I'm in the middle of" as a first-class, *active-job*
+   memory that's injected while a project is active and yields when it changes. Facts are durable and
+   global; project state is transient and scoped. A field tech mid-way through a walk-in cooler job at
+   Site 7 should have "compressor swap is next" surface while that job is open — and stop competing for
+   prompt space once it's done.
+2. **`UserMemoryStore` still dumps everything.** `SemanticMemoryStore` already retrieves by relevance;
+   `UserMemoryStore.systemPromptContext()` does not. As the user accumulates facts (up to the 3000-char
+   budget), every prompt carries all of them. This is the same bloat the
+   [skill retrieval](skill-self-evolution.md) companion fixes for skills — and the fix is the same
+   shape (embed the turn, keep the relevant, always-keep the cheap/durable ones).
 
 ## What we build
-A typed memory record with a deterministic classifier, a differentiated retrieval policy, and a
-formatter that assembles the per-turn memory block:
+### Gap 1 — Project-scoped memory (pure core + thin store extension)
+- **`ProjectMemory`** — `{ id, projectTag, text, createdAt }`. A note scoped to a project/job.
+- **`ProjectMemoryScope`** (pure) — given `(records, activeProject)` returns the records eligible for
+  injection: those whose `projectTag` matches the active project (and none when no project is active).
+  Pure, trivially tested.
+- **`ProjectMemoryFormatter`** (pure) — eligible records → a `# Current project` block. Empty → "".
+- Persistence rides `BrainStore`'s `brain.sqlite` (one un-synced on-device DB) via a small
+  `project_memory` table — no new store class, no new file, no gateway exposure.
+- **Active project** comes from `FieldSessionService` (an active job session); when none is active the
+  block is empty. An explicit "I'm working on X" can seed a record via the classifier (below).
 
-1. **Classify** incoming text (the same text `BrainStore.ingest` already sees) into one of four kinds —
-   `preference`, `project`, `episodic`, `semantic` — by pattern, no LLM.
-2. **Store** it as a typed `MemoryRecord` with salience + timestamps, alongside (not replacing) the
-   graph edges the brain already extracts.
-3. **Recall** per-kind when building the prompt: **always** inject preferences (capped), inject the
-   **active project's** state, inject the top-k **semantic** facts by embedding similarity to the
-   turn, and the most **recent episodic** events — each with its own budget.
-4. **Decay/scope**: episodic ages out; preferences persist; project state is scoped to a project tag
-   and yields when the active project changes.
+### Gap 2 — Relevance retrieval for `UserMemoryStore`
+- Bring `UserMemoryStore` up to the behaviour `SemanticMemoryStore` already has: a `for turn:`
+  overload on `systemPromptContext` that, when `Config.userMemoryRetrievalEnabled` is on and the set is
+  past a floor, injects only the facts relevant to the turn (embedding similarity over `key + value`),
+  always keeping the shortest/most-durable few. Reuses the same `Embedder` seam and the same
+  selection shape as `SkillRetriever` — consider a shared pure ranker so memory and skills don't carry
+  two copies of the logic.
+- Default **off**; below the floor it dumps all (today's behaviour, unchanged).
 
-### The deterministic core (pure, tested)
-- **`MemoryRecord`** — `{ id, kind, text, subject?, projectTag?, salience, createdAt, lastAccessedAt }`.
-  `kind ∈ {preference, project, episodic, semantic}`. Pure value type.
-- **`MemoryClassifier`** — `classify(_ text:) -> MemoryKind` by cue patterns:
-  - *preference*: first-person durable cues — "I prefer/like/want/always/never/usually", "call me…",
-    "use … units".
-  - *project*: progress/state cues tied to work — "working on", "mid-way", "next step is", "still need
-    to", "on the … job", an active `FieldSessionService` job in scope.
-  - *episodic*: a past event with a time/place — past-tense + temporal marker ("this morning",
-    "yesterday", "at the…"), or a logged encounter.
-  - *semantic*: the default (a durable fact) when nothing else fires.
-  Precision over recall: an unclear line falls to `semantic` (the safe, already-handled bucket).
-- **`MemoryRetrievalPolicy`** — pure ranking. Given `(query, candidates, similarity, budgets, now,
-  activeProject)` returns the selected records: all `preference` up to `maxPreferences`; `project`
-  records for `activeProject`; top-`k` `semantic` by injected cosine similarity; most-recent
-  `episodic` within a recency window. Stable ordering; time + similarity injected so it's
-  deterministic.
-- **`MemoryContextBuilder`** — pure formatter: selected records → a `# What I remember` block with
-  per-kind subheadings (`Preferences`, `Current project`, `Relevant facts`, `Recently`). Empty input
-  → "".
-
-## How it flows (live edge)
-1. `BrainStore.ingest(text:)` already runs on new memory text. A parallel call hands the **same text**
-   to `MemoryClassifier` → a `MemoryRecord` is stored in `TypedMemoryStore`. (The graph edges and the
-   typed record are complementary, not either/or.)
-2. When `LLMService` assembles the system prompt, a new `TypedMemoryStore.promptContext(for: turn)`
-   runs `MemoryRetrievalPolicy` over the candidates (embedding the turn via `Embedder`) and
-   `MemoryContextBuilder` formats the result — injected alongside the existing social/vault/skill
-   blocks.
-3. `lastAccessedAt` is bumped on inject so a salience/decay pass can favour what actually gets used.
-4. Active project comes from `FieldSessionService` (a job session) or an explicit "I'm working on X"
-   classified as `project`; switching projects scopes which `project` records are eligible.
+### Optional glue — a lightweight kind tag (only if it earns its keep)
+- **`MemoryClassifier`** (pure, zero LLM) — `classify(_ text:) -> MemoryKind` where
+  `MemoryKind ∈ {preference, project, episodic, semantic}`, used **only** to route an incoming memory:
+  a `project` cue seeds a `ProjectMemory`; an `episodic` cue could seed the diary; everything else stays
+  a fact. This is routing, not a new store — it adds the *one* dimension the stores don't have, without
+  duplicating them. Build it only if Gap 1's seeding needs it; otherwise the `FieldSessionService`
+  signal is enough.
 
 ## Scope
 In:
-- `Sources/Services/Brain/MemoryRecord.swift`, `MemoryClassifier.swift`, `MemoryRetrievalPolicy.swift`,
-  `MemoryContextBuilder.swift` (pure core).
-- `Sources/Services/Brain/TypedMemoryStore.swift` — SQLite persistence (a `memory_records` table; reuse
-  `brain.sqlite` so it stays one on-device, un-synced DB), `add`, `records(kind:)`,
-  `promptContext(for:)`, salience bump, decay sweep.
-- `BrainStore.ingest` — add the parallel classify-and-store call (cheap, additive).
-- `LLMService` system-prompt builder — inject the typed-memory block (behind a flag; default off
-  reproduces today's behaviour exactly).
-- `Config` — `typedMemoryEnabled` (default off), `memoryMaxPreferences`, `memorySemanticTopK`,
-  `memoryEpisodicWindow`.
+- `Sources/Services/Brain/ProjectMemory.swift`, `ProjectMemoryScope.swift`,
+  `ProjectMemoryFormatter.swift` (pure core) + a `project_memory` table in `BrainStore`.
+- `UserMemoryStore.systemPromptContext(for turn:)` relevance overload + `Config.userMemoryRetrievalEnabled`.
+- `(optional)` `Sources/Services/Brain/MemoryClassifier.swift` for routing only.
+- Prompt wiring: inject the project block (when a job is active) and pass the turn to
+  `UserMemoryStore`, behind default-off flags so today's prompt is reproduced exactly.
 
 Out (deferred):
-- An LLM-based classifier or summariser — start pattern-based; the heuristic is the testable core, and
-  an LLM pass can refine kinds later if the signal warrants it (surfaces in the
-  [cost tracker](llm-cost-usage-tracker.md)).
-- Cross-device sync of typed memory — local-first, like the brain; rides the existing export/import
-  later.
-- Migrating `SemanticMemoryStore`'s existing flat facts into typed records — new memories are typed
-  going forward; a back-fill is a separate follow-up.
-- A user-facing memory editor (review/forget by kind) — read path first; a "Memory" surface in
-  Settings is a fast follow once the kinds prove useful.
+- A standalone `TypedMemoryStore` — **explicitly not building**; it duplicates `SemanticMemoryStore`.
+- Re-typing existing facts/diary entries — new memories route going forward; no back-fill.
+- Consolidating `UserMemoryStore` and `SemanticMemoryStore` into one — they coexist today; unifying
+  them is its own plan, not a prerequisite here.
+- A user-facing memory editor by kind — read path first.
 
 ## Architecture — the seam
 ```swift
-enum MemoryKind: String, Codable { case preference, project, episodic, semantic }
-
-struct MemoryRecord: Identifiable, Equatable {
-    let id: UUID
-    let kind: MemoryKind
-    let text: String
-    let subject: String?        // person/org the memory is about, if any
-    let projectTag: String?     // scopes `project` records to an active job
-    let salience: Double
-    let createdAt: Date
-    var lastAccessedAt: Date
+struct ProjectMemory: Identifiable, Equatable {
+    let id: UUID; let projectTag: String; let text: String; let createdAt: Date
 }
 
-enum MemoryClassifier {                                   // pure; zero LLM
-    static func classify(_ text: String) -> MemoryKind    // defaults to .semantic
+enum ProjectMemoryScope {                              // pure
+    static func eligible(_ records: [ProjectMemory], activeProject: String?) -> [ProjectMemory]
+}
+enum ProjectMemoryFormatter {                          // pure
+    static func block(_ records: [ProjectMemory]) -> String   // "# Current project…" or ""
 }
 
-enum MemoryRetrievalPolicy {                              // pure; similarity + now injected
-    static func select(query: String,
-                       candidates: [MemoryRecord],
-                       similarity: (String) -> Float,     // turn↔record cosine, via Embedder
-                       activeProject: String?,
-                       now: Date,
-                       maxPreferences: Int, semanticTopK: Int, episodicWindow: TimeInterval)
-        -> [MemoryRecord]
-}
-
-enum MemoryContextBuilder {                               // pure formatter
-    static func block(_ records: [MemoryRecord], now: Date) -> String   // "# What I remember…"
-}
+// Gap 2 reuses the SkillRetriever-shaped selection (similarity injected) over user-memory facts,
+// ideally via one shared pure ranker rather than a second copy.
 ```
-`TypedMemoryStore` owns the SQLite table and is the only piece that touches I/O or the `Embedder`; the
-decisions that matter — what kind a memory is, which records to recall, how to present them — are pure
-and fully tested. With `typedMemoryEnabled == false`, the prompt is assembled exactly as today.
+The decisions that matter — which project records are eligible, which facts are relevant — are pure and
+tested; the only live edge is reading the active job and embedding the turn. With both flags off, the
+prompt is assembled exactly as today.
 
 ## Build order
-1. **Pure core + tests** — `MemoryClassifier`, `MemoryRetrievalPolicy`, `MemoryContextBuilder`. Fully
-   deterministic; no store, no embedding model.
-2. **`TypedMemoryStore`** — `memory_records` table in `brain.sqlite` + round-trip / query-by-kind /
-   decay-sweep tests.
-3. **Ingest hook** — classify-and-store alongside `BrainStore.ingest` (additive, cheap).
-4. **Prompt injection** — `promptContext(for:)` wired into `LLMService` behind `typedMemoryEnabled`;
-   embedding the turn via the existing `Embedder`.
-5. **(Fast follow)** salience/decay tuning + an optional Settings "Memory" review surface.
+1. **Pure core + tests** — `ProjectMemoryScope`, `ProjectMemoryFormatter` (and `MemoryClassifier` only
+   if needed). Deterministic; no store, no model.
+2. **`project_memory` table** in `BrainStore` + round-trip / scoping tests.
+3. **Project block wiring** — inject when `FieldSessionService` has an active job, behind a flag.
+4. **`UserMemoryStore` relevance overload** — mirror `SemanticMemoryStore`; ideally factor the ranker
+   shared with `SkillRetriever`.
 
 ## Tests
-- `MemoryClassifier`: preference cues → `.preference`; project/progress cues → `.project`;
-  past-tense + temporal marker → `.episodic`; an ordinary fact → `.semantic`; ambiguous → `.semantic`
-  (never a confident wrong kind).
-- `MemoryRetrievalPolicy.select`: all preferences included up to the cap; only the active project's
-  `project` records pass; semantic results are the top-k by injected similarity; episodic respects the
-  recency window and drops older; stable ordering; empty candidates → empty.
-- `MemoryContextBuilder.block`: empty → ""; per-kind subheadings appear only when that kind has
-  records; relative "Recently" labels computed from injected `now`.
-- `TypedMemoryStore`: add/query-by-kind round-trips; `lastAccessedAt` bumps on recall; decay sweep
-  drops aged episodic but never preferences; project scoping.
+- `ProjectMemoryScope.eligible`: only the active project's records pass; no active project → empty;
+  multiple projects don't bleed.
+- `ProjectMemoryFormatter.block`: empty → ""; formats eligible records under one heading.
+- `UserMemoryStore` retrieval: below floor → all (unchanged); above floor → relevant subset + always
+  the shortest/durable few; empty turn → all.
+- `(if built)` `MemoryClassifier`: project cue → `.project`; preference cue → `.preference`; ambiguous
+  → `.semantic` (never a confident wrong kind).
 
 ## Open questions / decisions needed
-- **Reuse vs. new store** — put `memory_records` in `brain.sqlite` (one un-synced on-device DB, my
-  default) or alongside `SemanticMemoryStore`? Reusing the brain DB keeps the "never synced to the
-  gateway" guarantee in one place.
-- **Classifier reach** — how aggressive the preference/project cues should be. Start narrow
-  (high-precision first-person cues) so the always-injected `preference` bucket can't fill with noise;
-  widen only once the signal proves clean, exactly as `BrainRelationExtractor` was tuned.
-- **Budget split** — how many of each kind to inject before the block competes with the rest of the
-  system prompt. Preferences are few and cheap to always include; semantic top-k and episodic window
-  are the tunable knobs.
-- **Active-project source** — derive solely from `FieldSessionService`, or also from an explicit
-  "I'm working on X" the classifier tags `project`? Probably both, with the session taking precedence.
-- **Decay curve** — does episodic age purely by time, or by time × inverse-access? Keep it simple
-  (time window) first; add access-weighting only if recall feels stale.
+- **Shared ranker.** Gap 2 and `SkillRetriever` want the same "keep exact/durable + top-K by injected
+  similarity" logic. Factor one pure ranker both call, or keep them separate for clarity? Leaning
+  shared, since divergence is the real risk.
+- **Project lifecycle.** Does a project's memory delete on job close, or persist (archived) for "what
+  did I do on the Site 7 job"? Probably archive-not-delete, with only the *active* job injected.
+- **Classifier necessity.** If `FieldSessionService` already names the active job, project seeding may
+  not need a text classifier at all — prefer the explicit signal; add the classifier only if free-text
+  "I'm working on X" capture proves worth it.
+- **Two fact stores.** `UserMemoryStore` (JSON, dump-all) and `SemanticMemoryStore` (SQLite, retrieval)
+  overlap. This plan only teaches the former to retrieve; whether they should merge is a separate call.
 
 ## Why this matters
-It closes the one real gap surfaced by surveying adjacent agent-memory work: the assistant has a graph
-and a vector index but **no typed long-term memory** — so it can't reliably remember *how you like
-things done* or *what you're in the middle of*. Typing the memory and recalling each kind on its own
-terms (preferences always, project while active, semantic by relevance, episodic by recency) is what
-turns "facts that happen to match" into memory that behaves the way a person's would. The hard parts —
-classification, differentiated recall, presentation — land as a pure, fully-tested core with zero LLM
-calls; the only live edge is wiring the block into the prompt behind a default-off flag. Pairs
-naturally with [Visual State Memory](visual-state-memory.md) (its aged keyframe descriptions become
-`episodic` records) and the [Embedding Quality Upgrade](embedding-quality-upgrade.md) (sharper
-semantic recall through the same `Embedder` seam).
+The audit turned a big speculative feature into a small, honest one: the assistant already remembers
+facts, preferences, and past events with relevance — what it *can't* do is hold "what you're in the
+middle of" as a scoped, active context, and its JSON fact store still bloats every prompt. Both gaps
+are real, both land as pure tested cores over stores that already exist, and neither duplicates working
+infrastructure. Pairs with [Visual State Memory](visual-state-memory.md) (aged keyframe descriptions →
+diary/episodic) and the [Embedding Quality Upgrade](embedding-quality-upgrade.md) (sharper similarity
+through the same `Embedder` seam that both gaps use).
