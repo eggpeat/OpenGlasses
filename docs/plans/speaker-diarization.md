@@ -1,4 +1,4 @@
-# Plan — Speaker Diarization (Deepgram "who said what")
+# Plan AQ — Speaker Diarization (Deepgram "who said what")
 
 **Status:** 🚧 Core shipped ([#115](https://github.com/straff2002/OpenGlasses/pull/115)). The
 deterministic core (response parsing, speaker registry, segment merging, PCM conversion, the

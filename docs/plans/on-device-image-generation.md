@@ -1,4 +1,4 @@
-# Plan — On-Device Image Generation (offline create)
+# Plan AL — On-Device Image Generation (offline create)
 
 **Status: 📋 Planned.**
 

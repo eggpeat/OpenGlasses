@@ -1,4 +1,4 @@
-# Plan — Audio-Session Resilience (realtime managers: no force-unwrap, graceful fallback)
+# Plan AO — Audio-Session Resilience (realtime managers: no force-unwrap, graceful fallback)
 
 **Status:** ✅ Shipped ([#114](https://github.com/straff2002/OpenGlasses/pull/114)). Both
 realtime managers hardened via `AudioFormatFactory` / `AudioSessionError` /

@@ -133,6 +133,7 @@ final class NativeToolRegistry {
         // disables them and users see a clear message.
         if Config.fieldAssistActive {
             register(FieldSessionTool())
+            register(ProjectNoteTool())
             register(ProcedureRunnerTool())
             register(CaptureFlowTool())
             register(DomainCalcTool())

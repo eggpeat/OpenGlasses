@@ -362,18 +362,22 @@ final class MedicalComplianceTests: XCTestCase {
         XCTAssertTrue(purgeEntries.isEmpty, "No auto-purge when retention days is 0")
     }
 
-    // MARK: - Cloud Sync Guards (UserMemoryStore)
+    // MARK: - Cloud Sync Guards (SemanticMemoryStore)
 
-    func testUserMemoryStoreBlocksGatewaySyncInHipaaMode() async {
+    func testSemanticMemoryStoreBlocksGatewaySyncInHipaaMode() async {
         Config.hipaaMode = true
-        let memoryStore = UserMemoryStore()
-        // openClawBridge is nil by default, so gateway push is a no-op anyway
-        // The important thing is it doesn't crash and the guard fires
+        let memoryStore = SemanticMemoryStore()
+
+        // Local memory must still work in HIPAA mode (on-device storage is allowed).
         memoryStore.remember("test_key", value: "test_value")
-        // Memory should be stored locally
-        let memories = memoryStore.memories
-        XCTAssertTrue(memories.keys.contains("test_key") || true,
+        XCTAssertTrue(memoryStore.memories.keys.contains("test_key"),
                       "Local memory should still work in HIPAA mode")
+
+        // The PHI guard: pulling from the external gateway is a no-op in HIPAA mode, so the
+        // gateway cache stays empty (even were a bridge connected).
+        await memoryStore.syncFromGateway(query: "anything")
+        XCTAssertTrue(memoryStore.gatewayMemories.isEmpty,
+                      "HIPAA mode must block external gateway memory access")
     }
 
     // MARK: - Medical Export Service

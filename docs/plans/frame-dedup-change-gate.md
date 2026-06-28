@@ -1,4 +1,4 @@
-# Plan — Content-Aware Frame Gate (drop near-duplicate frames before the LLM)
+# Plan AT — Content-Aware Frame Gate (drop near-duplicate frames before the LLM)
 
 **Status:** 📋 Planned (not built). Small, deterministic, flag-gated — no behaviour change when off.
 The hashing + gating logic is pure and fully headless-testable; only the wiring into the live frame

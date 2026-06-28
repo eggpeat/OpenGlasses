@@ -1,4 +1,4 @@
-# Plan — Siri Conversational Intents + Self-Hosted Local Server Polish
+# Plan AF — Siri Conversational Intents + Self-Hosted Local Server Polish
 
 **Status: 🚧 Mostly shipped.** Thread A (Siri persona intent + conversational follow-up +
 snippet) shipped in PRs #93/#94. Thread B/C: **connection-test (#4) + local-server presets

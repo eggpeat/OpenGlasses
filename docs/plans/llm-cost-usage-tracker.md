@@ -1,4 +1,4 @@
-# Plan — LLM Cost & Usage Tracker (per-session/model token + spend)
+# Plan AU — LLM Cost & Usage Tracker (per-session/model token + spend)
 
 **Status:** 📋 Planned (not built). Net-new — OpenGlasses currently tracks **no** API usage or cost.
 Deterministic core (pricing × tokens) is pure and fully headless-testable; the only live wiring is

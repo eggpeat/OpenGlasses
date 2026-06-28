@@ -2,16 +2,17 @@ import Foundation
 import NaturalLanguage
 import SQLite3
 
-/// Semantic memory store — drop-in replacement for UserMemoryStore.
+/// Semantic memory store — the app's persistent user memory (the live `userMemory` instance).
 ///
-/// Upgrades over the flat key-value store:
+/// Supersedes an earlier flat key-value JSON store (whose `user_memories.json` it still migrates on
+/// first run via `migrateFromLegacyJSONIfNeeded`). Upgrades over that flat store:
 /// - SQLite backing with full history (nothing is truly deleted — tombstoned)
 /// - On-device NLEmbedding vectors for semantic search (NLEmbedding, iOS 13+)
 /// - Topics auto-detected from content (health, work, people, places, preferences…)
 /// - Timestamps on every entry; optional expiry
 /// - Agent diary: separate append-only log of agent observations
 ///
-/// Public API is identical to UserMemoryStore so all call sites work unchanged.
+/// Public API mirrors the legacy key-value store it replaced, so all call sites work unchanged.
 /// New capabilities exposed via `semanticSearch()`, `relevantContext()`,
 /// `writeDiary()`, and `readDiary()`.
 @MainActor
@@ -44,7 +45,7 @@ class SemanticMemoryStore: ObservableObject {
         let similarity: Float
     }
 
-    // MARK: - Published (UserMemoryStore compat — in-memory caches)
+    // MARK: - Published (legacy key-value compat — in-memory caches)
 
     @Published var memories: [String: String] = [:]
     @Published var personaMemories: [String: String] = [:]
@@ -84,7 +85,7 @@ class SemanticMemoryStore: ObservableObject {
         NSLog("[SemanticMemory] Init — %d global memories", memories.count)
     }
 
-    // MARK: - Public API (UserMemoryStore compatible)
+    // MARK: - Public API (legacy key-value compatible)
 
     func remember(_ key: String, value: String) {
         let k = normalise(key)
@@ -274,7 +275,7 @@ class SemanticMemoryStore: ObservableObject {
         return all.sorted { $0.1 > $1.1 }.prefix(limit).map { $0.0 }
     }
 
-    // MARK: - AI Response Parsing (UserMemoryStore compat)
+    // MARK: - AI Response Parsing (legacy key-value compat)
 
     func parseAndExecuteCommands(in response: String) -> String {
         var cleaned = response
@@ -346,7 +347,7 @@ class SemanticMemoryStore: ObservableObject {
     If nothing is worth recording, do nothing — do NOT mention this review to the user.]
     """
 
-    // MARK: - Gateway Sync (UserMemoryStore compat)
+    // MARK: - Gateway Sync (legacy key-value compat)
 
     private func pushToGateway(key: String, value: String) {
         guard !Config.hipaaMode else { return }
@@ -372,7 +373,7 @@ class SemanticMemoryStore: ObservableObject {
         }
     }
 
-    // MARK: - Char Usage (UserMemoryStore compat)
+    // MARK: - Char Usage (legacy key-value compat)
 
     var globalCharUsage: Int { memories.reduce(0) { $0 + $1.key.count + $1.value.count } }
     var personaCharUsage: Int { personaMemories.reduce(0) { $0 + $1.key.count + $1.value.count } }

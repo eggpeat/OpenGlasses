@@ -1,4 +1,4 @@
-# Plan — Standalone Chat Experience (use OpenGlasses without the glasses)
+# Plan AK — Standalone Chat Experience (use OpenGlasses without the glasses)
 
 **Status: 🚧 Phase 1 built on `feat/standalone-chat-phase1`.** First-class **Chat tab**
 (replaces History) with a live `ChatThreadView` + docked `ChatComposer` (extracted from the

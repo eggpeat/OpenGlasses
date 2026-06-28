@@ -1,4 +1,4 @@
-# Plan — Study Mode (flashcards + quizzes from your documents)
+# Plan AE — Study Mode (flashcards + quizzes from your documents)
 
 **Status: ✅ Shipped.** Rides our **Document RAG** + OCR + on-device-LLM engines
 (scan → summarize → decks of flashcards + quizzes). Delivered across #88 (core), #89 (generation +

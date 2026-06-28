@@ -1,4 +1,4 @@
-# Plan — Personal Health-Safety Advisor
+# Plan AB — Personal Health-Safety Advisor
 
 **Status: 📋 Planned (not built).** Grounds in our existing **Health Vault** ("can I take ibuprofen?" →
 checks meds + PGx + contraindications). Extends the **Medical Compliance** IAP line.

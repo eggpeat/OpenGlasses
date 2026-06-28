@@ -1,4 +1,4 @@
-# Plan — EVEN Realities G2 Display Backend (second HUD target)
+# Plan AH — EVEN Realities G2 Display Backend (second HUD target)
 
 **Status:** Drafted, not scheduled. Written so it *could* be implemented if we decide to
 offer EVEN compatibility. Speculative until there's a device in hand — the protocol is

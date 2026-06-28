@@ -311,6 +311,57 @@ final class BrainStore: ObservableObject {
         return targets.count
     }
 
+    // MARK: - Project memory
+
+    /// Record a note scoped to an active project/job (`projectTag` is the `FieldSession.id`). Returns
+    /// the new record's id. Transient by intent — it surfaces only while its project is active.
+    @discardableResult
+    func addProjectMemory(projectTag: String, text: String) -> String {
+        let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedTag = projectTag.trimmingCharacters(in: .whitespacesAndNewlines)
+        let id = UUID().uuidString
+        guard !trimmedText.isEmpty, !trimmedTag.isEmpty else { return id }
+        let sql = "INSERT INTO project_memory (id, project_tag, text, created_at) VALUES (?, ?, ?, ?)"
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return id }
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_text(stmt, 1, id, -1, SQLITE_TRANSIENT)
+        sqlite3_bind_text(stmt, 2, trimmedTag, -1, SQLITE_TRANSIENT)
+        sqlite3_bind_text(stmt, 3, trimmedText, -1, SQLITE_TRANSIENT)
+        sqlite3_bind_double(stmt, 4, Date().timeIntervalSince1970)
+        _ = sqlite3_step(stmt)
+        return id
+    }
+
+    /// Project memories for a given project, oldest first (reads as a running log). Empty for an
+    /// unknown tag.
+    func projectMemories(for projectTag: String, limit: Int = 50) -> [ProjectMemory] {
+        let sql = """
+        SELECT id, project_tag, text, created_at FROM project_memory
+        WHERE project_tag = '\(escapedSQL(projectTag))'
+        ORDER BY created_at ASC LIMIT \(limit)
+        """
+        var rows: [ProjectMemory] = []
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return rows }
+        defer { sqlite3_finalize(stmt) }
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            rows.append(ProjectMemory(
+                id: UUID(uuidString: String(cString: sqlite3_column_text(stmt, 0))) ?? UUID(),
+                projectTag: String(cString: sqlite3_column_text(stmt, 1)),
+                text: String(cString: sqlite3_column_text(stmt, 2)),
+                createdAt: Date(timeIntervalSince1970: sqlite3_column_double(stmt, 3))
+            ))
+        }
+        return rows
+    }
+
+    /// Drop all project memories for a project (e.g. when the job is closed and you don't want to
+    /// retain its notes). No-op for an unknown tag.
+    func clearProjectMemories(for projectTag: String) {
+        exec("DELETE FROM project_memory WHERE project_tag = '\(escapedSQL(projectTag))'")
+    }
+
     // MARK: - Ingestion
 
     /// Extract typed edges from free text (zero LLM calls) and store them. If `subject` is given
@@ -393,7 +444,16 @@ final class BrainStore: ObservableObject {
             resolved_at REAL
         )
         """)
+        exec("""
+        CREATE TABLE IF NOT EXISTS project_memory (
+            id TEXT PRIMARY KEY,
+            project_tag TEXT NOT NULL,
+            text TEXT NOT NULL,
+            created_at REAL NOT NULL
+        )
+        """)
         exec("CREATE INDEX IF NOT EXISTS idx_entities_norm ON entities(normalized)")
+        exec("CREATE INDEX IF NOT EXISTS idx_project_memory_tag ON project_memory(project_tag)")
         exec("CREATE INDEX IF NOT EXISTS idx_edges_src ON edges(src_id)")
         exec("CREATE INDEX IF NOT EXISTS idx_edges_dst ON edges(dst_id)")
         exec("CREATE INDEX IF NOT EXISTS idx_encounters_person ON encounters(person)")

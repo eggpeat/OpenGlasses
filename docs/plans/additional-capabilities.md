@@ -1,4 +1,4 @@
-# Additional Capabilities — net-new features over the shipped engines
+# Plan AJ — Additional Capabilities — net-new features over the shipped engines
 
 A set of self-contained capabilities identified for OpenGlasses, each a genuine fit that builds on
 the engines we already ship (TTS, Config/Keychain, GlassesDisplayService + CameraService, BrainStore,

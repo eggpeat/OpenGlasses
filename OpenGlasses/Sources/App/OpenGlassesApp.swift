@@ -1731,7 +1731,7 @@ class AppState: ObservableObject, AppStateProtocol {
                 prompt,
                 locationContext: locationService.locationContext,
                 imageData: imageData,
-                memoryContext: Config.userMemoryEnabled ? userMemory.systemPromptContext() : nil
+                memoryContext: Config.userMemoryEnabled ? userMemory.systemPromptContext(query: Config.userMemoryRetrievalEnabled ? prompt : nil) : nil
             )
             let response = Config.userMemoryEnabled ? userMemory.parseAndExecuteCommands(in: rawResponse) : rawResponse
             lastResponse = response
@@ -1770,7 +1770,7 @@ class AppState: ObservableObject, AppStateProtocol {
                 prompt,
                 locationContext: locationService.locationContext,
                 imageData: photoData,
-                memoryContext: Config.userMemoryEnabled ? userMemory.systemPromptContext() : nil
+                memoryContext: Config.userMemoryEnabled ? userMemory.systemPromptContext(query: Config.userMemoryRetrievalEnabled ? prompt : nil) : nil
             )
             let response = Config.userMemoryEnabled ? userMemory.parseAndExecuteCommands(in: rawResponse) : rawResponse
             lastResponse = response
@@ -1822,7 +1822,7 @@ class AppState: ObservableObject, AppStateProtocol {
                 let response = try await llmService.sendMessage(
                     text,
                     locationContext: locationService.locationContext,
-                    memoryContext: Config.userMemoryEnabled ? userMemory.systemPromptContext() : nil
+                    memoryContext: Config.userMemoryEnabled ? userMemory.systemPromptContext(query: Config.userMemoryRetrievalEnabled ? text : nil) : nil
                 )
                 lastResponse = response
                 await speechService.speak(response)
@@ -1886,7 +1886,7 @@ class AppState: ObservableObject, AppStateProtocol {
                 prompt,
                 locationContext: locationService.locationContext,
                 imageData: photoData,
-                memoryContext: Config.userMemoryEnabled ? userMemory.systemPromptContext() : nil
+                memoryContext: Config.userMemoryEnabled ? userMemory.systemPromptContext(query: Config.userMemoryRetrievalEnabled ? prompt : nil) : nil
             )
             let response = Config.userMemoryEnabled ? userMemory.parseAndExecuteCommands(in: rawResponse) : rawResponse
             lastResponse = response
@@ -2506,7 +2506,7 @@ class AppState: ObservableObject, AppStateProtocol {
                         query,
                         locationContext: locationService.locationContext,
                         imageData: photoData,
-                        memoryContext: Config.userMemoryEnabled ? userMemory.systemPromptContext() : nil
+                        memoryContext: Config.userMemoryEnabled ? userMemory.systemPromptContext(query: Config.userMemoryRetrievalEnabled ? query : nil) : nil
                     )
                     try Task.checkCancellation()
                     let response = Config.userMemoryEnabled ? userMemory.parseAndExecuteCommands(in: rawResponse) : rawResponse
@@ -2641,7 +2641,7 @@ class AppState: ObservableObject, AppStateProtocol {
                 rawResponse = try await llmService.sendViaLocalAgent(
                     query,
                     locationContext: classification.relevantSections.contains(.location) ? locationService.locationContext : nil,
-                    memoryContext: Config.userMemoryEnabled ? userMemory.systemPromptContext() : nil
+                    memoryContext: Config.userMemoryEnabled ? userMemory.systemPromptContext(query: Config.userMemoryRetrievalEnabled ? query : nil) : nil
                 )
             } else {
                 // Standard path: cloud LLM
@@ -2650,7 +2650,7 @@ class AppState: ObservableObject, AppStateProtocol {
                     query,
                     locationContext: classification.relevantSections.contains(.location) ? locationService.locationContext : nil,
                     imageData: imageData,
-                    memoryContext: Config.userMemoryEnabled ? userMemory.systemPromptContext() : nil,
+                    memoryContext: Config.userMemoryEnabled ? userMemory.systemPromptContext(query: Config.userMemoryRetrievalEnabled ? query : nil) : nil,
                     playbookContext: classification.relevantSections.contains(.playbook) ? playbookStore.playbookContext() : nil,
                     nowPlayingContext: nowPlayingAtStart?.promptContext,
                     shortcutsContext: ShortcutsCatalog.shared.promptBlock(),
@@ -2753,7 +2753,7 @@ class AppState: ObservableObject, AppStateProtocol {
                 query,
                 locationContext: locationService.locationContext,
                 imageData: image,
-                memoryContext: Config.userMemoryEnabled ? userMemory.systemPromptContext() : nil,
+                memoryContext: Config.userMemoryEnabled ? userMemory.systemPromptContext(query: Config.userMemoryRetrievalEnabled ? query : nil) : nil,
                 playbookContext: playbookStore.playbookContext(),
                 shortcutsContext: ShortcutsCatalog.shared.promptBlock(),
                 onToken: { [weak self] chunk in
@@ -2873,7 +2873,7 @@ class AppState: ObservableObject, AppStateProtocol {
         do {
             let response = try await llmService.sendMessage(
                 triagePrompt,
-                memoryContext: Config.userMemoryEnabled ? userMemory.systemPromptContext() : nil,
+                memoryContext: Config.userMemoryEnabled ? userMemory.systemPromptContext(query: Config.userMemoryRetrievalEnabled ? triagePrompt : nil) : nil,
                 agentContext: currentAgentContext
             )
 
@@ -2948,7 +2948,7 @@ class AppState: ObservableObject, AppStateProtocol {
             do {
                 let summary = try await llmService.sendMessage(
                     summaryPrompt,
-                    memoryContext: Config.userMemoryEnabled ? userMemory.systemPromptContext() : nil,
+                    memoryContext: Config.userMemoryEnabled ? userMemory.systemPromptContext(query: Config.userMemoryRetrievalEnabled ? summaryPrompt : nil) : nil,
                     agentContext: currentAgentContext
                 )
                 let cleaned = summary.trimmingCharacters(in: .whitespacesAndNewlines)

@@ -1,4 +1,4 @@
-# LLM Provider Auth & Fallbacks (reference)
+# Plan AI — LLM Provider Auth & Fallbacks (reference)
 
 How OpenGlasses can authenticate to an LLM backend, what each path costs in
 *functionality*, and where OAuth / "use my account" actually works.
