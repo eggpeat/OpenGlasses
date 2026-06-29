@@ -23,6 +23,10 @@ struct ModelFormView: View {
     @State private var isTestingConnection = false
     @State private var connectionStatus: String?
     @State private var connectionOK = false
+    // LAN auto-detect (Plan AF #6, experimental)
+    @State private var isScanning = false
+    @State private var discoveredServers: [LocalServerScanner.DiscoveredServer] = []
+    @State private var scanMessage: String?
 
     var body: some View {
         Section {
@@ -183,6 +187,41 @@ struct ModelFormView: View {
                             .font(.footnote)
                             .foregroundStyle(connectionOK ? .green : .red)
                     }
+
+                    // Experimental LAN auto-detect (Plan AF #6).
+                    Button {
+                        Task { await scanLAN() }
+                    } label: {
+                        HStack {
+                            if isScanning {
+                                ProgressView().scaleEffect(0.8)
+                                Text("Scanning…")
+                            } else {
+                                Image(systemName: "antenna.radiowaves.left.and.right")
+                                Text("Scan local network")
+                            }
+                            Spacer()
+                            Text("Experimental").font(.caption2).foregroundStyle(.secondary)
+                        }
+                    }
+                    .disabled(isScanning)
+
+                    if let scanMessage {
+                        Text(scanMessage).font(.footnote).foregroundStyle(.secondary)
+                    }
+                    ForEach(discoveredServers) { server in
+                        Button {
+                            baseURL = server.baseURL
+                            resetModelList()
+                            connectionStatus = nil
+                        } label: {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("\(server.preset.displayName) · \(server.host)").font(.subheadline)
+                                Text("\(server.baseURL) — \(server.modelCount) models, \(server.latencyMs) ms")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
                 }
             } header: {
                 Text("API Key")
@@ -241,6 +280,21 @@ struct ModelFormView: View {
         case .unreachable(let why):
             connectionStatus = "Unreachable — \(why)"
         }
+    }
+
+    /// Experimental LAN auto-detect (Plan AF #6): browse Bonjour + probe preset
+    /// candidates. Best-effort — many local servers don't advertise, so an empty
+    /// result is expected; the manual preset/Base-URL path remains primary.
+    private func scanLAN() async {
+        isScanning = true
+        scanMessage = nil
+        discoveredServers = []
+        defer { isScanning = false }
+        let servers = await LocalServerScanner().scan()
+        discoveredServers = servers
+        scanMessage = servers.isEmpty
+            ? "No servers found. Many local servers don't advertise on the network — enter the Base URL manually or pick a preset above."
+            : "Found \(servers.count) server\(servers.count == 1 ? "" : "s"). Tap one to use it."
     }
 
     private func fetchModels() async {

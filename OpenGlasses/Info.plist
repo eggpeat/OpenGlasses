@@ -135,7 +135,13 @@
 	<string>OpenGlasses saves workout data from fitness coaching sessions to Apple Health.</string>
 	<key>NSHomeKitUsageDescription</key>
 	<string>OpenGlasses controls your smart home devices hands-free through your glasses.</string>
-	<key>NSLocationWhenInUseUsageDescription</key>
+	<key>NSLocalNetworkUsageDescription</key>
+		<string>OpenGlasses scans your local network to find self-hosted AI servers (Ollama, LM Studio, vLLM, LocalAI) so you can connect without typing an address.</string>
+		<key>NSBonjourServices</key>
+		<array>
+			<string>_http._tcp</string>
+		</array>
+		<key>NSLocationWhenInUseUsageDescription</key>
 	<string>OpenGlasses uses your location to provide contextually relevant answers based on where you are.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>OpenGlasses needs microphone access to listen for wake words and transcribe your voice commands.</string>

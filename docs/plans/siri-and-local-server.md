@@ -4,8 +4,12 @@
 snippet) shipped in PRs #93/#94. Thread B/C: **connection-test (#4) + local-server presets
 (#5) shipped** — `ModelFetcher.testConnection` (pure `classify`) + a "Test Connection" button,
 and `LocalServerPreset` (Ollama / LM Studio / vLLM / LocalAI) with a base-URL prefill picker in
-`ModelFormView`. **Remaining: #6 LAN auto-detect (mDNS)** — device-pending (NWBrowser + Bonjour;
-many local servers don't advertise, real-LAN testing needed).
+`ModelFormView`. **#6 LAN auto-detect (mDNS): core landed** — pure `LocalServerDiscovery`
+(`candidates(host:)` + `rewriteHost`, 5 tests) generates the per-preset probe URLs; live
+`LocalServerScanner` (NWBrowser Bonjour `_http._tcp` browse → concurrent `ModelFetcher.testConnection`
+probes) + an experimental "Scan local network" button in `ModelFormView` + `NSLocalNetworkUsageDescription`
+/ `NSBonjourServices` Info.plist keys. The manual preset stays the primary path; live mDNS hit-rate
+(many servers don't advertise Bonjour) is the device-pending edge.
 
 Builds on the Siri App-Intents layer and the keyless
 Custom (OpenAI-compatible) provider already on
