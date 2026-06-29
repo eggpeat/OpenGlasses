@@ -9,6 +9,8 @@ struct ProjectDetailView: View {
     let project: Persona
 
     @Environment(\.dismiss) private var dismiss
+    @State private var shareItem: ShareItem?
+    @State private var exportError: String?
 
     private var documentStore: DocumentStore { appState.documentStore }
     private var store: ConversationStore { appState.conversationStore }
@@ -83,6 +85,31 @@ struct ProjectDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .navigationDestination(for: String.self) { id in
             ChatThreadView(threadId: id)
+        }
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    exportProject()
+                } label: {
+                    Image(systemName: "square.and.arrow.up")
+                }
+                .accessibilityLabel("Export project")
+            }
+        }
+        .sheet(item: $shareItem) { item in
+            ShareSheet(items: item.items)
+        }
+        .alert("Export failed", isPresented: .constant(exportError != nil)) {
+            Button("OK") { exportError = nil }
+        } message: { Text(exportError ?? "") }
+    }
+
+    private func exportProject() {
+        do {
+            let url = try ProjectExporter.exportFile(persona: project, store: documentStore)
+            shareItem = ShareItem(items: [url])
+        } catch {
+            exportError = error.localizedDescription
         }
     }
 }
