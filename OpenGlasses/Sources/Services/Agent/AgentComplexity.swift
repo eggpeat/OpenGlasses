@@ -26,10 +26,20 @@ enum AgentComplexity {
 
     static func isMultiStep(_ request: String) -> Bool {
         let lower = request.lowercased()
-        guard sequencers.contains(where: { lower.contains($0) }) else { return false }
-        let cues = actionCues.reduce(into: Set<String>()) { acc, cue in
-            if lower.contains(cue) { acc.insert(cue) }
-        }
-        return cues.count >= 2
+        guard hasSequencer(lower) else { return false }
+        return actionCueCount(lower) >= 2
+    }
+
+    /// Number of **distinct** action cues present in already-lowercased text. Exposed for
+    /// the Phase-2 `ComplexityClassifier` (deciding whether the LLM is worth consulting).
+    static func actionCueCount(_ lowercased: String) -> Int {
+        actionCues.reduce(into: Set<String>()) { acc, cue in
+            if lowercased.contains(cue) { acc.insert(cue) }
+        }.count
+    }
+
+    /// Whether a chaining/sequencer word is present in already-lowercased text.
+    static func hasSequencer(_ lowercased: String) -> Bool {
+        sequencers.contains(where: { lowercased.contains($0) })
     }
 }
