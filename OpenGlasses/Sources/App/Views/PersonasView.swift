@@ -7,6 +7,9 @@ struct PersonasView: View {
     @State private var editingPersona: Persona? = nil
     @State private var showAddSheet = false
     @State private var projectForDetail: Persona? = nil   // Plan AN — project detail surface
+    @State private var importingProject = false
+    @State private var importMessage: String?
+    @EnvironmentObject private var appState: AppState
 
     var body: some View {
         List {
@@ -85,13 +88,20 @@ struct PersonasView: View {
         .navigationTitle("Personas")
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
-                Button {
-                    showAddSheet = true
+                Menu {
+                    Button { showAddSheet = true } label: { Label("New persona", systemImage: "plus") }
+                    Button { importingProject = true } label: { Label("Import project…", systemImage: "square.and.arrow.down") }
                 } label: {
                     Image(systemName: "plus")
                 }
             }
         }
+        .fileImporter(isPresented: $importingProject, allowedContentTypes: [.json]) { result in
+            handleImport(result)
+        }
+        .alert("Project import", isPresented: .constant(importMessage != nil)) {
+            Button("OK") { importMessage = nil }
+        } message: { Text(importMessage ?? "") }
         .sheet(isPresented: $showAddSheet) {
             PersonaEditorView(persona: nil) { newPersona in
                 personas.append(newPersona)
@@ -121,6 +131,25 @@ struct PersonasView: View {
     private func deletePersona(_ persona: Persona) {
         personas.removeAll { $0.id == persona.id }
         Config.setSavedPersonas(personas)
+    }
+
+    private func handleImport(_ result: Result<URL, Error>) {
+        guard case let .success(url) = result else {
+            if case let .failure(error) = result { importMessage = error.localizedDescription }
+            return
+        }
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        do {
+            let bundle = try ProjectBundleCodec.decode(Data(contentsOf: url))
+            Task {
+                let imported = await ProjectExporter.importBundle(bundle, into: appState.documentStore)
+                personas = Config.savedPersonas
+                importMessage = "Imported \"\(imported.name)\" with \(bundle.documents.count) document\(bundle.documents.count == 1 ? "" : "s")."
+            }
+        } catch {
+            importMessage = error.localizedDescription
+        }
     }
 
     private func modelName(for modelId: String) -> String {
