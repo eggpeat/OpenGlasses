@@ -2713,6 +2713,17 @@ struct Config {
         UserDefaults.standard.set(enabled, forKey: "agentModeEnabled")
     }
 
+    /// When on, an ambiguous request (action cues but no clear sequencer) is classified
+    /// by a tiny LLM call to decide single- vs multi-step (Plan S Phase 2). Default off:
+    /// the pure keyword heuristic alone decides, with no extra round-trip.
+    static var llmComplexityClassifierEnabled: Bool {
+        UserDefaults.standard.bool(forKey: "llmComplexityClassifierEnabled")
+    }
+
+    static func setLLMComplexityClassifierEnabled(_ enabled: Bool) {
+        UserDefaults.standard.set(enabled, forKey: "llmComplexityClassifierEnabled")
+    }
+
     // MARK: - Remote Agent Harness (Plan N)
 
     /// Which harness the Remote Agent Harness dispatches to by default. Defaults to `.openclaw`.

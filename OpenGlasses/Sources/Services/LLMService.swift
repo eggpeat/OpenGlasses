@@ -493,7 +493,7 @@ class LLMService: ObservableObject {
         // The planner sees the request alone (not chat history), and tool output never re-enters
         // planning — the structural prompt-injection defense. Falls back to single-shot when the
         // request can't be planned/validated (still safe; every call is supervised either way).
-        if Config.agentModeEnabled, hasNativeTools, imageData == nil, AgentComplexity.isMultiStep(text) {
+        if Config.agentModeEnabled, hasNativeTools, imageData == nil, await classifyMultiStep(text) {
             if let summary = await runAgentPlan(request: text, nativeToolNames: nativeToolNames) {
                 conversationHistory.append(["role": "user", "content": text])
                 conversationHistory.append(["role": "assistant", "content": summary])
@@ -532,6 +532,21 @@ class LLMService: ObservableObject {
     }
 
     // MARK: - Plan-then-execute (Plan S)
+
+    /// Decide whether to route `text` through the plan-then-execute loop (Plan S Phase 2).
+    /// The pure keyword heuristic decides for free; when the LLM classifier is enabled and
+    /// the request is ambiguous (`ComplexityClassifier.shouldConsultLLM`), a tiny history-free
+    /// completion breaks the tie. Any classifier failure falls back to the heuristic.
+    private func classifyMultiStep(_ text: String) async -> Bool {
+        let heuristic = AgentComplexity.isMultiStep(text)
+        guard Config.llmComplexityClassifierEnabled,
+              ComplexityClassifier.shouldConsultLLM(text) else {
+            return heuristic
+        }
+        let verdict = (try? await completeStateless(text, system: ComplexityClassifier.systemPrompt))
+            .flatMap(ComplexityClassifier.parseVerdict)
+        return ComplexityClassifier.decide(heuristic: heuristic, llmVerdict: verdict) == .multiStep
+    }
 
     /// Plan a multi-step request, validate it, and run each step through the supervisor-gated
     /// router. Returns the spoken summary, or nil to fall back to the single-shot tool loop.
