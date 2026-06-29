@@ -68,11 +68,11 @@ core first, with the live/device/backend edge deferred; one PR per plan.
 
 **Genuinely outstanding** (cannot be done/tested without hardware or hosting): the self-hosted WebRTC path only — deploy the signaling relay + TURN, host the expert web client, run on-device echo/precedence testing. The Meeting-link transport needs none of this.
 
-**Reading 🚧:** most 🚧 plans ship a complete, tested core and defer only the live edge by design. The
-device/backend-pending leftovers across all 🚧 plans are tracked in one place —
-**[Device & Backend Validation Backlog](device-backend-backlog.md)** — so "core shipped" is read as
-"awaiting hardware/infra," not as unfinished code. Buildable leftovers are caught up as sub-plan PRs in
-each plan doc.
+**Reading 🚧:** most 🚧 plans ship a complete, tested core and defer only the live edge by design. Every
+deferred/partial item across all 🚧 plans is gathered in one place —
+**[Consolidated Partials](consolidated-partials.md)** — split into **A. Buildable now** (headless
+follow-up PRs you can pick up today), **B. Hardware-pending**, and **C. Backend/service-pending**. So
+"core shipped" is read as "awaiting hardware/infra," not as unfinished code.
 
 ---
 
