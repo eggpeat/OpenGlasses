@@ -57,7 +57,52 @@ struct InteractionRubric {
                             severity: .caution, basis: "SSRI + NSAID"))
         }
 
+        // MAOI + SSRI → serotonin syndrome (drug-drug, either direction).
+        if pair(substance, userClasses, .maoi, .ssri) {
+            hits.append(Hit(reason: "Combining an MAOI and an SSRI can cause serotonin syndrome.",
+                            severity: .high, basis: "MAOI + SSRI → serotonin syndrome"))
+        }
+        // PDE5 inhibitor + nitrate → severe hypotension.
+        if pair(substance, userClasses, .pde5Inhibitor, .nitrate) {
+            hits.append(Hit(reason: "An erectile-dysfunction drug with a nitrate can drop your blood pressure dangerously.",
+                            severity: .high, basis: "PDE5 inhibitor + nitrate → hypotension"))
+        }
+        // Methotrexate + NSAID → methotrexate toxicity.
+        if pair(substance, userClasses, .methotrexate, .nsaid) {
+            hits.append(Hit(reason: "An NSAID can raise methotrexate to toxic levels.",
+                            severity: .high, basis: "methotrexate + NSAID → toxicity"))
+        }
+        // Opioid/benzodiazepine combined → additive respiratory depression.
+        if pair(substance, userClasses, .opioid, .benzodiazepine)
+            || (substance.classes.contains(.opioid) && userClasses.contains(.opioid))
+            || (substance.classes.contains(.benzodiazepine) && userClasses.contains(.benzodiazepine)) {
+            hits.append(Hit(reason: "Combining sedatives (opioids and/or benzodiazepines) can dangerously slow your breathing.",
+                            severity: .high, basis: "opioid + benzodiazepine → respiratory depression"))
+        }
+        // Lithium + NSAID → lithium toxicity.
+        if pair(substance, userClasses, .lithium, .nsaid) {
+            hits.append(Hit(reason: "An NSAID can raise lithium to toxic levels.",
+                            severity: .high, basis: "lithium + NSAID → toxicity"))
+        }
+        // ACE/ARB + potassium-sparing diuretic → hyperkalemia (drug-drug).
+        if (!substance.classes.isDisjoint(with: [.aceInhibitor, .arb]) && userClasses.contains(.potassiumSparingDiuretic))
+            || (substance.classes.contains(.potassiumSparingDiuretic) && !userClasses.isDisjoint(with: [.aceInhibitor, .arb])) {
+            hits.append(Hit(reason: "This combination with your blood-pressure medication can raise potassium to dangerous levels.",
+                            severity: .high, basis: "ACE/ARB + potassium-sparing diuretic → hyperkalemia"))
+        }
+        // NSAID in pregnancy → caution (avoid, esp. third trimester).
+        if substance.classes.contains(.nsaid), context.conditions.contains(.pregnancy) {
+            hits.append(Hit(reason: "NSAIDs are generally avoided in pregnancy — check with your doctor.",
+                            severity: .caution, basis: "NSAID + pregnancy"))
+        }
+
         return hits.sorted { $0.severity > $1.severity }
+    }
+
+    /// True when the dangerous pair (`a`,`b`) is split across the queried substance and
+    /// the user's current meds, in either direction.
+    private func pair(_ substance: Substance, _ user: Set<DrugClass>, _ a: DrugClass, _ b: DrugClass) -> Bool {
+        (substance.classes.contains(a) && user.contains(b)) || (substance.classes.contains(b) && user.contains(a))
     }
 
     /// Check a food (for "can I eat this?") — its tags against the user's meds/conditions.
@@ -90,7 +135,17 @@ struct InteractionRubric {
             hits.append(Hit(reason: "You have gout; purine-rich foods can trigger a flare.",
                             severity: .caution, basis: "purine-rich + gout"))
         }
-        // Grapefruit + relevant meds → caution (broad CYP3A4 flag).
+        // Alcohol + sedatives → additive CNS/respiratory depression.
+        if tags.contains(.alcohol), !userClasses.isDisjoint(with: [.opioid, .benzodiazepine]) {
+            hits.append(Hit(reason: "Alcohol with your sedative medication can dangerously slow breathing and heavy sedation.",
+                            severity: .high, basis: "alcohol + opioid/benzodiazepine"))
+        }
+        // Statin + grapefruit → raised statin levels (muscle injury risk).
+        if tags.contains(.grapefruit), userClasses.contains(.statin) {
+            hits.append(Hit(reason: "Grapefruit can raise your statin levels and the risk of muscle injury.",
+                            severity: .caution, basis: "statin + grapefruit"))
+        }
+        // Grapefruit + other meds → general CYP3A4 flag.
         if tags.contains(.grapefruit), !userClasses.isEmpty {
             hits.append(Hit(reason: "Grapefruit can change how some medications are absorbed — check this one specifically.",
                             severity: .info, basis: "grapefruit + CYP3A4 substrates"))

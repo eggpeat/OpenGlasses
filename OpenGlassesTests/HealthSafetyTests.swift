@@ -133,4 +133,70 @@ final class HealthSafetyTests: XCTestCase {
         XCTAssertTrue(out.contains("No high-severity interactions"))
         XCTAssertFalse(HealthSafetyResponseBuilder.hasAuthoritativeWarning([]))
     }
+
+    // MARK: - Broader rubric coverage (AB follow-up)
+
+    func testNewDrugClassifications() {
+        XCTAssertEqual(SubstanceCatalog.substance(from: "atorvastatin 20mg").classes, [.statin])
+        XCTAssertEqual(SubstanceCatalog.substance(from: "sildenafil").classes, [.pde5Inhibitor])
+        XCTAssertEqual(SubstanceCatalog.substance(from: "isosorbide mononitrate").classes, [.nitrate])
+        XCTAssertEqual(SubstanceCatalog.substance(from: "oxycodone").classes, [.opioid])
+        XCTAssertEqual(SubstanceCatalog.substance(from: "Valium (diazepam)").classes, [.benzodiazepine])
+        XCTAssertEqual(SubstanceCatalog.substance(from: "methotrexate").classes, [.methotrexate])
+        XCTAssertEqual(SubstanceCatalog.substance(from: "lithium carbonate").classes, [.lithium])
+    }
+
+    func testMAOIPlusSSRIIsHigh() {
+        // Querying an SSRI while on an MAOI (and the reverse) both fire.
+        XCTAssertTrue(InteractionRubric().check(SubstanceCatalog.substance(from: "sertraline"), against: context(meds: [.maoi]))
+            .contains { $0.severity == .high && $0.basis.contains("serotonin") })
+        XCTAssertTrue(InteractionRubric().check(SubstanceCatalog.substance(from: "phenelzine"), against: context(meds: [.ssri]))
+            .contains { $0.severity == .high })
+    }
+
+    func testPDE5PlusNitrateIsHigh() {
+        let hits = InteractionRubric().check(SubstanceCatalog.substance(from: "sildenafil"), against: context(meds: [.nitrate]))
+        XCTAssertEqual(hits.first?.severity, .high)
+    }
+
+    func testMethotrexatePlusNSAIDIsHigh() {
+        let hits = InteractionRubric().check(SubstanceCatalog.substance(from: "ibuprofen"), against: context(meds: [.methotrexate]))
+        XCTAssertTrue(hits.contains { $0.severity == .high && $0.basis.contains("methotrexate") })
+    }
+
+    func testOpioidPlusBenzodiazepineIsHigh() {
+        let hits = InteractionRubric().check(SubstanceCatalog.substance(from: "oxycodone"), against: context(meds: [.benzodiazepine]))
+        XCTAssertEqual(hits.first?.severity, .high)
+    }
+
+    func testLithiumPlusNSAIDIsHigh() {
+        let hits = InteractionRubric().check(SubstanceCatalog.substance(from: "naproxen"), against: context(meds: [.lithium]))
+        XCTAssertTrue(hits.contains { $0.severity == .high && $0.basis.contains("lithium") })
+    }
+
+    func testACEPlusPotassiumSparingDiureticIsHigh() {
+        let hits = InteractionRubric().check(SubstanceCatalog.substance(from: "spironolactone"), against: context(meds: [.aceInhibitor]))
+        XCTAssertTrue(hits.contains { $0.severity == .high && $0.basis.contains("hyperkalemia") })
+    }
+
+    func testNSAIDInPregnancyIsCaution() {
+        let hits = InteractionRubric().check(SubstanceCatalog.substance(from: "ibuprofen"), against: context(meds: [], conditions: [.pregnancy]))
+        XCTAssertTrue(hits.contains { $0.severity == .caution && $0.basis.contains("pregnancy") })
+    }
+
+    func testAlcoholPlusSedativeIsHigh() {
+        let hits = InteractionRubric().checkFood([.alcohol], against: context(meds: [.opioid]))
+        XCTAssertEqual(hits.first?.severity, .high)
+    }
+
+    func testStatinPlusGrapefruitIsCaution() {
+        let hits = InteractionRubric().checkFood([.grapefruit], against: context(meds: [.statin]))
+        XCTAssertTrue(hits.contains { $0.severity == .caution && $0.basis.contains("statin") })
+    }
+
+    func testUnrelatedNewClassPairingNoHit() {
+        // A statin alone with an unrelated query shouldn't fire a high/caution drug-drug rule.
+        let hits = InteractionRubric().check(SubstanceCatalog.substance(from: "vitamin d"), against: context(meds: [.statin]))
+        XCTAssertTrue(hits.isEmpty)
+    }
 }
