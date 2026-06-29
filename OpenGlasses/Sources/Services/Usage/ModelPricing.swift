@@ -8,7 +8,7 @@ import Foundation
 /// — the tracker reports tokens and omits the dollar figure rather than guessing.
 enum ModelPricing {
 
-    struct Rate: Equatable {
+    struct Rate: Equatable, Codable {
         let inputPer1M: Double
         let outputPer1M: Double
         init(_ inputPer1M: Double, _ outputPer1M: Double) {

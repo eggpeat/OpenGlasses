@@ -69,6 +69,11 @@ struct InsightsView: View {
                         }
                     }
                     row("Estimated total", Self.costLabel(usage.totalUSD))
+                    NavigationLink {
+                        ModelPricingEditorView()
+                    } label: {
+                        Label("Edit model pricing", systemImage: "slider.horizontal.3")
+                    }
                 } header: {
                     Text("Tokens & estimated cost")
                 } footer: {

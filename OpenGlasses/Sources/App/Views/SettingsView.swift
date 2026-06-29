@@ -578,6 +578,12 @@ struct SettingsView: View {
                 } label: {
                     Label("Network Activity", systemImage: "antenna.radiowaves.left.and.right")
                 }
+
+                NavigationLink {
+                    LiveVisionSettingsView()
+                } label: {
+                    Label("Live Vision", systemImage: "camera.metering.matrix")
+                }
             } header: {
                 Text("Advanced")
             } footer: {

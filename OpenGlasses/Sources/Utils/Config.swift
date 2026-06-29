@@ -2532,6 +2532,29 @@ struct Config {
         UserDefaults.standard.set(enabled, forKey: "contextualEmbeddingEnabled")
     }
 
+    // MARK: - Model pricing overrides (Plan AU — Settings editor)
+
+    /// User edits to the bundled `ModelPricing` table (USD per 1M tokens), keyed by
+    /// the same model-id prefixes. Persisted locally; applied over the defaults.
+    static var modelPricingOverrides: [String: ModelPricing.Rate] {
+        guard let data = UserDefaults.standard.data(forKey: "modelPricingOverrides"),
+              let dict = try? JSONDecoder().decode([String: ModelPricing.Rate].self, from: data) else { return [:] }
+        return dict
+    }
+
+    /// Persist the overrides and apply them to the live `ModelPricing` table.
+    static func setModelPricingOverrides(_ overrides: [String: ModelPricing.Rate]) {
+        if let data = try? JSONEncoder().encode(overrides) {
+            UserDefaults.standard.set(data, forKey: "modelPricingOverrides")
+        }
+        ModelPricing.overrides = overrides
+    }
+
+    /// Load persisted pricing overrides into `ModelPricing` (call once at launch).
+    static func applyModelPricingOverrides() {
+        ModelPricing.overrides = modelPricingOverrides
+    }
+
     // MARK: - Content-Aware Frame Gate (Plan AT)
 
     /// When `true`, `FrameThrottler` consults a perceptual-hash `FrameGate` after
