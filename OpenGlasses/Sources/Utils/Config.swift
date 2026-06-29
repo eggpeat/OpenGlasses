@@ -1525,6 +1525,17 @@ struct Config {
         setSavedPersonas(personas)
     }
 
+    /// Append a persona (e.g. an imported Project, Plan AN). Replaces any with the same id.
+    static func addPersona(_ persona: Persona) {
+        var personas = savedPersonas
+        if let idx = personas.firstIndex(where: { $0.id == persona.id }) {
+            personas[idx] = persona
+        } else {
+            personas.append(persona)
+        }
+        setSavedPersonas(personas)
+    }
+
     /// Uninstall a built-in persona mode.
     static func uninstallPersonaMode(_ id: String) {
         var personas = savedPersonas
