@@ -25,7 +25,7 @@ then strike it here.
 | Plan | Outstanding item | Notes |
 |---|---|---|
 | [AU](llm-cost-usage-tracker.md) | Streamed-Chat (`onToken`) + realtime-voice token capture | Thread usage out of the SSE reconstructors / realtime sessions; the non-streaming capture + pricing/rollup core shipped |
-| [AU](llm-cost-usage-tracker.md) | Settings pricing editor | Pure UI over the existing `ModelPricing.overrides` seam |
+| ~~[AU](llm-cost-usage-tracker.md)~~ | ~~Settings pricing editor~~ | ✅ Shipped — `ModelPricingEditorView` + persisted `Config.modelPricingOverrides` |
 | [AN](projects-scoped-contexts.md) | Shareable project export/import bundle | Persona + its scoped docs, reusing the Plan [Q](Q-vault-and-skills-library-management.md) vault export/import patterns |
 | [AB](health-safety-advisor.md) | Broader interaction-rubric coverage | More curated high-severity rules + tests; the pure rubric/grounding core shipped |
 | [AV](visual-state-memory.md) | Thumbnail injection (second flag) + BrainStore ingest of aged keyframes | Both ride the shipped ring-buffer/builder; text-only context ships today |
@@ -33,7 +33,7 @@ then strike it here.
 | [S](S-plan-then-execute-and-safety-supervisor.md) | Phase 2: LLM complexity classifier (vs keyword heuristic) + parallel-safe execution | Optional polish over the shipped supervisor/planner |
 | [O](O-document-rag.md) | Standalone `DocumentsView` (list / ingest-via-Files / delete) | Mirrors `VaultManagerView`; partially subsumed by AN's `ProjectDetailView`, a global view is still useful |
 | [AW](skill-self-evolution.md) | User-correction capture signal | An extra evolution trigger alongside the shipped tool-failure signal |
-| [AT](frame-dedup-change-gate.md) | Advanced-threshold Settings control | Trivial UI over the existing `Config.frameDedup*` flags (flipping the default *on* is device-gated → B) |
+| ~~[AT](frame-dedup-change-gate.md)~~ | ~~Advanced-threshold Settings control~~ | ✅ Shipped — `LiveVisionSettingsView` (toggle + threshold + heartbeat) under Settings → Advanced. Flipping the default *on* is still device-gated → B |
 | [AM](embedding-quality-upgrade.md) | Optional bundled MiniLM Core ML path | Gated on the `recall@k` benchmark showing a lift; the `EmbeddingBackend` seam is in place |
 | [AJ](additional-capabilities.md) | Declarative HUD widget board (#7) | Display Phase-5 concept; defer until X/Y are fully exercised and a concrete multi-widget use case exists |
 

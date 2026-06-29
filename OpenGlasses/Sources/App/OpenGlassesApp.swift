@@ -931,6 +931,9 @@ class AppState: ObservableObject, AppStateProtocol {
         // Health-Safety Advisor (Plan AB) — grounded long-tail reasoning for "is this safe for me?".
         HealthSafetyAdvisor.shared.llm = llmService
 
+        // Apply any saved LLM pricing overrides into the live table (Plan AU editor).
+        Config.applyModelPricingOverrides()
+
         // Projects (Plan AN) — grounds the prompt in the active project's documents.
         ProjectContextService.shared.configure(
             documentStore: documentStore,
