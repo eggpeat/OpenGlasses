@@ -27,7 +27,7 @@ then strike it here.
 | [AU](llm-cost-usage-tracker.md) | Streamed-Chat (`onToken`) + realtime-voice token capture | Thread usage out of the SSE reconstructors / realtime sessions; the non-streaming capture + pricing/rollup core shipped |
 | ~~[AU](llm-cost-usage-tracker.md)~~ | ~~Settings pricing editor~~ | ✅ Shipped — `ModelPricingEditorView` + persisted `Config.modelPricingOverrides` |
 | [AN](projects-scoped-contexts.md) | Shareable project export/import bundle | Persona + its scoped docs, reusing the Plan [Q](Q-vault-and-skills-library-management.md) vault export/import patterns |
-| [AB](health-safety-advisor.md) | Broader interaction-rubric coverage | More curated high-severity rules + tests; the pure rubric/grounding core shipped |
+| ~~[AB](health-safety-advisor.md)~~ | ~~Broader interaction-rubric coverage~~ | ✅ Shipped — +7 drug classes (statin/nitrate/PDE5/benzo/opioid/methotrexate/lithium) + alcohol; rules for MAOI+SSRI, PDE5+nitrate, methotrexate/lithium+NSAID, opioid+benzo, ACE+K-sparing, NSAID-in-pregnancy, alcohol+sedative, statin+grapefruit |
 | [AV](visual-state-memory.md) | Thumbnail injection (second flag) + BrainStore ingest of aged keyframes | Both ride the shipped ring-buffer/builder; text-only context ships today |
 | [U](U-structured-capture-flows.md) | No-code capture-flow author UI | JSON-authored flows ship today; the editor is the fast-follow |
 | [S](S-plan-then-execute-and-safety-supervisor.md) | Phase 2: LLM complexity classifier (vs keyword heuristic) + parallel-safe execution | Optional polish over the shipped supervisor/planner |

@@ -11,6 +11,13 @@ enum DrugClass: String, CaseIterable, Equatable {
     case maoi                  // phenelzine, tranylcypromine, isocarboxazid
     case potassiumSparingDiuretic // spironolactone, amiloride
     case ssri                  // sertraline, fluoxetine
+    case statin                // atorvastatin, simvastatin, rosuvastatin
+    case nitrate               // nitroglycerin, isosorbide
+    case pde5Inhibitor         // sildenafil, tadalafil
+    case benzodiazepine        // diazepam, alprazolam, lorazepam
+    case opioid                // oxycodone, morphine, tramadol, fentanyl
+    case methotrexate          // methotrexate (its own class — narrow therapeutic index)
+    case lithium               // lithium (narrow therapeutic index)
 }
 
 /// Tags for foods/labels the rubric checks against meds + conditions (Plan AB).
@@ -21,6 +28,7 @@ enum FoodTag: String, CaseIterable, Equatable {
     case highSodium            // hypertension / heart failure
     case purineRich            // organ meat, shellfish — gout
     case grapefruit            // CYP3A4 interactions
+    case alcohol               // additive CNS/respiratory depression with sedatives
 }
 
 /// Conditions the rubric uses for contraindications (Plan AB).
@@ -63,6 +71,18 @@ enum SubstanceCatalog {
         "spironolactone": .potassiumSparingDiuretic, "amiloride": .potassiumSparingDiuretic,
         "sertraline": .ssri, "zoloft": .ssri, "fluoxetine": .ssri, "prozac": .ssri,
         "citalopram": .ssri, "escitalopram": .ssri,
+        "atorvastatin": .statin, "lipitor": .statin, "simvastatin": .statin, "zocor": .statin,
+        "rosuvastatin": .statin, "crestor": .statin, "pravastatin": .statin,
+        "nitroglycerin": .nitrate, "nitroglycerine": .nitrate, "isosorbide": .nitrate, "nitrate": .nitrate,
+        "sildenafil": .pde5Inhibitor, "viagra": .pde5Inhibitor, "tadalafil": .pde5Inhibitor,
+        "cialis": .pde5Inhibitor, "vardenafil": .pde5Inhibitor,
+        "diazepam": .benzodiazepine, "valium": .benzodiazepine, "alprazolam": .benzodiazepine,
+        "xanax": .benzodiazepine, "lorazepam": .benzodiazepine, "ativan": .benzodiazepine,
+        "clonazepam": .benzodiazepine, "klonopin": .benzodiazepine,
+        "oxycodone": .opioid, "oxycontin": .opioid, "hydrocodone": .opioid, "morphine": .opioid,
+        "codeine": .opioid, "tramadol": .opioid, "fentanyl": .opioid, "oxymorphone": .opioid,
+        "methotrexate": .methotrexate,
+        "lithium": .lithium,
     ]
 
     /// food/label fragment → tag.
@@ -77,6 +97,8 @@ enum SubstanceCatalog {
         "sodium": .highSodium, "salt": .highSodium,
         "liver": .purineRich, "anchovies": .purineRich, "shellfish": .purineRich, "sardines": .purineRich,
         "grapefruit": .grapefruit,
+        "alcohol": .alcohol, "beer": .alcohol, "wine": .alcohol, "whiskey": .alcohol,
+        "vodka": .alcohol, "liquor": .alcohol, "spirits": .alcohol, "cocktail": .alcohol,
     ]
 
     /// condition fragment → tag (matched in the conditions vault file).
