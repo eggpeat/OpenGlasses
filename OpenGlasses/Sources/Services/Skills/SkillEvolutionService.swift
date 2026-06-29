@@ -49,6 +49,20 @@ final class SkillEvolutionService: ObservableObject {
         samples.append(sample)
     }
 
+    /// Capture a **user-correction** signal (Plan AW): when a new user message corrects
+    /// the assistant's previous answer, record it against that prior exchange and let the
+    /// loop evolve if the batch now warrants it. No-op when the message isn't a correction,
+    /// there was no prior answer, or Agent Mode is off.
+    @discardableResult
+    func noteUserTurn(message: String, priorPrompt: String, priorResponse: String) async -> SkillDraft? {
+        guard Config.agentModeEnabled,
+              !priorResponse.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              UserCorrectionDetector.detect(message) != nil else { return nil }
+        record(FailureSample(kind: .userCorrection, prompt: priorPrompt, response: priorResponse,
+                             userCorrection: message, at: Date()))
+        return await evolveIfNeeded()
+    }
+
     /// If the accumulated batch warrants it, propose one skill and enqueue it for review. Returns the
     /// enqueued draft (tests/telemetry) or nil. The batch is consumed whenever the analyzer runs, so a
     /// no-op proposal doesn't re-trigger immediately.

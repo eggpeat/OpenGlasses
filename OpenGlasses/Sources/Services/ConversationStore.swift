@@ -141,6 +141,17 @@ class ConversationStore: ObservableObject {
         return threads.filter { $0.personaId == personaId }
     }
 
+    /// The most recent completed exchange in the active thread — the last assistant
+    /// reply and the user prompt that preceded it (Plan AW user-correction signal).
+    /// `nil` when there's no assistant turn yet.
+    func lastExchange() -> (prompt: String, response: String)? {
+        guard let thread = threads.first(where: { $0.id == activeThreadId }) else { return nil }
+        let msgs = thread.messages
+        guard let assistantIdx = msgs.lastIndex(where: { $0.role == "assistant" }) else { return nil }
+        let prompt = msgs[..<assistantIdx].last(where: { $0.role == "user" })?.content ?? ""
+        return (prompt, msgs[assistantIdx].content)
+    }
+
     /// Append a message to the active thread.
     func appendMessage(role: String, content: String, imageAttached: Bool = false) {
         guard let idx = threads.firstIndex(where: { $0.id == activeThreadId }) else { return }

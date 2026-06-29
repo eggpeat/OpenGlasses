@@ -32,7 +32,7 @@ then strike it here.
 | [U](U-structured-capture-flows.md) | No-code capture-flow author UI | JSON-authored flows ship today; the editor is the fast-follow |
 | [S](S-plan-then-execute-and-safety-supervisor.md) | Phase 2: LLM complexity classifier (vs keyword heuristic) + parallel-safe execution | Optional polish over the shipped supervisor/planner |
 | [O](O-document-rag.md) | Standalone `DocumentsView` (list / ingest-via-Files / delete) | Mirrors `VaultManagerView`; partially subsumed by AN's `ProjectDetailView`, a global view is still useful |
-| [AW](skill-self-evolution.md) | User-correction capture signal | An extra evolution trigger alongside the shipped tool-failure signal |
+| ~~[AW](skill-self-evolution.md)~~ | ~~User-correction capture signal~~ | ✅ Shipped — pure `UserCorrectionDetector` + `SkillEvolutionService.noteUserTurn` (records a `.userCorrection` sample against the prior exchange), wired into `sendTextMessage`; Agent-Mode-gated |
 | ~~[AT](frame-dedup-change-gate.md)~~ | ~~Advanced-threshold Settings control~~ | ✅ Shipped — `LiveVisionSettingsView` (toggle + threshold + heartbeat) under Settings → Advanced. Flipping the default *on* is still device-gated → B |
 | [AM](embedding-quality-upgrade.md) | Optional bundled MiniLM Core ML path | Gated on the `recall@k` benchmark showing a lift; the `EmbeddingBackend` seam is in place |
 | [AJ](additional-capabilities.md) | Declarative HUD widget board (#7) | Display Phase-5 concept; defer until X/Y are fully exercised and a concrete multi-widget use case exists |

@@ -2773,6 +2773,12 @@ class AppState: ObservableObject, AppStateProtocol {
             if conversationStore.activeThreadId == nil {
                 conversationStore.startThread(mode: currentMode.rawValue, personaId: activePersona?.id)
             }
+            // User-correction signal (Plan AW): before logging this turn, if it corrects the
+            // previous answer, feed it to the skill-evolution loop (Agent-Mode-gated, no-op otherwise).
+            if let prev = conversationStore.lastExchange() {
+                await SkillEvolutionService.shared.noteUserTurn(
+                    message: query, priorPrompt: prev.prompt, priorResponse: prev.response)
+            }
             conversationStore.appendMessage(role: "user", content: query, imageAttached: imageData != nil)
         }
 
