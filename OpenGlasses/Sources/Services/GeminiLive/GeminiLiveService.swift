@@ -19,6 +19,10 @@ class GeminiLiveService: ObservableObject {
     @Published var isModelSpeaking: Bool = false
     @Published var reconnecting: Bool = false
 
+    /// Converts Gemini Live's cumulative `usageMetadata` totals into per-message deltas
+    /// for the cost tracker (Plan AU).
+    private var usageMeter = CumulativeUsageMeter()
+
     // Callbacks
     var onAudioReceived: ((Data) -> Void)?
     var onTurnComplete: (() -> Void)?
@@ -370,6 +374,13 @@ class GeminiLiveService: ObservableObject {
         guard let data = text.data(using: .utf8),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return
+        }
+
+        // Token usage (cumulative) → record the delta for the cost tracker (Plan AU).
+        if let cumulative = RealtimeUsage.geminiCumulative(json) {
+            let d = usageMeter.delta(tokensIn: cumulative.tokensIn, tokensOut: cumulative.tokensOut)
+            UsageTracker.shared.record(provider: .gemini, model: Config.geminiLiveModel,
+                                       tokensIn: d.tokensIn, tokensOut: d.tokensOut)
         }
 
         // Setup complete

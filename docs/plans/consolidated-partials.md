@@ -24,7 +24,7 @@ then strike it here.
 
 | Plan | Outstanding item | Notes |
 |---|---|---|
-| [AU](llm-cost-usage-tracker.md) | ~~Streamed-Chat (`onToken`)~~ ✅ + realtime-voice token capture | Streamed-Chat SSE capture shipped (`StreamingUsageAccumulator`, Anthropic + OpenAI `include_usage`); realtime-voice (Gemini Live / OpenAI Realtime sessions) still pending |
+| ~~[AU](llm-cost-usage-tracker.md)~~ | ~~Streamed-Chat + realtime-voice token capture~~ | ✅ Shipped — streamed-Chat SSE (`StreamingUsageAccumulator`) + realtime voice (`RealtimeUsage` + `CumulativeUsageMeter`: OpenAI Realtime `response.done`, Gemini Live cumulative `usageMetadata`) |
 | ~~[AU](llm-cost-usage-tracker.md)~~ | ~~Settings pricing editor~~ | ✅ Shipped — `ModelPricingEditorView` + persisted `Config.modelPricingOverrides` |
 | ~~[AN](projects-scoped-contexts.md)~~ | ~~Shareable project export/import bundle~~ | ✅ Shipped — `ProjectBundle`/`ProjectBundleCodec` + `ProjectExporter`; export (share sheet) in `ProjectDetailView`, import (file picker) in `PersonasView` |
 | ~~[AB](health-safety-advisor.md)~~ | ~~Broader interaction-rubric coverage~~ | ✅ Shipped — +7 drug classes (statin/nitrate/PDE5/benzo/opioid/methotrexate/lithium) + alcohol; rules for MAOI+SSRI, PDE5+nitrate, methotrexate/lithium+NSAID, opioid+benzo, ACE+K-sparing, NSAID-in-pregnancy, alcohol+sedative, statin+grapefruit |

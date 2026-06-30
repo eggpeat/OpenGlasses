@@ -388,6 +388,14 @@ class OpenAIRealtimeService: ObservableObject {
             isModelSpeaking = false
             currentResponseId = nil
             responseLatencyLogged = false
+            // Record this response's token usage for the cost tracker (Plan AU).
+            if let usage = RealtimeUsage.openAIResponseUsage(json) {
+                let model = self.model
+                Task { @MainActor in
+                    UsageTracker.shared.record(provider: .openai, model: model,
+                                               tokensIn: usage.tokensIn, tokensOut: usage.tokensOut)
+                }
+            }
             onTurnComplete?()
 
         case "input_audio_buffer.speech_started":
