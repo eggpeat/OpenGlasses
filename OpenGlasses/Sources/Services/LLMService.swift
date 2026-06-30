@@ -1207,11 +1207,15 @@ class LLMService: ObservableObject {
     /// Streaming turns (Chat tab `onToken`) don't carry a usage block on this path and
     /// are not yet captured.
     private func recordUsage(provider: LLMProvider, model: String, json: [String: Any]) {
-        guard let tokens = UsageTracker.parseTokens(provider: provider, json: json),
-              tokens.tokensIn + tokens.tokensOut > 0 else { return }
+        guard let tokens = UsageTracker.parseTokens(provider: provider, json: json) else { return }
+        recordUsage(provider: provider, model: model, tokensIn: tokens.tokensIn, tokensOut: tokens.tokensOut)
+    }
+
+    /// Record already-parsed token counts (the streaming paths accumulate their own).
+    private func recordUsage(provider: LLMProvider, model: String, tokensIn: Int, tokensOut: Int) {
+        guard tokensIn + tokensOut > 0 else { return }
         Task { @MainActor in
-            UsageTracker.shared.record(provider: provider, model: model,
-                                       tokensIn: tokens.tokensIn, tokensOut: tokens.tokensOut)
+            UsageTracker.shared.record(provider: provider, model: model, tokensIn: tokensIn, tokensOut: tokensOut)
         }
     }
 
@@ -1276,7 +1280,7 @@ class LLMService: ObservableObject {
             let content: [[String: Any]]
             let stopReason: String?
             if let onToken {
-                (content, stopReason) = try await streamAnthropicContent(request: request, onToken: onToken)
+                (content, stopReason) = try await streamAnthropicContent(request: request, model: config.model, onToken: onToken)
             } else {
                 let (data, response) = try await URLSession.shared.data(for: request)
 
@@ -1498,7 +1502,12 @@ class LLMService: ObservableObject {
                 body["tools"] = tools
             }
 
-            if onToken != nil { body["stream"] = true }
+            if onToken != nil {
+                body["stream"] = true
+                // Ask for a final usage chunk so the streamed path can record cost (Plan AU).
+                // Servers that don't support it ignore the field; we then simply record nothing.
+                body["stream_options"] = ["include_usage": true]
+            }
             request.httpBody = try JSONSerialization.data(withJSONObject: body)
             request.timeoutInterval = 60 // 60s timeout to prevent app freezing
 
@@ -1512,7 +1521,7 @@ class LLMService: ObservableObject {
             // the reconstructed `message` (content + tool_calls) feeds the existing tool loop unchanged.
             let message: [String: Any]
             if let onToken {
-                message = try await streamOpenAIMessage(request: request, provider: provider, onToken: onToken)
+                message = try await streamOpenAIMessage(request: request, provider: provider, model: config.model, onToken: onToken)
             } else {
                 let (data, response) = try await URLSession.shared.data(for: request)
 
@@ -1622,7 +1631,7 @@ class LLMService: ObservableObject {
     /// delta, and return a reconstructed `message` dict (same shape as `choices[].message`) so the
     /// caller's tool loop runs identically to the buffered path. Only used when a streaming caller
     /// (the Chat tab) passes `onToken`; every other caller keeps the buffered path.
-    private func streamOpenAIMessage(request: URLRequest, provider: LLMProvider, onToken: @escaping (String) -> Void) async throws -> [String: Any] {
+    private func streamOpenAIMessage(request: URLRequest, provider: LLMProvider, model: String, onToken: @escaping (String) -> Void) async throws -> [String: Any] {
         let (bytes, response) = try await URLSession.shared.bytes(for: request)
         guard let http = response as? HTTPURLResponse else { throw LLMError.invalidResponse(provider.displayName) }
         guard http.statusCode == 200 else {
@@ -1637,14 +1646,16 @@ class LLMService: ObservableObject {
 
         var fullContent = ""
         var toolAcc: [Int: (id: String, name: String, args: String)] = [:]  // tool_calls accumulate by index
+        var usage = StreamingUsageAccumulator()   // from the final include_usage chunk
 
         for try await line in bytes.lines {
             guard line.hasPrefix("data:") else { continue }
             let payload = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
             if payload.isEmpty { continue }
             if payload == "[DONE]" { break }
-            guard let obj = try? JSONSerialization.jsonObject(with: Data(payload.utf8)) as? [String: Any],
-                  let choice = (obj["choices"] as? [[String: Any]])?.first,
+            guard let obj = try? JSONSerialization.jsonObject(with: Data(payload.utf8)) as? [String: Any] else { continue }
+            usage.consumeOpenAI(obj)   // the usage chunk has empty choices, so parse it before the guard
+            guard let choice = (obj["choices"] as? [[String: Any]])?.first,
                   let delta = choice["delta"] as? [String: Any] else { continue }
 
             if let chunk = delta["content"] as? String, !chunk.isEmpty {
@@ -1665,6 +1676,8 @@ class LLMService: ObservableObject {
             }
         }
 
+        recordUsage(provider: provider, model: model, tokensIn: usage.tokensIn, tokensOut: usage.tokensOut)
+
         var message: [String: Any] = ["role": "assistant", "content": fullContent]
         if !toolAcc.isEmpty {
             message["tool_calls"] = toolAcc.sorted { $0.key < $1.key }.map { _, v in
@@ -1677,7 +1690,7 @@ class LLMService: ObservableObject {
     /// Stream an Anthropic Messages response, invoking `onToken` for each text delta, and return
     /// the reconstructed content blocks + stop reason so the caller's tool loop runs identically to
     /// the buffered path. Only used when a streaming caller (the Chat tab) passes `onToken`.
-    private func streamAnthropicContent(request: URLRequest, onToken: @escaping (String) -> Void) async throws -> (content: [[String: Any]], stopReason: String?) {
+    private func streamAnthropicContent(request: URLRequest, model: String, onToken: @escaping (String) -> Void) async throws -> (content: [[String: Any]], stopReason: String?) {
         let (bytes, response) = try await URLSession.shared.bytes(for: request)
         guard let http = response as? HTTPURLResponse else { throw LLMError.invalidResponse("Anthropic") }
         guard http.statusCode == 200 else {
@@ -1691,6 +1704,7 @@ class LLMService: ObservableObject {
         var blocks: [Int: [String: Any]] = [:]   // content blocks by index
         var toolJSON: [Int: String] = [:]         // accumulated input_json per tool_use block
         var stopReason: String?
+        var usage = StreamingUsageAccumulator()   // input from message_start, output from message_delta
 
         for try await line in bytes.lines {
             guard line.hasPrefix("data:") else { continue }
@@ -1698,6 +1712,7 @@ class LLMService: ObservableObject {
             if payload.isEmpty { continue }
             guard let obj = try? JSONSerialization.jsonObject(with: Data(payload.utf8)) as? [String: Any],
                   let type = obj["type"] as? String else { continue }
+            usage.consumeAnthropic(obj)
 
             switch type {
             case "content_block_start":
@@ -1733,6 +1748,8 @@ class LLMService: ObservableObject {
             b["input"] = (try? JSONSerialization.jsonObject(with: Data(jsonStr.utf8)) as? [String: Any]) ?? [:]
             blocks[idx] = b
         }
+
+        recordUsage(provider: .anthropic, model: model, tokensIn: usage.tokensIn, tokensOut: usage.tokensOut)
 
         let content = blocks.sorted { $0.key < $1.key }.map { $0.value }
         return (content, stopReason)
