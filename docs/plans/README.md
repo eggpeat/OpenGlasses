@@ -63,6 +63,13 @@ core first, with the live/device/backend edge deferred; one PR per plan.
 | [AX](memory-taxonomy.md) | Typed Memory Taxonomy | 🚧 Core shipped ([#128](https://github.com/straff2002/OpenGlasses/pull/128)) — **project-scoped memory** (`ProjectMemory` + `project_note` tool, active-job context) + **relevance retrieval** (activates `SemanticMemoryStore.systemPromptContext(query:)`); both default-on for beta. Re-scoped after audit found most of the taxonomy already existed |
 | [AY](memory-recall.md) | Memory, Recall & Self-Improvement | ✅ Shipped (Phases 1–4) — FTS index + query builder + nudge/skill analyzers + insights ([#100](https://github.com/straff2002/OpenGlasses/pull/100)); cross-session `RecallService` + `brain recall` ([#101](https://github.com/straff2002/OpenGlasses/pull/101)) |
 | [AZ](vehicle-ev-status.md) | Vehicle / EV Status Tool | ✅ v1 shipped — `vehicle` tool over the Home Assistant path |
+| [BA](BA-android-port.md) | **Android Port (full roadmap)** | 📝 Drafted — parent roadmap to platform parity. Meta ships an official **Android DAT SDK** (Display from v0.7), so the hardware bridge is solved; the job is a native Kotlin/Compose reimplementation with the iOS app as the spec. 10 phases (0–9): bridge spike → cloud-only voice MVP (~3–5 wks) → tools → Compose UI → camera/HUD → vision/ML → platform+revenue → on-device tier → realtime → Wear OS/Android Auto/widgets. ~3–6 mo to full parity |
+| [BB](BB-store-integrity.md) | **Store Integrity & Data-Loss Hardening** | 📋 Planned — audit P1: shared `JSONFileStore` (backup-on-corrupt, element-wise decode, throwing save) + PlaybookStore/AgentDocumentStore default-overwrite fixes + SemanticMemoryStore parameterized SQL (apostrophe memories silently lost) + encrypted-ConversationStore serialization + save-error surfacing at tool boundaries |
+| [BC](BC-unconditional-safety-gate.md) | Unconditional Safety Gate & MCP Server Auth | 📋 Planned — audit P2: `HighImpactToolPolicy` confirmation for direct-actuation tools (`smart_home` unlock etc.) regardless of Agent Mode; bearer token + loopback default for `MCPGlassesServer`; `URLFetchGuard` for QR/LLM-supplied URLs |
+| [BD](BD-realtime-session-resilience.md) | Realtime Session Resilience | 📋 Planned — audit P3: pure `ReconnectMachine` shared by Gemini Live + OpenAI Realtime (fixes `goAway` death, terminal error-event deafness, open-but-mute stall, counter/timer bugs) + audible failure feedback |
+| [BE](BE-wake-word-hardening.md) | Wake-Word Service Hardening | 📋 Planned — audit P4: tap-thread snapshot (fixes the `@MainActor`-from-audio-thread race), owned observer tokens (fixes per-reconnect accumulation), on-device wake recognition (top battery/data win), coordinator-aware interruption recovery |
+| [BF](BF-llm-turn-hygiene.md) | LLM Turn Hygiene | 📋 Planned — audit P5: pure `HistoryHygiene` (repair dangling `tool_use` that bricks conversations; prune old images that re-upload every turn; image-aware token estimator) + Anthropic `cache_control` prompt caching wired into the AU usage tracker |
+| [BG](BG-spine-refactor.md) | Spine Refactor (phased) | 📋 Planned — audit P6: P1 registry-generated tool prompts (kills the two drifting prose lists + the CLAUDE.md both-prompts rule) → P2 `ConversationFlowEngine` + handler chain (first tests on the main state machine; cancellable turns) → P3 `LLMProviderAdapter` + one tool loop (currently 4 copies) → P4 twin audio-manager merge → P5 Config split |
 
 **Three selectable expert-stream transports** (Plans L/M + the meeting-link connector): **MJPEG** (same-LAN browser viewer), **Meeting link** (zero-infra — your meeting tool hosts the call; recommended for remote, nothing to self-host), and **WebRTC** (self-hosted peer-to-peer, needs your own signaling + TURN).
 
@@ -93,6 +100,11 @@ the suggested sequences.
 - **Round 9 — reliability & connectivity hardening (AO–AS).** Audio-session resilience (P1/P2 + lease coordinator), speaker diarization, gateway device pairing. Shipped in order #114 → #115 → #116.
 - **Round 10 — live-vision efficiency & self-improvement (AT–AW).** Sequence: Frame Gate → Cost Tracker → Visual State Memory → Skill Self-Evolution (largest, safety-sensitive; sequence last).
 - **Round 11 — adaptive long-term memory (AX).** A typed memory layer over the existing stores; re-scoped after a code audit to the real gaps (project-scoped memory + relevance retrofit). Pairs with the Embedding Upgrade (AM) and Visual State Memory (AV).
+- **Round 12 — audit hardening (BB–BG).** From the July 2026 six-track code audit (security,
+  concurrency, error handling, persistence, network, performance). Sequence: BB (data loss first)
+  → BC (safety gate) → BD (realtime resilience) → BE (wake word) → BF (LLM turn hygiene) → BG
+  (spine refactor, phased). BD and BF both get simpler after BG P2/P3 but are deliberately scoped
+  to ship before it.
 - **Standalone tools.** First-Aid (AA), HECA (AC), Structured Vision (AD), Study Mode (AE), Memory/Recall (AY), Vehicle (AZ), and the planned/drafted items (AB, AF, AG, AH, AI) sit outside a single round but are indexed and lettered above.
 
 ## Dependency graph
