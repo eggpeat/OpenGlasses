@@ -47,6 +47,20 @@ final class ModelFetcherTests: XCTestCase {
         )
     }
 
+    // MARK: - xAI provider defaults
+
+    func testXAIProviderDefaults() {
+        let config = ModelConfig.defaultConfig(for: .xai)
+        XCTAssertEqual(config.baseURL, "https://api.x.ai/v1/chat/completions")
+        XCTAssertEqual(config.model, "grok-4")
+        XCTAssertTrue(LLMProvider.xai.isOpenAICompatible)
+        XCTAssertTrue(LLMProvider.xai.requiresAPIKey)
+        XCTAssertEqual(
+            ModelFetcher.modelsEndpoint(from: LLMProvider.xai.defaultBaseURL),
+            "https://api.x.ai/v1/models"
+        )
+    }
+
     // MARK: - ModelConfig.inferredSupportsVision
 
     private func inferredVision(_ provider: LLMProvider, _ model: String, baseURL: String = "") -> Bool {
@@ -87,6 +101,10 @@ final class ModelFetcherTests: XCTestCase {
 
     func testInferredVisionOpenRouterHeuristic() {
         XCTAssertTrue(inferredVision(.openrouter, "anthropic/claude-3.5-sonnet"))
+        // xAI: Grok 4 family is multimodal, earlier text models are not
+        XCTAssertTrue(inferredVision(.xai, "grok-4"))
+        XCTAssertTrue(inferredVision(.xai, "grok-4-fast"))
+        XCTAssertFalse(inferredVision(.xai, "grok-3-mini"))
         XCTAssertTrue(inferredVision(.openrouter, "meta-llama/llava-13b"))
         XCTAssertFalse(inferredVision(.openrouter, "mistralai/mistral-7b"))
     }

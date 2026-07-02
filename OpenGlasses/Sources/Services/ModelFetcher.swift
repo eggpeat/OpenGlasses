@@ -59,7 +59,7 @@ enum ModelFetcher {
     static func fetchModels(provider: LLMProvider, apiKey: String, baseURL: String) async -> [RemoteModel] {
         // Local OpenAI-compatible servers (Ollama, llama.cpp, LM Studio, vLLM…) usually
         // need no API key, so let the custom provider list models without one.
-        guard !apiKey.isEmpty || provider == .custom else { return [] }
+        guard !apiKey.isEmpty || provider == .custom || provider == .anthropic else { return [] }
 
         switch provider {
         case .anthropic:
@@ -70,7 +70,7 @@ enum ModelFetcher {
             return await fetchQwen(apiKey: apiKey, baseURL: baseURL)
         case .minimax:
             return await fetchMiniMax(apiKey: apiKey, baseURL: baseURL)
-        case .openai, .groq, .zai, .openrouter, .custom:
+        case .openai, .groq, .zai, .xai, .openrouter, .custom:
             return await fetchOpenAICompatible(apiKey: apiKey, baseURL: baseURL)
         case .local, .appleOnDevice:
             return []  // Local/Apple models are managed separately
@@ -235,10 +235,11 @@ enum ModelFetcher {
 
     private static func fetchAnthropic(apiKey: String) async -> [RemoteModel] {
         guard let url = URL(string: "https://api.anthropic.com/v1/models") else { return [] }
+        let credential = await AnthropicAuth.resolveCredential(apiKey: apiKey)
+        guard !credential.isEmpty else { return [] }
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
-        request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
-        request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+        AnthropicAuth.apply(credential: credential, to: &request)
         request.timeoutInterval = 30
 
         do {

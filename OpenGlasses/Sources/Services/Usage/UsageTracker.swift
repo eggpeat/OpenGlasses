@@ -54,7 +54,7 @@ final class UsageTracker: ObservableObject {
         case .gemini:
             guard let u = json["usageMetadata"] as? [String: Any] else { return nil }
             return (intValue(u["promptTokenCount"]), intValue(u["candidatesTokenCount"]))
-        case .openai, .groq, .zai, .qwen, .minimax, .openrouter, .custom, .local, .appleOnDevice:
+        case .openai, .groq, .zai, .qwen, .minimax, .xai, .openrouter, .custom, .local, .appleOnDevice:
             guard let u = json["usage"] as? [String: Any] else { return nil }
             return (intValue(u["prompt_tokens"]), intValue(u["completion_tokens"]))
         }

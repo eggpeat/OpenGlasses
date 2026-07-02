@@ -248,6 +248,10 @@ struct ModelConfig: Codable, Identifiable, Equatable {
             // Qwen3.5-plus and qwen-vl models support vision
             let lowerModel = model.lowercased()
             return lowerModel.contains("vl") || lowerModel.contains("plus") || lowerModel.contains("max") || lowerModel.contains("omni")
+        case .xai:
+            // Grok 4 family is multimodal; earlier Grok text models are not
+            let lowerModel = model.lowercased()
+            return lowerModel.contains("grok-4") || lowerModel.contains("vision")
         case .openrouter:
             // OpenRouter supports vision for many models
             let lowerModel = model.lowercased()
@@ -553,7 +557,7 @@ struct Config {
     }
 
     /// Claude model to use
-    static let claudeModel = "claude-sonnet-4-20250514"
+    static let claudeModel = "claude-sonnet-5"
 
     /// Max tokens for LLM response
     static let maxTokens = 500

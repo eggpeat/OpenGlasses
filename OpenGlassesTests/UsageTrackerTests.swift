@@ -17,8 +17,10 @@ final class UsageTrackerTests: XCTestCase {
         XCTAssertEqual(mini, ModelPricing.Rate(0.15, 0.60))
         let full = ModelPricing.rate(for: "gpt-4o-2024-11-20")
         XCTAssertEqual(full, ModelPricing.Rate(2.50, 10))
-        // Opus dated id resolves to the opus family.
-        XCTAssertEqual(ModelPricing.rate(for: "claude-opus-4-8"), ModelPricing.Rate(15, 75))
+        // Current-gen Opus has its own (longer) prefix entry at current pricing…
+        XCTAssertEqual(ModelPricing.rate(for: "claude-opus-4-8"), ModelPricing.Rate(5, 25))
+        // …while older dated Opus ids still fall back to the opus family rate.
+        XCTAssertEqual(ModelPricing.rate(for: "claude-opus-4-1-20250805"), ModelPricing.Rate(15, 75))
     }
 
     func testUnknownModelIsNil() {
