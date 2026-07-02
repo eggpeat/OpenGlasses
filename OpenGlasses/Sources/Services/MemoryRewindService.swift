@@ -13,14 +13,17 @@ class MemoryRewindService: ObservableObject {
     /// How many minutes of audio to keep (configurable)
     var maxBufferMinutes: Double = 10.0
 
-    /// Audio buffer — stores raw PCM samples
-    private var audioBuffer: Data = Data()
-    private var bufferSampleRate: Double = 16000
+    /// All rolling-buffer state is confined to `ingestQueue` — the audio thread writes and the main
+    /// actor reads only by hopping here, so the lazily-sized ring is never accessed concurrently.
+    private let ingestQueue = DispatchQueue(label: "memory.rewind.ingest", qos: .utility)
+    private nonisolated(unsafe) var ring: RewindRingBuffer?      // ingestQueue only
+    private nonisolated(unsafe) var bufferSampleRate: Double = 16000   // ingestQueue only
+    private nonisolated(unsafe) var ringMaxMinutes: Double = 10        // ingestQueue only
     private var bufferStartTime: Date?
+    /// Periodically refreshes the published duration off the audio hot path.
+    private var durationTimer: Timer?
 
-    /// Bytes per minute at 16kHz mono 16-bit = 16000 * 2 * 60 = 1,920,000
-    private var bytesPerMinute: Int { Int(bufferSampleRate) * 2 * 60 }
-    private var maxBufferBytes: Int { Int(maxBufferMinutes) * bytesPerMinute }
+    private static func bytesPerMinute(at rate: Double) -> Int { Int(rate) * 2 * 60 }
 
     /// Reference to wake word service for audio tap
     weak var wakeWordService: WakeWordService?
@@ -32,14 +35,23 @@ class MemoryRewindService: ObservableObject {
     func start() {
         guard !isActive else { return }
         isActive = true
-        audioBuffer = Data()
         bufferStartTime = Date()
 
-        // Hook into the audio buffer stream (named consumer)
+        let maxMinutes = maxBufferMinutes
+        ingestQueue.async { [weak self] in
+            self?.ring = nil                 // (re)created on the first buffer, sized to its rate
+            self?.ringMaxMinutes = maxMinutes
+        }
+
+        // Ingest directly on the audio thread — no per-buffer main-actor hop. Conversion is bulk
+        // (PCMConverter) and the ring append is O(bytes appended); the published duration is
+        // refreshed on a 1s timer instead of once per buffer.
         wakeWordService?.addAudioBufferConsumer(id: "memory_rewind") { [weak self] buffer in
-            Task { @MainActor in
-                self?.appendAudioBuffer(buffer)
-            }
+            self?.ingest(buffer)
+        }
+
+        durationTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            self?.refreshDuration()
         }
 
         print("⏪ Memory rewind started (keeping \(Int(maxBufferMinutes)) min)")
@@ -48,10 +60,23 @@ class MemoryRewindService: ObservableObject {
     func stop() {
         isActive = false
         wakeWordService?.removeAudioBufferConsumer(id: "memory_rewind")
-        audioBuffer = Data()
+        durationTimer?.invalidate()
+        durationTimer = nil
+        ingestQueue.async { [weak self] in
+            self?.ring?.reset()
+            self?.ring = nil
+        }
         bufferStartTime = nil
         bufferDurationMinutes = 0
         print("⏪ Memory rewind stopped")
+    }
+
+    private func refreshDuration() {
+        ingestQueue.async { [weak self] in
+            guard let self, let ring = self.ring else { return }
+            let minutes = Double(ring.count) / Double(Self.bytesPerMinute(at: self.bufferSampleRate))
+            Task { @MainActor in self.bufferDurationMinutes = minutes }
+        }
     }
 
     /// Transcribe the last N minutes (or all buffered audio) and return text
@@ -60,24 +85,30 @@ class MemoryRewindService: ObservableObject {
             return "Memory rewind is not active. Enable it in settings first."
         }
 
-        guard !audioBuffer.isEmpty else {
+        let minutesToTranscribe = min(lastMinutes, max(bufferDurationMinutes, 0))
+
+        // Read the most recent window off the ingest queue (where the ring lives).
+        let (recentAudio, rate): (Data, Double) = await withCheckedContinuation { continuation in
+            ingestQueue.async { [weak self] in
+                guard let self, let ring = self.ring else {
+                    continuation.resume(returning: (Data(), 16000))
+                    return
+                }
+                let bytesPerMin = Self.bytesPerMinute(at: self.bufferSampleRate)
+                // `minutesToTranscribe` is 0 when the fraction is < 1 min; fall back to the whole ring.
+                let requested = minutesToTranscribe >= 1 ? Int(minutesToTranscribe) * bytesPerMin : ring.count
+                continuation.resume(returning: (ring.snapshotSuffix(requested), self.bufferSampleRate))
+            }
+        }
+
+        guard !recentAudio.isEmpty else {
             return "No audio buffered yet. Keep it running for a bit."
         }
-
-        let minutesToTranscribe = min(lastMinutes, bufferDurationMinutes)
-        let bytesToUse = min(Int(minutesToTranscribe) * bytesPerMinute, audioBuffer.count)
-
-        guard bytesToUse > 0 else {
-            return "Not enough audio buffered."
-        }
-
-        // Take the most recent N bytes
-        let recentAudio = audioBuffer.suffix(bytesToUse)
 
         print("⏪ Rewinding \(String(format: "%.1f", minutesToTranscribe)) min (\(recentAudio.count) bytes)...")
 
         // Convert raw PCM data to a WAV file for speech recognition
-        let wavData = createWAV(from: recentAudio, sampleRate: bufferSampleRate)
+        let wavData = createWAV(from: recentAudio, sampleRate: rate)
 
         do {
             let transcript = try await transcribeAudio(wavData)
@@ -92,33 +123,20 @@ class MemoryRewindService: ObservableObject {
 
     // MARK: - Audio Buffer Management
 
-    private func appendAudioBuffer(_ buffer: AVAudioPCMBuffer) {
-        // Convert to 16-bit PCM data
-        guard let channelData = buffer.floatChannelData else { return }
-        let frameCount = Int(buffer.frameLength)
-        let sampleRate = buffer.format.sampleRate
-        bufferSampleRate = sampleRate
-
-        // Convert float samples to Int16
-        var pcmData = Data(capacity: frameCount * 2)
-        for i in 0..<frameCount {
-            let sample = channelData[0][i]
-            let clamped = max(-1.0, min(1.0, sample))
-            var int16Sample = Int16(clamped * Float(Int16.max))
-            pcmData.append(Data(bytes: &int16Sample, count: 2))
-        }
-
-        audioBuffer.append(pcmData)
-
-        // Trim to max size
-        if audioBuffer.count > maxBufferBytes {
-            let excess = audioBuffer.count - maxBufferBytes
-            audioBuffer.removeFirst(excess)
-        }
-
-        // Update duration
-        Task { @MainActor in
-            bufferDurationMinutes = Double(audioBuffer.count) / Double(bytesPerMinute)
+    /// Called on the audio-render thread. Bulk-converts float32 → linear16 (one allocation) and
+    /// appends into the ring on `ingestQueue`; the whole-buffer memmove of the old design is gone.
+    private nonisolated func ingest(_ buffer: AVAudioPCMBuffer) {
+        let rate = buffer.format.sampleRate
+        let pcm = PCMConverter.linear16Mono(from: buffer)
+        guard !pcm.isEmpty else { return }
+        ingestQueue.async { [weak self] in
+            guard let self else { return }
+            self.bufferSampleRate = rate
+            if self.ring == nil {
+                let capacity = max(1, Int(self.ringMaxMinutes * Double(Self.bytesPerMinute(at: rate))))
+                self.ring = RewindRingBuffer(capacity: capacity)
+            }
+            self.ring?.append(pcm)
         }
     }
 
