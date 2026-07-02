@@ -188,11 +188,19 @@ class OpenAIRealtimeSessionManager: ObservableObject {
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 100_000_000)
                 guard !Task.isCancelled else { break }
-                self.connectionState = self.realtimeService.connectionState
+                // Assign only on change — an unconditional write fires objectWillChange at 10 Hz for
+                // the whole session (Plan: perf bucket A).
+                if self.connectionState != self.realtimeService.connectionState {
+                    self.connectionState = self.realtimeService.connectionState
+                }
                 let speaking = self.realtimeService.isModelSpeaking
-                self.isModelSpeaking = speaking
-                self.audioManager.modelSpeaking = speaking
-                self.reconnecting = self.realtimeService.reconnecting
+                if self.isModelSpeaking != speaking {
+                    self.isModelSpeaking = speaking
+                    self.audioManager.modelSpeaking = speaking
+                }
+                if self.reconnecting != self.realtimeService.reconnecting {
+                    self.reconnecting = self.realtimeService.reconnecting
+                }
             }
         }
 

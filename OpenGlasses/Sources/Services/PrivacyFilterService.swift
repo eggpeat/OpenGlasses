@@ -17,7 +17,9 @@ class PrivacyFilterService: ObservableObject {
     /// Known face IDs to NOT blur (the user's saved faces)
     var exemptFaceprints: [[Float]] = []
 
-    private let ciContext = CIContext()
+    /// Shared render context — `nonisolated` so the off-main `blurFaces` reuses this one Metal
+    /// pipeline instead of building a fresh CIContext per frame (a classic per-frame GPU cost).
+    private nonisolated let ciContext = CIContext()
 
     /// Whether processing is suspended (background optimization for streaming).
     private var isSuspended = false
@@ -125,7 +127,6 @@ class PrivacyFilterService: ObservableObject {
 
         // Create a composite: original image with blurred face regions
         var result = ciImage
-        let ciContext = CIContext()
 
         for faceRect in faceRects {
             // Expand face rect slightly for better coverage
