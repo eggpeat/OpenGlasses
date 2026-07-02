@@ -92,46 +92,64 @@ class SemanticMemoryStore: ObservableObject {
 
     // MARK: - Public API (legacy key-value compatible)
 
-    func remember(_ key: String, value: String) {
+    /// Returns false when the write did not reach the database — callers at a tool/spoken
+    /// boundary should say so rather than claim the fact was saved.
+    @discardableResult
+    func remember(_ key: String, value: String) -> Bool {
         let k = normalise(key)
-        guard !k.isEmpty, !value.isEmpty else { return }
+        guard !k.isEmpty, !value.isEmpty else { return false }
         let ns = activePersonaId ?? "global"
         if activePersonaId != nil {
-            if personaMemories[k] == value { return }
-            upsert(key: k, value: value, namespace: ns)
+            if personaMemories[k] == value { return true }
+            guard upsert(key: k, value: value, namespace: ns) else {
+                NSLog("[SemanticMemory] FAILED to persist persona memory %@", k)
+                return false
+            }
             refreshPersonaCache()
             trim(namespace: ns, maxChars: maxPersonaChars)
             NSLog("[SemanticMemory] Persona: %@ = %@", k, value)
         } else {
-            if memories[k] == value { return }
-            upsert(key: k, value: value, namespace: "global")
+            if memories[k] == value { return true }
+            guard upsert(key: k, value: value, namespace: "global") else {
+                NSLog("[SemanticMemory] FAILED to persist global memory %@", k)
+                return false
+            }
             refreshGlobalCache()
             trim(namespace: "global", maxChars: maxGlobalChars)
             NSLog("[SemanticMemory] Global: %@ = %@", k, value)
         }
         pushToGateway(key: k, value: value)
+        return true
     }
 
-    func rememberGlobal(_ key: String, value: String) {
+    @discardableResult
+    func rememberGlobal(_ key: String, value: String) -> Bool {
         let k = normalise(key)
-        guard !k.isEmpty, !value.isEmpty else { return }
-        if memories[k] == value { return }
-        upsert(key: k, value: value, namespace: "global")
+        guard !k.isEmpty, !value.isEmpty else { return false }
+        if memories[k] == value { return true }
+        guard upsert(key: k, value: value, namespace: "global") else {
+            NSLog("[SemanticMemory] FAILED to persist global memory %@", k)
+            return false
+        }
         refreshGlobalCache()
         trim(namespace: "global", maxChars: maxGlobalChars)
         NSLog("[SemanticMemory] Global: %@ = %@", k, value)
         pushToGateway(key: k, value: value)
+        return true
     }
 
-    func forget(_ key: String) {
+    @discardableResult
+    func forget(_ key: String) -> Bool {
         let k = normalise(key)
+        let ok: Bool
         if let pid = activePersonaId {
-            deleteMemory(key: k, namespace: pid)
+            ok = deleteMemory(key: k, namespace: pid)
             refreshPersonaCache()
         } else {
-            deleteMemory(key: k, namespace: "global")
+            ok = deleteMemory(key: k, namespace: "global")
             refreshGlobalCache()
         }
+        return ok
     }
 
     func recall(_ key: String) -> String? {
@@ -150,7 +168,7 @@ class SemanticMemoryStore: ObservableObject {
     func clearPersonaMemories() {
         guard let pid = activePersonaId else { return }
         personaMemories.removeAll()
-        exec("DELETE FROM memories WHERE namespace = '\(pid)'")
+        run("DELETE FROM memories WHERE namespace = ?", [.text(pid)])
         NSLog("[SemanticMemory] Cleared persona memories for %@", pid)
     }
 
@@ -243,8 +261,8 @@ class SemanticMemoryStore: ObservableObject {
         guard !text.isEmpty else { return }
         let id = UUID().uuidString
         let now = Date().timeIntervalSince1970
-        let t = escapedSQL(text)
-        exec("INSERT INTO diary (id, text, created_at) VALUES ('\(id)', '\(t)', \(now))")
+        run("INSERT INTO diary (id, text, created_at) VALUES (?, ?, ?)",
+            [.text(id), .text(text), .real(now)])
         // Store embedding (+ version stamp) for later search
         if let vec = embed(text) {
             writeDiaryEmbedding(id: id, vec: vec)
@@ -454,41 +472,48 @@ class SemanticMemoryStore: ObservableObject {
 
     // MARK: - Private: CRUD
 
-    private func upsert(key: String, value: String, namespace: String) {
+    @discardableResult
+    private func upsert(key: String, value: String, namespace: String) -> Bool {
         let id = "\(namespace):\(key)"
         let topic = detectTopic(key: key, value: value)
         let now = Date().timeIntervalSince1970
-        let v = escapedSQL(value)
-        exec("""
+        let ok = run("""
         INSERT INTO memories (id, key_name, value, topic, namespace, created_at)
-        VALUES ('\(id)', '\(key)', '\(v)', '\(topic)', '\(namespace)', \(now))
+        VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT(key_name, namespace) DO UPDATE SET
             value = excluded.value,
             topic = excluded.topic,
             created_at = excluded.created_at,
             embedding = NULL
-        """)
+        """, [.text(id), .text(key), .text(value), .text(topic), .text(namespace), .real(now)])
+        guard ok else { return false }
         // Compute and store embedding (+ version stamp) synchronously (fast for short texts).
         if let vec = embed("\(key) \(value)") {
             writeMemoryEmbedding(id: id, vec: vec)
         }
+        return true
     }
 
-    private func deleteMemory(key: String, namespace: String) {
-        exec("DELETE FROM memories WHERE key_name = '\(key)' AND namespace = '\(namespace)'")
+    @discardableResult
+    private func deleteMemory(key: String, namespace: String) -> Bool {
+        run("DELETE FROM memories WHERE key_name = ? AND namespace = ?",
+            [.text(key), .text(namespace)])
     }
 
     private func fetchAllMemories(namespace: String? = nil) -> [MemoryEntry] {
         var entries: [MemoryEntry] = []
         var stmt: OpaquePointer?
         let sql: String
-        if let ns = namespace {
-            sql = "SELECT id, key_name, value, topic, namespace, created_at, expires_at FROM memories WHERE namespace = '\(ns)'"
+        if namespace != nil {
+            sql = "SELECT id, key_name, value, topic, namespace, created_at, expires_at FROM memories WHERE namespace = ?"
         } else {
             sql = "SELECT id, key_name, value, topic, namespace, created_at, expires_at FROM memories"
         }
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return entries }
         defer { sqlite3_finalize(stmt) }
+        if let ns = namespace {
+            sqlite3_bind_text(stmt, 1, ns, -1, SQLITE_TRANSIENT)
+        }
         let now = Date().timeIntervalSince1970
         while sqlite3_step(stmt) == SQLITE_ROW {
             let expiresAt = sqlite3_column_type(stmt, 6) != SQLITE_NULL ? sqlite3_column_double(stmt, 6) : nil
@@ -508,9 +533,11 @@ class SemanticMemoryStore: ObservableObject {
 
     private func fetchEmbedding(key: String, namespace: String) -> (vec: [Float], version: String?)? {
         var stmt: OpaquePointer?
-        let sql = "SELECT embedding, embedding_version FROM memories WHERE key_name = '\(key)' AND namespace = '\(namespace)'"
+        let sql = "SELECT embedding, embedding_version FROM memories WHERE key_name = ? AND namespace = ?"
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return nil }
         defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_text(stmt, 1, key, -1, SQLITE_TRANSIENT)
+        sqlite3_bind_text(stmt, 2, namespace, -1, SQLITE_TRANSIENT)
         guard sqlite3_step(stmt) == SQLITE_ROW,
               sqlite3_column_type(stmt, 0) != SQLITE_NULL,
               let ptr = sqlite3_column_blob(stmt, 0) else { return nil }
@@ -607,14 +634,27 @@ class SemanticMemoryStore: ObservableObject {
         let legacyURL = docsDir.appendingPathComponent("user_memories.json")
         guard FileManager.default.fileExists(atPath: legacyURL.path) else { return }
         guard let data = try? Data(contentsOf: legacyURL),
-              let dict = try? JSONDecoder().decode([String: String].self, from: data),
-              !dict.isEmpty else { return }
+              let dict = try? JSONDecoder().decode([String: String].self, from: data) else {
+            // Transient read/decode failure — leave the file for a later attempt.
+            return
+        }
 
-        // Only migrate if semantic DB is empty
-        guard fetchAllMemories(namespace: "global").isEmpty else { return }
-        NSLog("[SemanticMemory] Migrating %d legacy memories", dict.count)
-        for (key, value) in dict { upsert(key: key, value: value, namespace: "global") }
-        refreshGlobalCache()
+        // Migrate only into an empty semantic DB; either way, retire the legacy file so it can
+        // never re-import. (It used to linger forever: `clearAll()` + relaunch resurrected every
+        // "forgotten" memory from it.)
+        if !dict.isEmpty, fetchAllMemories(namespace: "global").isEmpty {
+            NSLog("[SemanticMemory] Migrating %d legacy memories", dict.count)
+            for (key, value) in dict { upsert(key: key, value: value, namespace: "global") }
+            refreshGlobalCache()
+        }
+        let retired = legacyURL.appendingPathExtension("migrated")
+        try? FileManager.default.removeItem(at: retired)
+        do {
+            try FileManager.default.moveItem(at: legacyURL, to: retired)
+            NSLog("[SemanticMemory] Retired legacy memory file")
+        } catch {
+            NSLog("[SemanticMemory] Could not retire legacy memory file: %@", error.localizedDescription)
+        }
     }
 
     // MARK: - Private: Embedding
@@ -679,11 +719,38 @@ class SemanticMemoryStore: ObservableObject {
         return sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK
     }
 
-    private func normalise(_ key: String) -> String {
-        key.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+    /// A value bound into a parameterized statement — the only safe way to put user/LLM text
+    /// into SQL. (Interpolating escaped strings broke on apostrophes in memory *keys*, which
+    /// were never escaped: `[REMEMBER: daughter's birthday = …]` silently failed to save.)
+    private enum SQLValue {
+        case text(String)
+        case real(Double)
     }
 
-    private func escapedSQL(_ s: String) -> String {
-        s.replacingOccurrences(of: "'", with: "''")
+    /// Run a parameterized (non-query) statement with positional `?` binds.
+    @discardableResult
+    private func run(_ sql: String, _ binds: [SQLValue]) -> Bool {
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            NSLog("[SemanticMemory] prepare failed: %@", String(cString: sqlite3_errmsg(db)))
+            return false
+        }
+        defer { sqlite3_finalize(stmt) }
+        for (i, bind) in binds.enumerated() {
+            let idx = Int32(i + 1)
+            switch bind {
+            case .text(let s): sqlite3_bind_text(stmt, idx, s, -1, SQLITE_TRANSIENT)
+            case .real(let d): sqlite3_bind_double(stmt, idx, d)
+            }
+        }
+        let ok = sqlite3_step(stmt) == SQLITE_DONE
+        if !ok {
+            NSLog("[SemanticMemory] step failed: %@", String(cString: sqlite3_errmsg(db)))
+        }
+        return ok
+    }
+
+    private func normalise(_ key: String) -> String {
+        key.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }

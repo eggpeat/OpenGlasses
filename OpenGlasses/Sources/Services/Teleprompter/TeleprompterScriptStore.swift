@@ -80,17 +80,21 @@ final class TeleprompterScriptStore: ObservableObject {
         save()
     }
 
-    /// Drain any scripts shared in via the Share Extension (PR B) and save them (newest
+    /// Import any scripts shared in via the Share Extension (PR B) and save them (newest
     /// first). Called on init and on app foreground. Returns the number imported.
+    /// The inbox is cleared only after the store's save commits — a failed save leaves the
+    /// shares in the app-group container for the next attempt instead of losing them.
     @discardableResult
     func importPendingShares() -> Int {
-        let pending = SharedTeleprompterInbox.drain()
+        let pending = SharedTeleprompterInbox.peek()
         guard !pending.isEmpty else { return 0 }
         for item in pending {
             let title = item.title.isEmpty ? SavedScript.deriveTitle(from: item.text) : item.title
             scripts.insert(SavedScript(title: title, text: item.text), at: 0)
         }
-        save()
+        if save() {
+            SharedTeleprompterInbox.remove(pending)
+        }
         return pending.count
     }
 
@@ -110,14 +114,36 @@ final class TeleprompterScriptStore: ObservableObject {
 
     // MARK: - Persistence
 
+    /// True after a read failure on an existing scripts file — saves are suppressed so the
+    /// on-disk data (possibly intact) is never overwritten.
+    private var saveBlocked = false
+
     private func load() {
-        guard let data = try? Data(contentsOf: fileURL),
-              let decoded = try? JSONDecoder().decode([SavedScript].self, from: data) else { return }
-        scripts = decoded
+        switch JSONStore.loadArray(SavedScript.self, at: fileURL, name: "teleprompter_scripts") {
+        case .loaded(let decoded), .recovered(let decoded, _):
+            scripts = decoded
+        case .corrupt:
+            scripts = []   // original preserved in StoreRecovery
+        case .unreadable:
+            saveBlocked = true
+        case .absent:
+            break
+        }
     }
 
-    private func save() {
-        guard let data = try? JSONEncoder().encode(scripts) else { return }
-        try? data.write(to: fileURL, options: .atomic)
+    @discardableResult
+    private func save() -> Bool {
+        guard !saveBlocked else {
+            NSLog("[TeleprompterScriptStore] Save skipped — last load failed to read the existing file")
+            return false
+        }
+        do {
+            let data = try JSONEncoder().encode(scripts)
+            try data.write(to: fileURL, options: .atomic)
+            return true
+        } catch {
+            NSLog("[TeleprompterScriptStore] Save failed: %@", error.localizedDescription)
+            return false
+        }
     }
 }

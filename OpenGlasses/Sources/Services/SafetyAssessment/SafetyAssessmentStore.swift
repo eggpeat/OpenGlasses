@@ -43,13 +43,28 @@ final class SafetyAssessmentStore: ObservableObject {
 
     // MARK: - Persistence
 
+    /// True after a read failure on an existing history file — saves are suppressed so the
+    /// on-disk data (possibly intact) is never overwritten.
+    private var saveBlocked = false
+
     private func load() {
-        guard let data = try? Data(contentsOf: fileURL),
-              let reports = try? JSONDecoder().decode([SafetyReport].self, from: data) else { return }
-        history = reports
+        switch JSONStore.loadArray(SafetyReport.self, at: fileURL, name: "safety_history") {
+        case .loaded(let reports), .recovered(let reports, _):
+            history = reports
+        case .corrupt:
+            history = []   // original preserved in StoreRecovery
+        case .unreadable:
+            saveBlocked = true
+        case .absent:
+            break
+        }
     }
 
     private func persist() {
+        guard !saveBlocked else {
+            NSLog("[SafetyAssessmentStore] Save skipped — last load failed to read the existing file")
+            return
+        }
         do {
             try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
             let data = try JSONEncoder().encode(history)

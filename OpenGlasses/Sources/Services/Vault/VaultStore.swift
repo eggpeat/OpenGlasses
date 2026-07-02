@@ -53,13 +53,32 @@ final class VaultStore {
 
     /// Append a timestamped entry to a vault file. Creates the file if missing.
     /// Format: trailing blank line + ISO date heading + entry text.
+    /// Throws when an existing file can't be read (file protection, encoding) — rewriting the
+    /// file from a failed read would replace the accumulated log with just this entry.
     @discardableResult
     func append(_ filename: String, entry: String, date: Date = Date()) throws -> URL {
-        let existing = read(filename) ?? ""
+        let existing = try readStrict(filename) ?? ""
         let iso = ISO8601DateFormatter().string(from: date)
         let separator = existing.isEmpty ? "" : "\n\n"
         let appended = "\(existing)\(separator)## \(iso)\n\n\(entry)"
         return try write(filename, contents: appended)
+    }
+
+    /// Like `read`, but distinguishes "file genuinely absent" (nil) from "file exists but the
+    /// read failed" (throws).
+    private func readStrict(_ filename: String) throws -> String? {
+        let fm = FileManager.default
+        let overlayURL = overlayRoot.appendingPathComponent(filename)
+        if fm.fileExists(atPath: overlayURL.path) {
+            return try String(contentsOf: overlayURL, encoding: .utf8)
+        }
+        if let bundleRoot {
+            let bundleURL = bundleRoot.appendingPathComponent(filename)
+            if fm.fileExists(atPath: bundleURL.path) {
+                return try String(contentsOf: bundleURL, encoding: .utf8)
+            }
+        }
+        return nil
     }
 
     /// Read all manifest files, returning [filename: contents]. Missing files are skipped.

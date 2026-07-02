@@ -217,8 +217,10 @@ class AgentDocumentStore: ObservableObject {
     <!-- You can also edit it directly to teach the agent facts. -->
     """
 
-    init() {
-        documentsDir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+    /// `directory` is injectable so tests can point at a temp folder instead of the app's documents.
+    init(directory: URL? = nil) {
+        documentsDir = directory
+            ?? FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
         loadAll()
     }
 
@@ -282,12 +284,29 @@ class AgentDocumentStore: ObservableObject {
         memory = load(.memory)
     }
 
+    /// Documents whose file exists on disk but could not be read (e.g. file protection during a
+    /// locked-device background launch). Their on-disk content may be perfectly fine, so `save`
+    /// must not overwrite it without preserving the original first.
+    private var unreadable: Set<DocumentType> = []
+
     private func load(_ type: DocumentType) -> String {
         let url = path(for: type)
-        if let content = try? String(contentsOf: url, encoding: .utf8), !content.isEmpty {
-            return content
+        if FileManager.default.fileExists(atPath: url.path) {
+            do {
+                // An empty file is a valid, possibly intentional state — not "first run".
+                let content = try String(contentsOf: url, encoding: .utf8)
+                unreadable.remove(type)
+                return content
+            } catch {
+                // Transient read failure: serve the default in-memory, but leave the file alone —
+                // treating this as "first run" would clobber the agent's accumulated documents.
+                unreadable.insert(type)
+                NSLog("[AgentDocs] Read failed for %@ (%@) — keeping the file untouched",
+                      type.filename, error.localizedDescription)
+                return type.defaultContent
+            }
         }
-        // First run: create default
+        // Genuine first run: create the default.
         let defaultContent = type.defaultContent
         try? defaultContent.write(to: url, atomically: true, encoding: .utf8)
         return defaultContent
@@ -295,7 +314,33 @@ class AgentDocumentStore: ObservableObject {
 
     func save(_ type: DocumentType, content: String) {
         let url = path(for: type)
-        try? content.write(to: url, atomically: true, encoding: .utf8)
+        // If the last load couldn't read this file, its on-disk content may still be the user's
+        // real document — move it aside (rename needs no read access) before writing.
+        if unreadable.contains(type) {
+            let formatter = DateFormatter()
+            formatter.dateFormat = "yyyyMMdd-HHmmss"
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            let aside = url.appendingPathExtension("unreadable-\(formatter.string(from: Date()))")
+            do {
+                try FileManager.default.moveItem(at: url, to: aside)
+                NSLog("[AgentDocs] Preserved unreadable %@ as %@", type.filename, aside.lastPathComponent)
+            } catch {
+                NSLog("[AgentDocs] Could not preserve unreadable %@ (%@) — keeping edit in-memory only",
+                      type.filename, error.localizedDescription)
+                switch type {
+                case .soul: soul = content
+                case .skills: skills = content
+                case .memory: memory = content
+                }
+                return
+            }
+            unreadable.remove(type)
+        }
+        do {
+            try content.write(to: url, atomically: true, encoding: .utf8)
+        } catch {
+            NSLog("[AgentDocs] Save failed for %@: %@", type.filename, error.localizedDescription)
+        }
         switch type {
         case .soul: soul = content
         case .skills: skills = content

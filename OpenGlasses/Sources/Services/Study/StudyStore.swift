@@ -55,19 +55,41 @@ final class StudyStore: ObservableObject {
 
     // MARK: - Persistence
 
+    /// Per-file save suppression after a read failure on an existing file (the on-disk data may
+    /// be intact — never overwrite what we couldn't read).
+    private var decksSaveBlocked = false
+    private var reviewsSaveBlocked = false
+
     private func load() {
-        if let data = try? Data(contentsOf: decksURL),
-           let d = try? JSONDecoder().decode([StudyDeck].self, from: data) {
-            decks = d
+        switch JSONStore.loadArray(StudyDeck.self, at: decksURL, name: "study_decks") {
+        case .loaded(let d), .recovered(let d, _): decks = d
+        case .corrupt: decks = []          // original preserved in StoreRecovery
+        case .unreadable: decksSaveBlocked = true
+        case .absent: break
         }
-        if let data = try? Data(contentsOf: reviewsURL),
-           let r = try? JSONDecoder().decode([String: ReviewRecord].self, from: data) {
-            reviews = r
+        switch JSONStore.loadDictionary(ReviewRecord.self, at: reviewsURL, name: "study_reviews") {
+        case .loaded(let r), .recovered(let r, _): reviews = r
+        case .corrupt: reviews = [:]
+        case .unreadable: reviewsSaveBlocked = true
+        case .absent: break
         }
     }
 
-    private func persistDecks() { write(decks, to: decksURL) }
-    private func persistReviews() { write(reviews, to: reviewsURL) }
+    private func persistDecks() {
+        guard !decksSaveBlocked else {
+            NSLog("[StudyStore] Deck save skipped — last load failed to read the existing file")
+            return
+        }
+        write(decks, to: decksURL)
+    }
+
+    private func persistReviews() {
+        guard !reviewsSaveBlocked else {
+            NSLog("[StudyStore] Review save skipped — last load failed to read the existing file")
+            return
+        }
+        write(reviews, to: reviewsURL)
+    }
 
     private func write<T: Encodable>(_ value: T, to url: URL) {
         do {

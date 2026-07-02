@@ -258,11 +258,15 @@ class PlaybookStore: ObservableObject {
     private let sessionKey = "playbookSession"
 
     init() {
-        load()
+        let result = load()
         loadSession()
         if playbooks.isEmpty {
             playbooks = Self.defaults
-            save()
+            // Persist the seed only on a genuine first run. If the stored blob failed to decode
+            // (`.corrupt`/`.recovered` — backed up by JSONStore), saving here would overwrite the
+            // user's data with factory defaults; instead the defaults stay in-memory and the slot
+            // is only written on the next explicit user action.
+            if case .absent = result { save() }
         }
     }
 
@@ -681,16 +685,21 @@ class PlaybookStore: ObservableObject {
     // MARK: - Persistence
 
     private func save() {
-        if let data = try? JSONEncoder().encode(playbooks) {
+        do {
+            let data = try JSONEncoder().encode(playbooks)
             UserDefaults.standard.set(data, forKey: storageKey)
+        } catch {
+            NSLog("[PlaybookStore] Save failed: %@", error.localizedDescription)
         }
     }
 
-    private func load() {
-        if let data = UserDefaults.standard.data(forKey: storageKey),
-           let decoded = try? JSONDecoder().decode([Playbook].self, from: data) {
-            playbooks = decoded
-        }
+    @discardableResult
+    private func load() -> JSONStore.LoadResult<[Playbook]> {
+        let result = JSONStore.decodeArray(Playbook.self,
+                                           from: UserDefaults.standard.data(forKey: storageKey),
+                                           name: "playbooks")
+        playbooks = result.value ?? []
+        return result
     }
 
     private func saveSession() {
