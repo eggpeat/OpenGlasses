@@ -1,6 +1,10 @@
 # Plan BG — Spine Refactor (phased): single-source tool prompts, flow engine, provider adapters, audio-engine merge
 
-**Status:** 📋 Planned (audit round 12, priority 6 — phased, one PR per phase)
+**Status:** 🚧 Phased, one PR per phase. **P1 shipped** (registry-generated tool prompts).
+**P2 groundwork shipped** — pure `VoiceCommandParser` (stop/goodbye/photo + persona-prefix
+stripping) extracted from `handleTranscription` with tests. Still open in P2: the full
+`ConversationFlowEngine` + `VoiceCommandHandler` chain, the resume-listening dedup, and the
+cancellable-turn fix — they restructure the live voice path and want device verification. P3–P5 planned.
 
 ## The problem
 The July 2026 audit's clearest structural signal: **whatever got extracted got tested; the three

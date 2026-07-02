@@ -2275,27 +2275,13 @@ class AppState: ObservableObject, AppStateProtocol {
 
     // MARK: - Voice Commands
 
-    private static let stopPhrases = ["stop", "nevermind", "never mind", "cancel", "shut up", "be quiet", "quiet"]
-    private static let goodbyePhrases = ["goodbye", "good bye", "bye", "that's all", "thats all",
-                                          "thanks claude", "thank you claude", "i'm done", "im done",
-                                          "end conversation", "go to sleep"]
-    private static let photoPhrases = ["take a picture", "take a photo", "take photo", "take picture",
-                                        "capture photo", "snap a photo", "snap a picture", "take a snap"]
+    /// Pure recognizer for the pre-LLM voice commands (Plan BG P2 groundwork). AppState still owns
+    /// the side effects; the phrase matching + persona-prefix stripping live in a tested unit.
+    private let voiceCommandParser = VoiceCommandParser.default
 
-    private func isStopCommand(_ text: String) -> Bool {
-        let lower = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-        return Self.stopPhrases.contains(where: { lower == $0 || lower.hasPrefix($0 + " ") || lower.hasSuffix(" " + $0) })
-    }
-
-    private func isGoodbyeCommand(_ text: String) -> Bool {
-        let lower = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-        return Self.goodbyePhrases.contains(where: { lower.contains($0) })
-    }
-
-    private func isPhotoCommand(_ text: String) -> Bool {
-        let lower = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-        return Self.photoPhrases.contains(where: { lower.contains($0) })
-    }
+    private func isStopCommand(_ text: String) -> Bool { voiceCommandParser.isStop(text) }
+    private func isGoodbyeCommand(_ text: String) -> Bool { voiceCommandParser.isGoodbye(text) }
+    private func isPhotoCommand(_ text: String) -> Bool { voiceCommandParser.isPhoto(text) }
 
     /// Reuse an already-available live frame for vision-capable models without trying to
     /// start the camera. This avoids re-triggering fragile Meta camera permission flows.
@@ -2467,29 +2453,21 @@ class AppState: ObservableObject, AppStateProtocol {
         }
 
         // Check for persona names in the transcription (for Action Button / push-to-talk mode)
-        // e.g. "Hey Claude, what's the weather" → activate Claude persona, strip prefix
+        // e.g. "Hey Claude, what's the weather" → activate Claude persona, strip prefix.
+        // Recognition + stripping is pure (VoiceCommandParser); AppState applies the match.
         if activePersona == nil {
-            let lower = text.lowercased()
-            for persona in Config.enabledPersonas {
-                for phrase in persona.allPhrases {
-                    if lower.hasPrefix(phrase) || lower.contains(phrase) {
-                        activePersona = persona
-                        Config.setActiveModelId(persona.modelId)
-                        Config.setActivePresetId(persona.presetId)
-                        llmService.refreshActiveModel()
-                        print("🎭 Persona detected in transcription: \(persona.name)")
-                        // Strip the wake phrase from the query
-                        if let range = lower.range(of: phrase) {
-                            query = String(text[range.upperBound...])
-                                .trimmingCharacters(in: .whitespacesAndNewlines)
-                                .trimmingCharacters(in: CharacterSet(charactersIn: ","))
-                                .trimmingCharacters(in: .whitespaces)
-                        }
-                        if query.isEmpty { query = text }
-                        break
-                    }
-                }
-                if activePersona != nil { break }
+            let personas = Config.enabledPersonas
+            let personaPhrases = personas.map {
+                VoiceCommandParser.PersonaPhrases(id: $0.id, phrases: $0.allPhrases)
+            }
+            if let match = voiceCommandParser.detectPersona(in: text, personas: personaPhrases),
+               let persona = personas.first(where: { $0.id == match.personaId }) {
+                activePersona = persona
+                Config.setActiveModelId(persona.modelId)
+                Config.setActivePresetId(persona.presetId)
+                llmService.refreshActiveModel()
+                print("🎭 Persona detected in transcription: \(persona.name)")
+                query = match.query
             }
         }
 
