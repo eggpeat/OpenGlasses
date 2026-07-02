@@ -2313,6 +2313,19 @@ struct Config {
         UserDefaults.standard.set(enabled, forKey: "useGlassesMicForWakeWord")
     }
 
+    /// Use on-device speech recognition for the always-on wake-word listener (Plan BE). Default on:
+    /// short-phrase spotting doesn't need the server, and streaming mic audio to Apple 24/7 is the
+    /// biggest steady battery/data drain. Real queries still use server recognition.
+    static var onDeviceWakeWordEnabled: Bool {
+        let key = "onDeviceWakeWordEnabled"
+        if UserDefaults.standard.object(forKey: key) == nil { return true }
+        return UserDefaults.standard.bool(forKey: key)
+    }
+
+    static func setOnDeviceWakeWordEnabled(_ enabled: Bool) {
+        UserDefaults.standard.set(enabled, forKey: "onDeviceWakeWordEnabled")
+    }
+
     // MARK: - Audio-Only Mode
 
     /// When enabled, disables video frame streaming to save battery. Voice still works.

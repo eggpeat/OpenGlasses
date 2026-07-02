@@ -50,7 +50,29 @@ final class NativeToolRouter {
     func handleToolCall(name: String, args: [String: Any]) async -> ToolResult {
         turnToolNames.append(name)   // Phase 3: track tools used this turn for skill detection
 
-        // 0. Deterministic safety supervisor (Plan S): the single pre-execution safety gate when
+        // 0a. Actuation floor (Plan BC): confirmation before irreversible, security-relevant
+        // physical actions (unlock a door, open a garage, disarm an alarm) even when agent mode is
+        // OFF — so a prompt-injected sign/web result can't silently actuate. When agent mode is on,
+        // the SafetySupervisor below (0b) already confirms these high-impact tools, so this floor
+        // only needs to cover the agent-mode-off default and would otherwise double-prompt.
+        if !Config.agentModeEnabled,
+           HighImpactToolPolicy.mayRequireConfirmation(tool: name),
+           case .requiresConfirmation(let summary) = HighImpactToolPolicy.evaluate(tool: name, args: args) {
+            if let coordinator = confirmationCoordinator {
+                NSLog("[NativeToolRouter] Actuation floor requires confirmation for %@: %@", name, summary)
+                let approved = await coordinator.requestConfirmation(toolName: name, summary: summary)
+                guard approved else {
+                    NSLog("[NativeToolRouter] User declined %@ (actuation floor)", name)
+                    return .failure("The user did NOT approve this action, so '\(name)' was not performed. Do not retry it; tell the user it was cancelled unless they explicitly ask again.")
+                }
+            } else {
+                // No confirmation UI wired (e.g. headless): fail closed rather than actuate blind.
+                NSLog("[NativeToolRouter] No confirmation coordinator; refusing high-impact %@", name)
+                return .failure("'\(name)' requires user confirmation, which isn't available right now, so it was not performed. Tell the user to try again with the app in the foreground.")
+            }
+        }
+
+        // 0b. Deterministic safety supervisor (Plan S): the single pre-execution safety gate when
         // agent mode is on. It subsumes the high-impact confirmation backstop — its
         // `needsVoiceApproval` rule reproduces it — and adds deterministic block/confirm rules
         // (geofence, quiet hours, irreversible floor). A `.block` veto short-circuits with no

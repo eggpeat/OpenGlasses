@@ -1,6 +1,7 @@
 import Foundation
 import SwiftUI
 import UIKit
+import AVFoundation
 
 /// Coordinator for OpenAI Realtime mode — mirrors GeminiLiveSessionManager's architecture.
 /// AudioManager → OpenAIRealtimeService (audio), Service → AudioManager (playback),
@@ -20,6 +21,15 @@ class OpenAIRealtimeSessionManager: ObservableObject {
     private let audioManager = OpenAIRealtimeAudioManager()
     private let frameThrottler = FrameThrottler(interval: 2.0)  // Less frequent than Gemini — OpenAI charges per image
     private var stateObservation: Task<Void, Never>?
+
+    /// Local, network-independent speech for terminal session cues (Plan BD).
+    private let localCueSynth = AVSpeechSynthesizer()
+
+    private func speakLocalCue(_ text: String) {
+        let utterance = AVSpeechUtterance(string: text)
+        utterance.voice = AVSpeechSynthesisVoice(language: "en-US")
+        localCueSynth.speak(utterance)
+    }
 
     // Camera frame source — set by AppState
     var onRequestVideoFrame: (() async -> UIImage?)?
@@ -142,7 +152,19 @@ class OpenAIRealtimeSessionManager: ObservableObject {
                 if !self.realtimeService.reconnecting {
                     self.stopSession()
                     self.errorMessage = "Connection lost: \(reason ?? "Unknown error")"
+                    self.speakLocalCue("Voice session disconnected.")   // Plan BD
                 }
+            }
+        }
+
+        // Reconnection exhausted → terminal. Audible cue + surfaced error (Plan BD).
+        realtimeService.onReconnectExhausted = { [weak self] in
+            guard let self else { return }
+            Task { @MainActor in
+                guard self.isActive else { return }
+                self.stopSession()
+                self.errorMessage = "Voice session lost — couldn't reconnect."
+                self.speakLocalCue("Voice session lost. I couldn't reconnect.")
             }
         }
 

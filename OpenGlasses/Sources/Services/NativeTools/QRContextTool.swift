@@ -79,8 +79,15 @@ struct QRContextTool: NativeTool {
     // MARK: - Context Loading
 
     private func loadContext(from urlString: String, createPlaybook: Bool) async -> String {
-        guard let url = URL(string: urlString) else {
-            return "Invalid URL: \(urlString)"
+        // SSRF guard (Plan BC): the URL comes from a scanned QR or an LLM arg — never let it aim
+        // at the user's private network or a metadata endpoint.
+        let url: URL
+        switch URLFetchGuard.validate(urlString) {
+        case .success(let validated):
+            url = validated
+        case .failure(let rejection):
+            NSLog("[QRContext] Blocked fetch of %@: %@", urlString, rejection.description)
+            return "Won't load that URL — \(rejection.description)."
         }
 
         do {

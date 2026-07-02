@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 import Network
 import UIKit
 
@@ -10,8 +11,12 @@ import UIKit
 ///   - `GET  /glasses_status`  → `{ connected, frame_age_ms, last_frame_iso }`
 ///   - `POST /send_to_glasses` → body `{ text, mode: "tts"|"display" }` → speaks/logs, returns `{ ok }`
 ///
-/// A Mac-side MCP stdio bridge (Claude Code) proxies these over the LAN; for remote use the developer
-/// runs their own `cloudflared` tunnel. The bridge + tunnel are out of app scope by design.
+/// Every request must carry `Authorization: Bearer <token>` (Plan BC) — the token is generated per
+/// enable and shown in Settings. Without it these endpoints would be an unauthenticated LAN camera
+/// feed to anyone on the same Wi-Fi.
+///
+/// A Mac-side MCP stdio bridge (Claude Code) proxies these over the LAN. The bridge is out of app
+/// scope by design.
 @MainActor
 final class MCPGlassesServer: ObservableObject {
     static let shared = MCPGlassesServer()
@@ -26,6 +31,38 @@ final class MCPGlassesServer: ObservableObject {
 
     /// Min interval a frame is reused, so a tight Claude Code poll loop can't blow up tokens.
     private var lastServedFrameAt: Date?
+
+    /// Bearer token required on every request. Kept in the Keychain (this-device-only) and
+    /// regenerated whenever the server is started without one.
+    private static let tokenKey = "mcpServerBearerToken"
+
+    /// The current access token, generating and persisting one on first read.
+    var accessToken: String {
+        if let existing = KeychainService.string(for: Self.tokenKey), !existing.isEmpty {
+            return existing
+        }
+        let token = Self.generateToken()
+        KeychainService.setString(token, for: Self.tokenKey)
+        return token
+    }
+
+    /// Rotate the token (invalidates any existing bridge configuration).
+    @discardableResult
+    func regenerateToken() -> String {
+        let token = Self.generateToken()
+        KeychainService.setString(token, for: Self.tokenKey)
+        return token
+    }
+
+    private static func generateToken() -> String {
+        // 256 bits, URL-safe.
+        let raw = SymmetricKey(size: .bits256)
+        return raw.withUnsafeBytes { Data($0) }
+            .base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+    }
 
     private init() {}
 
@@ -44,6 +81,7 @@ final class MCPGlassesServer: ObservableObject {
 
     func start() {
         guard listener == nil else { return }
+        _ = accessToken   // ensure a token exists before we accept connections
         do {
             let params = NWParameters.tcp
             params.allowLocalEndpointReuse = true
@@ -125,6 +163,11 @@ final class MCPGlassesServer: ObservableObject {
     // MARK: - Routing
 
     private func route(_ request: HTTPRequest) async -> Data {
+        guard Self.isAuthorized(bearer: request.bearerToken, expected: accessToken) else {
+            NSLog("[MCPServer] Rejected unauthorized %@ %@", request.method, request.path)
+            return Self.httpResponse(status: "401 Unauthorized",
+                                     json: ["error": "missing or invalid bearer token"])
+        }
         switch (request.method, request.path) {
         case ("GET", "/see_glasses"):
             return seeGlasses()
@@ -135,6 +178,16 @@ final class MCPGlassesServer: ObservableObject {
         default:
             return Self.httpResponse(status: "404 Not Found", json: ["error": "unknown endpoint"])
         }
+    }
+
+    /// Constant-time bearer-token comparison. Pure — unit-tested without a live socket.
+    static func isAuthorized(bearer: String?, expected: String) -> Bool {
+        guard !expected.isEmpty, let bearer, !bearer.isEmpty else { return false }
+        let a = Data(bearer.utf8), b = Data(expected.utf8)
+        guard a.count == b.count else { return false }
+        var diff: UInt8 = 0
+        for (x, y) in zip(a, b) { diff |= x ^ y }
+        return diff == 0
     }
 
     private func seeGlasses() -> Data {
@@ -189,6 +242,8 @@ private struct HTTPRequest {
     let method: String
     let path: String
     let body: Data?
+    /// The token from an `Authorization: Bearer <token>` header, if present.
+    let bearerToken: String?
 
     init(rawData: Data) {
         guard let headerEndRange = rawData.range(of: Data("\r\n\r\n".utf8)) else {
@@ -198,15 +253,31 @@ private struct HTTPRequest {
             method = parts.first.map(String.init) ?? ""
             path = parts.count > 1 ? String(parts[1]) : "/"
             body = nil
+            bearerToken = nil
             return
         }
         let headerData = rawData.subdata(in: rawData.startIndex..<headerEndRange.lowerBound)
         let headerText = String(data: headerData, encoding: .utf8) ?? ""
-        let firstLine = headerText.split(separator: "\r\n").first ?? ""
+        let lines = headerText.split(separator: "\r\n")
+        let firstLine = lines.first ?? ""
         let parts = firstLine.split(separator: " ")
         method = parts.first.map(String.init) ?? ""
         path = parts.count > 1 ? String(parts[1]) : "/"
+        bearerToken = Self.parseBearer(lines: lines.dropFirst())
         let bodyStart = headerEndRange.upperBound
         body = bodyStart < rawData.endIndex ? rawData.subdata(in: bodyStart..<rawData.endIndex) : nil
+    }
+
+    private static func parseBearer(lines: ArraySlice<Substring>) -> String? {
+        for line in lines {
+            guard let colon = line.firstIndex(of: ":") else { continue }
+            let name = line[..<colon].trimmingCharacters(in: .whitespaces).lowercased()
+            guard name == "authorization" else { continue }
+            let value = line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces)
+            if value.lowercased().hasPrefix("bearer ") {
+                return String(value.dropFirst("bearer ".count)).trimmingCharacters(in: .whitespaces)
+            }
+        }
+        return nil
     }
 }

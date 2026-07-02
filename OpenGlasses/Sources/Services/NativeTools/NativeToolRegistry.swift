@@ -254,6 +254,16 @@ final class NativeToolRegistry {
         }.sorted()
     }
 
+    /// Enabled (name, description) pairs for the given names, in the order provided — the single
+    /// source for the system-prompt tool list (Plan BG P1). Skips any name the registry doesn't
+    /// own so callers can pass a pre-filtered `toolNames` slice safely.
+    func toolDescriptions(for names: [String]) -> [(name: String, description: String)] {
+        names.compactMap { name in
+            guard let tool = tools[name] else { return nil }
+            return (name, tool.description)
+        }
+    }
+
     /// Context-aware tool names — filters out tools that aren't relevant to the current state.
     /// Reduces token usage by only including tools the LLM can actually use right now.
     func contextualToolNames(

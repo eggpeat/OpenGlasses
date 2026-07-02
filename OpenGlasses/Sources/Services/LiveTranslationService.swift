@@ -88,7 +88,11 @@ final class LiveTranslationService: ObservableObject {
             let options: AVAudioSession.CategoryOptions = usePhoneMic
                 ? [.mixWithOthers, .defaultToSpeaker]
                 : [.mixWithOthers, .allowBluetoothHFP, .allowBluetoothA2DP, .defaultToSpeaker]
-            try audioSession.setCategory(.playAndRecord, mode: .measurement, options: options)
+            // .default, not .measurement (Plan BE): as a coexisting rider we must not leave the
+            // shared session in a state the owner didn't choose. .measurement disables output
+            // processing and makes iPhone-speaker TTS extremely quiet, and it was never restored on
+            // stop. .default matches the wake-word baseline so audio coexists cleanly.
+            try audioSession.setCategory(.playAndRecord, mode: .default, options: options)
             try audioSession.setActive(true)
             print("🌍 Translation mic source: \(usePhoneMic ? "iPhone" : "glasses (Bluetooth)")")
         } catch {
