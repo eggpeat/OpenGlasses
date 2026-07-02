@@ -1,6 +1,7 @@
 import Foundation
 import SwiftUI
 import UIKit
+import AVFoundation
 
 /// Coordinator that ties all Gemini Live components together:
 /// AudioManager → GeminiLiveService (audio), GeminiLiveService → AudioManager (playback),
@@ -30,6 +31,16 @@ class GeminiLiveSessionManager: ObservableObject {
     private let frameThrottler = FrameThrottler()
     private var toolCallRouter: ToolCallRouter?
     private var stateObservation: Task<Void, Never>?
+
+    /// Local, network-independent speech for terminal session cues (Plan BD) — never ElevenLabs,
+    /// since the network may be exactly what failed.
+    private let localCueSynth = AVSpeechSynthesizer()
+
+    private func speakLocalCue(_ text: String) {
+        let utterance = AVSpeechUtterance(string: text)
+        utterance.voice = AVSpeechSynthesisVoice(language: "en-US")
+        localCueSynth.speak(utterance)
+    }
 
     // Camera frame source — set by AppState to the existing CameraService's periodic captures
     var onRequestVideoFrame: (() async -> UIImage?)?
@@ -182,7 +193,20 @@ class GeminiLiveSessionManager: ObservableObject {
                 if !self.geminiService.reconnecting {
                     self.stopSession()
                     self.errorMessage = "Connection lost: \(reason ?? "Unknown error")"
+                    // Voice-first: the phone may be pocketed, so a visual banner isn't enough (Plan BD).
+                    self.speakLocalCue("Voice session disconnected.")
                 }
+            }
+        }
+
+        // Reconnection exhausted → terminal. Speak an audible cue and surface the error.
+        geminiService.onReconnectExhausted = { [weak self] in
+            guard let self else { return }
+            Task { @MainActor in
+                guard self.isActive else { return }
+                self.stopSession()
+                self.errorMessage = "Voice session lost — couldn't reconnect."
+                self.speakLocalCue("Voice session lost. I couldn't reconnect.")
             }
         }
 
@@ -442,81 +466,12 @@ class GeminiLiveSessionManager: ObservableObject {
             if let router = nativeToolRouter {
                 let names = router.registry.toolNames
                 toolSection += "\nBuilt-in tools: \(names.joined(separator: ", "))."
-                toolSection += """
-
-            - get_weather: Get current weather and forecast.
-            - get_datetime: Get current date, time, day of week.
-            - daily_briefing: Combined daily briefing (date, weather, news).
-            - calculate: Evaluate math expressions.
-            - convert_units: Convert between units.
-            - set_timer: Set a countdown timer.
-            - pomodoro: Start/stop/check Pomodoro focus sessions.
-            - save_note / list_notes: Save and retrieve notes.
-            - web_search: Search the web.
-            - get_news: Get latest news headlines.
-            - translate: Translate text between languages.
-            - translate_sign_menu: Translate visible signs/menus from camera view.
-            - ask_local_phrase: Generate traveler phrases in local language with pronunciation.
-            - define_word: Look up word definitions.
-            - find_nearby: Search for nearby places.
-            - where_am_i: Describe current location with reverse-geocoded place context and GPS coordinates.
-            - open_app: Open iOS apps (Music, Podcasts, Maps, Google Maps, etc).
-            - get_directions: Directions via Apple Maps or Google Maps.
-            - identify_song: Identify a song using Shazam.
-            - music_control: Play, pause, skip, previous, now-playing info.
-            - convert_currency: Convert currencies with live rates.
-            - phone_call: Make a phone call.
-            - send_message: Open Messages with pre-filled text.
-            - copy_to_clipboard: Copy text to clipboard.
-            - flashlight: Toggle flashlight on/off.
-            - device_info: Check battery, storage, low power mode.
-            - save_location / list_saved_locations: Bookmark current spot, find saved spots with distance.
-            - step_count: Today's steps, distance, floors climbed.
-            - emergency_info: Local emergency numbers, GPS coordinates, nearest hospital guidance.
-            - calendar: View schedule, next meeting, create events with reminders.
-            - lookup_contact: Find contact phone/email by name.
-            - reminder: Create/list/complete Apple Reminders with notifications.
-            - set_alarm: Set alarm for specific clock time, list/cancel alarms.
-            - brightness: Adjust screen brightness.
-            - smart_home: Control HomeKit devices — lights, switches, thermostats, locks, scenes.
-            - run_shortcut: Run Apple Shortcuts by name.
-            - vehicle_status: Vehicle / EV charge %, range, charging state, plug status (via Home Assistant).
-            - summarize_conversation: Summarize current conversation or extract action items.
-            - face_recognition: Remember/forget/list known faces. Auto-recognizes people when camera is active.
-            - memory_rewind: Recall what was said recently — transcribes last few minutes of audio.
-            - geofence: Create location-based reminders that trigger when entering/leaving a place.
-            - send_via: Send messages via WhatsApp, Telegram, or Email (not iMessage).
-            - meeting_summary: Summarize a recent meeting from ambient captions with action items.
-            - fitness_coach: Fitness coaching — start/stop workouts, log exercises, check form via camera, workout history from HealthKit.
-            - openclaw_skills: Discover and manage OpenClaw skills. List available skills, check gateway status.
-            - field_session: Start/pause/resume/end/query a Field Assist session for grounded domain-specific technical support (refrigeration, etc.). Loads a knowledge vault and emits an audit log. Actions: start, pause, resume, end, status, list, escalate, export (work-order PDF + audit JSON).
-            - procedure_runner: Run a guided step-by-step procedure inside an active Field Assist session. Actions: list, start, next, previous, repeat, status, complete. Pass 'choice' to 'next' when the active step (shown under ACTIVE PROCEDURE in this prompt) offers branch choices.
-            - project_note: Notes scoped to the ACTIVE field job — what the user is mid-way through. 'save' a note ("compressor swap is next") that resurfaces on later turns while the job is active; 'list'/'clear' the job's notes. Params: text.
-            - capture_flow: Run a structured, typed capture flow (inspection / work-order form) inside an active session — steps collect validated values (reading, enum, barcode, photo) bound to fields, producing an audit-ready record. Actions: list, start, answer, skip, back, status, finish, cancel. Read the returned step prompt aloud; pass the user's spoken value verbatim to 'answer'. Params: flow_id, asset_id, value.
-            - domain_calc: Refrigeration math grounded in vault PT charts — pt_lookup, superheat, subcool. Temps °F, pressures PSIG. Params: operation, refrigerant, and the relevant pressures/temps.
-            - equipment_lookup: Look up an error code/fault/model in the active session's vault — read aloud (query) or via on-device camera OCR (omit query or set use_camera). Returns the matching reference section with its source.
-            - safety_assessment: Run a High-Energy Control Assessment (HECA) on the current job-site view — detects the 13 high-energy SIF hazards and whether each has a DIRECT control; returns a summary + HECA score. Use for "assess this site", "is this safe?". Actions: run, last, score, history, export (PDF), ask (advisor follow-up — pass question). Advisory only.
-            - reading_assist: Read text in front of the user via the glasses camera (on-device OCR). Modes: read, simplify (level 1-5), translate (target_language), define. Use for 'read this', 'simplify this', 'translate this sign', 'what does this word mean'.
-            - health_vault: Query/update the user's Personal Health Vault (biometrics, conditions, diet, labs, medications, wearables). 'query' grounds a health question in their own notes (cite the file); 'log' records a new entry. Never fabricate health data.
-            - health_check: "Is this safe for me?" over the Health Vault — 'can_i_take' a medication or 'can_i_eat' a food. Deterministic high-severity interaction check against the user's meds/conditions/allergies + grounded advisory. Cites the vault; defers to a pharmacist/doctor. Param: subject.
-            - notes_vault: The user's personal notes / second brain. 'log' to remember ("note that…"), 'query' to recall. Files: general, people, ideas, todos. Answers only from recorded notes.
-            - document_knowledge: Private on-device knowledge base of the user's documents (manuals, contracts, reports). 'query' retrieves relevant passages to ground an answer (cite the document, answer only from what's returned); 'ingest_scan' saves a document seen through the glasses; 'ingest_text' saves provided text; 'list'/'forget' manage saved docs.
-            - study: Study Mode — turn a document into flashcards + a quiz and review hands-free. Actions: scan (OCR a page via the glasses camera; repeat then make_deck), make_deck (from scanned pages, 'deck' name, or raw 'text'), list, quiz, answer (via 'value'), review, flip, grade (via 'value'), stop. Use for "study this page", "make flashcards from X", "quiz me".
-            - smart_capture: Capture a business card, receipt, or event flyer (mode: contact/receipt/event) and extract structured details, then chain to contacts/calendar/notes_vault to act.
-            - identify_medication: Read a medication label via camera OCR and cross-check the user's recorded medications. Reports label text + match status; no clinical claims. Needs Medical Compliance.
-            - aircraft_overhead: Report aircraft flying near the user using live ADS-B data + their location. Use for "what's flying overhead?". Param: radius_miles (default 25).
-            - live_coach: Real-time one-sentence coaching from the glasses camera. Actions: start (domain: sports_tactics/cooking_form/posture/guitar/climbing/custom), stop, status. Use for "coach my form", "watch my technique".
-            - code_agent: Hands-free control of a REMOTE coding agent (on the user's gateway, not the phone). Actions: start (prompt, optional project), status, cancel, confirm, deny. Requires Agent Mode. Use for "have the agent add a feature", "ask the agent to fix the test".
-            - network_calc: IP subnet/CIDR math (IPv4/IPv6) — operation 'subnet' with a 'cidr' returns network, broadcast, netmask, usable range/count.
-            - navigation_assist: Spoken walking guidance for low-vision users (hazards/landmarks, clock positions). Actions: start, stop, status. An aid, not a cane/guide-dog replacement.
-            - first_aid: Hands-free first-aid coaching — speaks steps and paces CPR. Actions: start (cpr/choking/bleeding/recovery/march), next, back, aed (nearest defibrillator), stop. Advisory only; always reminds to call emergency services.
-            - identify_color: Name the dominant color of what the user sees (on-device). Use for "what color is this?".
-            - identify_money: Identify a banknote's currency and denomination from the camera, for low-vision support. Use for "how much is this note?".
-            - vision_assess: Structured visual assessment with a typed result card (kind selects the type). Use kind 'instrument_reading' to read a number off a gauge, thermometer, refractometer, scale, or meter. Optional note adds context.
-            - photo_log: Capture a glasses-camera photo, attach it to the session audit log with a caption, and return it for analysis. Use to document gauge readings and evidence.
-            - escalate_to_expert: Escalate the active session to a human expert when you can't safely resolve it or the technician asks for a person. Actions: request (reason), status, resolve, cancel. Live video is Phase 5 — for now it's logged and the expert pool is notified.
-            - teleprompter: Hands-free teleprompter on the in-lens HUD — shows a script a window at a time and (audio-paced) auto-advances by listening to you read. Actions: start (text=the script, or script=a saved script name, or document=a saved knowledge-base document; optional mode audio_paced/voice/auto_scroll), stop, pause, resume, next, back, restart, faster, slower, list, save (text + optional title), scan (capture a printed page via the glasses camera + OCR — repeat for pages, then start). Use for "start the teleprompter", "read my speech", "teleprompt my saved doc", "scan this script", "faster/slower".
-            """
+                // Plan BG P1: generated from each NativeTool's own `description` — the single source
+                // shared with Direct Mode and the tool schemas, so the three can no longer drift.
+                let descriptions = router.registry.toolDescriptions(for: names)
+                if !descriptions.isEmpty {
+                    toolSection += "\n\n" + SystemPromptBuilder.toolLines(descriptions)
+                }
 
                 // Inject user-defined custom tool descriptions
                 let customTools = Config.customTools.filter { Config.isToolEnabled($0.name) }

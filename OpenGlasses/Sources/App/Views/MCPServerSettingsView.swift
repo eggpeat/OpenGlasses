@@ -39,8 +39,25 @@ struct MCPServerSettingsView: View {
                     }
                     LabeledContent("Endpoints", value: "/see_glasses, /glasses_status, /send_to_glasses")
                 }
+                Section("Access token") {
+                    Text(server.accessToken)
+                        .font(.system(.footnote, design: .monospaced))
+                        .textSelection(.enabled)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Button {
+                        UIPasteboard.general.string = server.accessToken
+                    } label: {
+                        Label("Copy token", systemImage: "doc.on.doc")
+                    }
+                    Button(role: .destructive) {
+                        server.regenerateToken()
+                    } label: {
+                        Label("Regenerate token", systemImage: "arrow.clockwise")
+                    }
+                }
                 Section {
-                    Text("Point your Claude Code MCP bridge at the LAN URL above. For remote access, run `cloudflared tunnel --url http://localhost:\(server.port)` on this network and use the public URL.")
+                    Text("Every request must send `Authorization: Bearer <token>`. Configure your Claude Code MCP bridge with the LAN URL and this token. Keep it on your trusted local network — these endpoints expose the live camera, so don't put them behind a public tunnel.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

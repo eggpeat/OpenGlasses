@@ -1,0 +1,141 @@
+import Foundation
+
+/// Pure hygiene passes over the Anthropic-shaped `[[String: Any]]` conversation history
+/// (docs/plans/BF-llm-turn-hygiene.md). No I/O — each function takes a history and returns a
+/// cleaned copy so it can be unit-tested against fixture transcripts.
+///
+/// The three problems it solves, all found by the round-12 audit:
+///  1. A `tool_use` block with no matching `tool_result` makes Anthropic reject EVERY later request
+///     with a 400 — one malformed or interrupted tool call bricks the whole conversation.
+///  2. Full base64 images pile up in history and are re-uploaded (and re-billed) every turn.
+///  3. The token estimator counts an image block at the 50-token floor, so image weight never
+///     triggers compaction.
+enum HistoryHygiene {
+
+    /// A synthetic result inserted for a `tool_use` that never got one.
+    static let interruptedToolResult = "Error: tool execution was interrupted; no result was produced."
+
+    /// Placeholder that replaces a pruned image so the turn still reads coherently.
+    static let prunedImagePlaceholder = "[earlier photo omitted to save context]"
+
+    // MARK: - Dangling tool_use repair
+
+    /// Ensure every assistant `tool_use` block is answered by a `tool_result` in the immediately
+    /// following user turn (Anthropic's required shape). Missing ids — a skipped/malformed block, a
+    /// partially-answered turn, or a turn that threw mid-execution — get a synthetic error result
+    /// merged into that single following user message, so the request is valid.
+    static func repairDanglingToolUse(_ history: [[String: Any]]) -> [[String: Any]] {
+        var out: [[String: Any]] = []
+        var i = 0
+        while i < history.count {
+            let message = history[i]
+            i += 1
+            out.append(message)
+
+            guard (message["role"] as? String) == "assistant",
+                  let blocks = message["content"] as? [[String: Any]] else { continue }
+            let toolUseIds = blocks
+                .filter { $0["type"] as? String == "tool_use" }
+                .compactMap { $0["id"] as? String }
+            guard !toolUseIds.isEmpty else { continue }
+
+            // Consume the immediately-following user tool_result message if there is one, so all
+            // results for this assistant turn land in a single user message.
+            var resultBlocks: [[String: Any]] = []
+            var answered = Set<String>()
+            if i < history.count,
+               (history[i]["role"] as? String) == "user",
+               let nextBlocks = history[i]["content"] as? [[String: Any]],
+               nextBlocks.contains(where: { $0["type"] as? String == "tool_result" }) {
+                resultBlocks = nextBlocks
+                for block in nextBlocks where block["type"] as? String == "tool_result" {
+                    if let id = block["tool_use_id"] as? String { answered.insert(id) }
+                }
+                i += 1   // consume it — we re-emit it (possibly extended) below
+            }
+
+            for id in toolUseIds where !answered.contains(id) {
+                resultBlocks.append(["type": "tool_result", "tool_use_id": id, "content": interruptedToolResult])
+            }
+            if !resultBlocks.isEmpty {
+                out.append(["role": "user", "content": resultBlocks])
+            }
+        }
+        return out
+    }
+
+    // MARK: - Image pruning
+
+    /// Replace the image blocks in all but the newest `keepLast` image-bearing user messages with a
+    /// short text placeholder, so old frames stop being re-uploaded every turn. The newest image(s)
+    /// and all text are preserved.
+    static func pruneImages(_ history: [[String: Any]], keepLast: Int = 1) -> [[String: Any]] {
+        // Indices of messages that carry at least one image block, oldest → newest.
+        let imageIndices = history.indices.filter { messageHasImage(history[$0]) }
+        guard imageIndices.count > keepLast else { return history }
+        let pruneUpTo = imageIndices.count - keepLast
+        let indicesToPrune = Set(imageIndices.prefix(pruneUpTo))
+
+        var out = history
+        for i in indicesToPrune {
+            out[i] = stripImages(from: out[i])
+        }
+        return out
+    }
+
+    private static func messageHasImage(_ message: [String: Any]) -> Bool {
+        guard let blocks = message["content"] as? [[String: Any]] else { return false }
+        return blocks.contains { $0["type"] as? String == "image" }
+    }
+
+    private static func stripImages(from message: [String: Any]) -> [String: Any] {
+        guard let blocks = message["content"] as? [[String: Any]] else { return message }
+        var newBlocks: [[String: Any]] = []
+        var replacedAny = false
+        for block in blocks {
+            if block["type"] as? String == "image" {
+                replacedAny = true
+            } else {
+                newBlocks.append(block)
+            }
+        }
+        if replacedAny {
+            newBlocks.append(["type": "text", "text": prunedImagePlaceholder])
+        }
+        var out = message
+        out["content"] = newBlocks
+        return out
+    }
+
+    // MARK: - Token estimation
+
+    /// Estimate the token weight of a history, counting image blocks by their base64 payload size
+    /// (~1.5k chars per 1k tokens) instead of the flat 50-token floor a text-only estimate applies.
+    static func estimatedTokens(_ history: [[String: Any]]) -> Int {
+        history.reduce(0) { $0 + estimatedTokens(forMessage: $1) }
+    }
+
+    static func estimatedTokens(forMessage message: [String: Any]) -> Int {
+        if let text = message["content"] as? String {
+            return max(text.count / 4, 50)
+        }
+        guard let blocks = message["content"] as? [[String: Any]] else { return 50 }
+        var tokens = 0
+        for block in blocks {
+            switch block["type"] as? String {
+            case "text":
+                tokens += max((block["text"] as? String ?? "").count / 4, 1)
+            case "image":
+                let base64 = (block["source"] as? [String: Any])?["data"] as? String ?? ""
+                // A JPEG this size costs roughly base64Bytes / 1500 tokens on Anthropic vision.
+                tokens += max(base64.count / 1500, 1)
+            case "tool_result":
+                let content = block["content"] as? String ?? ""
+                tokens += max(content.count / 4, 1)
+            default:
+                tokens += 1
+            }
+        }
+        return max(tokens, 50)
+    }
+}

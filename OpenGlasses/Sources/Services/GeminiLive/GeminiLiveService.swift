@@ -40,6 +40,19 @@ class GeminiLiveService: ObservableObject {
     private let maxReconnectAttempts = 10
     private let maxBackoffSeconds: Double = 30
     private var reconnectTask: Task<Void, Never>?
+    /// True from the moment a reconnect is scheduled until its task starts running — coalesces the
+    /// duplicate `scheduleReconnect` calls that a single failure triggers from close + error +
+    /// receive-loop, so `reconnectAttempts` advances once per cycle (Plan BD).
+    private var reconnectPending = false
+    /// The 15s connect-timeout task; cancelled on resolve so a stale timer can't fail a later
+    /// attempt (Plan BD).
+    private var connectTimeoutTask: Task<Void, Never>?
+    private var reconnectPolicy: RealtimeReconnect.Policy {
+        .init(maxAttempts: maxReconnectAttempts, maxBackoffSeconds: maxBackoffSeconds)
+    }
+    /// Called when reconnection is exhausted or the session dies terminally — the session manager
+    /// plays an audible cue (Plan BD: voice-first apps must not fail silently).
+    var onReconnectExhausted: (() -> Void)?
 
     // Latency tracking
     private var lastUserSpeechEnd: Date?
@@ -127,14 +140,17 @@ class GeminiLiveService: ObservableObject {
             self.webSocketTask = self.urlSession.webSocketTask(with: url)
             self.webSocketTask?.resume()
 
-            // Timeout after 15 seconds
-            Task {
+            // Timeout after 15 seconds. Stored + cancelled on resolve so a stale timer from a
+            // prior attempt can't resolve a later attempt's continuation (Plan BD).
+            self.connectTimeoutTask?.cancel()
+            self.connectTimeoutTask = Task { [weak self] in
                 try? await Task.sleep(nanoseconds: 15_000_000_000)
+                guard let self, !Task.isCancelled else { return }
                 await MainActor.run {
-                    self.resolveConnect(success: false)
                     if self.connectionState == .connecting || self.connectionState == .settingUp {
                         self.connectionState = .error("Connection timed out")
                     }
+                    self.resolveConnect(success: false)
                 }
             }
         }
@@ -147,6 +163,10 @@ class GeminiLiveService: ObservableObject {
         reconnectTask?.cancel()
         reconnectTask = nil
         reconnecting = false
+        reconnectPending = false
+        reconnectAttempts = 0   // a fresh session must not inherit an exhausted counter (Plan BD)
+        connectTimeoutTask?.cancel()
+        connectTimeoutTask = nil
         receiveTask?.cancel()
         receiveTask = nil
         webSocketTask?.cancel(with: .normalClosure, reason: nil)
@@ -170,22 +190,29 @@ class GeminiLiveService: ObservableObject {
             NSLog("[Gemini] Intentional disconnect — not reconnecting")
             return
         }
-        guard reconnectAttempts < maxReconnectAttempts else {
+        // Coalesce the duplicate triggers a single failure fires (close + error + receive-loop):
+        // only the first schedules; the rest are no-ops until the pending attempt runs (Plan BD).
+        guard !reconnectPending else { return }
+
+        guard let delay = reconnectPolicy.delay(forAttempt: reconnectAttempts + 1) else {
             NSLog("[Gemini] Max reconnect attempts (%d) reached — giving up", maxReconnectAttempts)
             connectionState = .error("Connection lost after \(maxReconnectAttempts) reconnect attempts")
             reconnecting = false
+            onReconnectExhausted?()
             return
         }
 
         reconnecting = true
+        reconnectPending = true
         reconnectAttempts += 1
-        let delay = min(pow(2.0, Double(reconnectAttempts - 1)), maxBackoffSeconds)
         NSLog("[Gemini] Reconnect attempt %d/%d in %.0fs (reason: %@)",
               reconnectAttempts, maxReconnectAttempts, delay, reason ?? "unknown")
 
+        reconnectTask?.cancel()
         reconnectTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
             guard let self, !Task.isCancelled else { return }
+            self.reconnectPending = false
 
             // Clean up old socket
             self.receiveTask?.cancel()
@@ -199,8 +226,12 @@ class GeminiLiveService: ObservableObject {
                 self.reconnecting = false
                 NSLog("[Gemini] Reconnected successfully")
                 self.onReconnected?()
+            } else {
+                // connect() may have failed via a timeout that fires NO close/error event — the old
+                // code stalled here forever. Drive the next attempt ourselves; if a close/error did
+                // fire, it already set reconnectPending, so this coalesces to a single reschedule.
+                self.scheduleReconnect(reason: "retry failed")
             }
-            // If connect fails, the onClose/onError handlers will trigger another scheduleReconnect
         }
     }
 
@@ -262,6 +293,8 @@ class GeminiLiveService: ObservableObject {
     // MARK: - Private
 
     private func resolveConnect(success: Bool) {
+        connectTimeoutTask?.cancel()
+        connectTimeoutTask = nil
         if let cont = connectContinuation {
             connectContinuation = nil
             cont.resume(returning: success)
@@ -390,13 +423,17 @@ class GeminiLiveService: ObservableObject {
             return
         }
 
-        // GoAway — server will close soon
+        // GoAway — the server sends this before its session time limit, i.e. on EVERY long session.
+        // The old code fired the fatal onDisconnected path (reconnecting == false), so the session
+        // manager tore the session down right before the close it should have ridden through. Now we
+        // proactively schedule a reconnect so a long conversation survives the server's rotation.
         if let goAway = json["goAway"] as? [String: Any] {
             let timeLeft = goAway["timeLeft"] as? [String: Any]
             let seconds = timeLeft?["seconds"] as? Int ?? 0
-            connectionState = .disconnected
             isModelSpeaking = false
-            onDisconnected?("Server closing (time left: \(seconds)s)")
+            NSLog("[Gemini] goAway received (time left: %ds) — scheduling reconnect", seconds)
+            scheduleReconnect(reason: "server rotating connection")   // sets reconnecting = true first
+            onDisconnected?("Server rotating connection (time left: \(seconds)s)")
             return
         }
 

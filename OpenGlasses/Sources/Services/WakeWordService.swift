@@ -2,6 +2,7 @@ import Foundation
 import AVFoundation
 import Speech
 import CallKit
+import os.lock
 
 /// Handles wake word detection using iOS Speech Recognition
 /// Listens for "Hey Claude" to trigger voice queries
@@ -30,12 +31,12 @@ class WakeWordService: NSObject, ObservableObject {
     /// Whether the mic is currently paused due to silence (glasses in case).
     @Published var pausedForSilence: Bool = false
 
-    /// Silence detection: number of consecutive low-RMS buffers.
-    private var silentBufferCount: Int = 0
     /// RMS threshold below which a buffer is considered "silent".
     /// Glasses mic in a closed case typically produces near-zero signal.
     private let silenceRMSThreshold: Float = 0.005
-    /// Number of consecutive silent buffers before declaring silence (~60 seconds at typical buffer rate).
+    /// Number of consecutive silent buffers before declaring silence. At 1024-frame buffers this is
+    /// ~13s at 48kHz (Bluetooth) / ~38s at 16kHz — well short of a literal minute (comment corrected
+    /// per Plan BE); tune here if the in-case mic shutoff feels too eager.
     private let silenceBufferThreshold: Int = 600
     /// Whether silence was already reported (prevents repeated callbacks).
     private var silenceReported: Bool = false
@@ -46,7 +47,9 @@ class WakeWordService: NSObject, ObservableObject {
     /// to ignore the resulting cancellation error instead of auto-restarting a competing recognizer.
     private var suppressAutoRestart = false
     private var speechRecognizer: SFSpeechRecognizer?
-    private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
+    private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest? {
+        didSet { tapState.setRequest(recognitionRequest) }   // keep the tap's view in sync (Plan BE)
+    }
     private var recognitionTask: SFSpeechRecognitionTask?
     private var audioSessionConfigured: Bool = false
     /// Our claim on the shared session with the coordinator. Wake word is the always-on baseline
@@ -66,6 +69,18 @@ class WakeWordService: NSObject, ObservableObject {
 
     /// Multiple audio buffer consumers keyed by ID (transcription, captions, rewind, etc.)
     private var audioBufferForwarders: [String: @Sendable (AVAudioPCMBuffer) -> Void] = [:]
+
+    /// Lock-guarded state the audio-render thread reads from the tap (Plan BE). The tap block used
+    /// to touch `@MainActor` storage (`recognitionRequest`, `audioBufferForwarders`) directly from
+    /// the Core Audio thread while the main actor mutated them — a torn read / EXC_BAD_ACCESS on
+    /// the app's hottest path. The tap now only ever touches this box; the main actor publishes
+    /// changes into it under the same lock.
+    private let tapState = WakeTapState()
+
+    /// Owned NotificationCenter observer tokens (Plan BE). Discarding these leaked a fresh
+    /// interruption+route observer pair on every reconfigure, so after N glasses reconnects one
+    /// route change fired N duplicate handlers.
+    private var sessionObservers: [NSObjectProtocol] = []
 
     /// All active wake phrases from all enabled personas.
     private var allWakePhrases: [String] { Config.allActiveWakePhrases }
@@ -234,30 +249,35 @@ class WakeWordService: NSObject, ObservableObject {
             }
             print("🎤 Audio session configured: .playAndRecord with Bluetooth")
 
-            // Handle audio interruptions (phone calls, Siri, etc.)
-            NotificationCenter.default.addObserver(
-                forName: AVAudioSession.interruptionNotification,
-                object: audioSession,
-                queue: nil
-            ) { [weak self] notification in
-                Task { @MainActor in
-                    self?.handleAudioInterruption(notification)
-                }
-            }
-
-            // Handle audio route changes (Bluetooth disconnect/reconnect)
-            NotificationCenter.default.addObserver(
-                forName: AVAudioSession.routeChangeNotification,
-                object: audioSession,
-                queue: nil
-            ) { [weak self] notification in
-                Task { @MainActor in
-                    self?.handleRouteChange(notification)
-                }
-            }
+            // Handle audio interruptions + route changes. Tokens are owned and removed before any
+            // re-registration (Plan BE) — the old code discarded them, leaking a fresh pair on
+            // every reconfigure so one route change fired N duplicate handlers after N reconnects.
+            installSessionObservers(audioSession: audioSession)
         } catch {
             print("🎤 Failed to configure audio session: \(error)")
         }
+    }
+
+    /// Register the interruption + route-change observers exactly once per configuration, removing
+    /// any previously-owned tokens first so they can never accumulate.
+    private func installSessionObservers(audioSession: AVAudioSession) {
+        removeSessionObservers()
+        let interruption = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.interruptionNotification, object: audioSession, queue: nil
+        ) { [weak self] notification in
+            Task { @MainActor in self?.handleAudioInterruption(notification) }
+        }
+        let route = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.routeChangeNotification, object: audioSession, queue: nil
+        ) { [weak self] notification in
+            Task { @MainActor in self?.handleRouteChange(notification) }
+        }
+        sessionObservers = [interruption, route]
+    }
+
+    private func removeSessionObservers() {
+        for token in sessionObservers { NotificationCenter.default.removeObserver(token) }
+        sessionObservers.removeAll()
     }
 
     private func handleAudioInterruption(_ notification: Notification) {
@@ -270,6 +290,15 @@ class WakeWordService: NSObject, ObservableObject {
             print("🎤 Audio interrupted (phone call, Siri, etc.)")
             stopListening()
         case .ended:
+            // Don't fight a live session (Plan BE). If a Gemini/OpenAI realtime session now owns the
+            // shared audio session, it handles its own interruption recovery — reactivating here
+            // with our .playAndRecord/.default config would stomp its .videoChat setup and spin up a
+            // second engine contending for the mic. Only reclaim when wake word is the owner.
+            let owner = AudioSessionCoordinator.shared.currentOwner
+            guard owner == nil || owner == .wakeWord else {
+                print("🎤 Audio interruption ended — NOT restarting; session owned by \(owner!.rawValue)")
+                return
+            }
             // Only restart if Bluetooth (glasses) route is available
             let route = AVAudioSession.sharedInstance().currentRoute
             let hasBluetooth = route.inputs.contains { $0.portType == .bluetoothHFP }
@@ -351,7 +380,7 @@ class WakeWordService: NSObject, ObservableObject {
         }
         stopFired = false
         wakeWordFired = false
-        silentBufferCount = 0
+        silenceTracker.reset()
         silenceReported = false
         pausedForSilence = false
 
@@ -453,16 +482,19 @@ class WakeWordService: NSObject, ObservableObject {
         } else {
             audioBufferForwarders.removeValue(forKey: "default")
         }
+        tapState.setForwarders(audioBufferForwarders)
     }
 
     /// Add a named audio buffer consumer. Multiple consumers can listen simultaneously.
     func addAudioBufferConsumer(id: String, handler: @escaping @Sendable (AVAudioPCMBuffer) -> Void) {
         audioBufferForwarders[id] = handler
+        tapState.setForwarders(audioBufferForwarders)
     }
 
     /// Remove a named audio buffer consumer.
     func removeAudioBufferConsumer(id: String) {
         audioBufferForwarders.removeValue(forKey: id)
+        tapState.setForwarders(audioBufferForwarders)
     }
 
     private func cleanupAudioEngine() {
@@ -490,7 +522,16 @@ class WakeWordService: NSObject, ObservableObject {
         }
 
         recognitionRequest.shouldReportPartialResults = true
-        recognitionRequest.requiresOnDeviceRecognition = false
+        // On-device wake-word spotting (Plan BE): the always-on listener no longer streams mic
+        // audio to Apple's servers 24/7 — the single largest steady battery/data drain. Short-phrase
+        // spotting works well on-device (contextualStrings still apply); real queries keep server
+        // recognition in TranscriptionService. Falls back to server if the locale can't do on-device.
+        let wantsOnDevice = Config.onDeviceWakeWordEnabled
+        let canDoOnDevice = speechRecognizer?.supportsOnDeviceRecognition ?? false
+        recognitionRequest.requiresOnDeviceRecognition = wantsOnDevice && canDoOnDevice
+        if wantsOnDevice && !canDoOnDevice {
+            print("🎤 On-device wake recognition unsupported for this locale — using server recognition")
+        }
         recognitionRequest.taskHint = .search  // Short phrase detection
         // Boost recognition of all persona wake phrases
         let personaPhrases = Config.allActiveWakePhrases
@@ -545,15 +586,12 @@ class WakeWordService: NSObject, ObservableObject {
 
         print("🎤 New audio engine: \(recordingFormat.sampleRate)Hz, \(recordingFormat.channelCount)ch")
 
+        // The tap runs on the Core Audio render thread. It must NOT touch any @MainActor state —
+        // it reads everything it needs from the lock-guarded `tapState` box (Plan BE).
+        let tapState = self.tapState
         inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { [weak self] buffer, _ in
-            self?.recognitionRequest?.append(buffer)
-            // Fan out to all registered audio consumers
-            if let forwarders = self?.audioBufferForwarders {
-                for (_, handler) in forwarders {
-                    handler(buffer)
-                }
-            }
-            // Monitor audio levels for silence detection (glasses in case)
+            tapState.dispatch(buffer)
+            // Silence detection is nonisolated and does its own (batched) main-actor hop.
             self?.checkAudioLevel(buffer: buffer)
         }
 
@@ -562,6 +600,11 @@ class WakeWordService: NSObject, ObservableObject {
     }
 
     // MARK: - Silence Detection (Glasses in Case)
+
+    /// Silence counting runs entirely on the audio thread (Plan BE); we hop to the main actor only
+    /// on a state *transition* (silence entered / audio resumed) instead of spawning a MainActor
+    /// Task per buffer (~10-15/sec, forever).
+    private let silenceTracker = SilenceTracker()
 
     private nonisolated func checkAudioLevel(buffer: AVAudioPCMBuffer) {
         guard let channelData = buffer.floatChannelData else { return }
@@ -577,24 +620,24 @@ class WakeWordService: NSObject, ObservableObject {
         }
         let rms = sqrtf(sum / Float(frames))
 
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            if rms < self.silenceRMSThreshold {
-                self.silentBufferCount += 1
-                if self.silentBufferCount >= self.silenceBufferThreshold && !self.silenceReported {
-                    self.silenceReported = true
-                    self.pausedForSilence = true
-                    NSLog("[WakeWord] Sustained silence detected (%d buffers) — glasses likely in case", self.silentBufferCount)
-                    self.onSilenceDetected?()
-                }
-            } else {
-                if self.silenceReported {
-                    NSLog("[WakeWord] Audio resumed after silence — glasses active again")
-                    self.silenceReported = false
-                    self.pausedForSilence = false
-                    self.onAudioResumed?()
-                }
-                self.silentBufferCount = 0
+        switch silenceTracker.observe(rms: rms, threshold: silenceRMSThreshold, limit: silenceBufferThreshold) {
+        case .none:
+            break
+        case .enteredSilence(let count):
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.silenceReported = true
+                self.pausedForSilence = true
+                NSLog("[WakeWord] Sustained silence detected (%d buffers) — glasses likely in case", count)
+                self.onSilenceDetected?()
+            }
+        case .resumed:
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                NSLog("[WakeWord] Audio resumed after silence — glasses active again")
+                self.silenceReported = false
+                self.pausedForSilence = false
+                self.onAudioResumed?()
             }
         }
     }
@@ -830,5 +873,69 @@ enum WakeWordError: LocalizedError {
         case .configurationError(let msg): return "Configuration error: \(msg)"
         case .activationError(let msg): return "Activation error: \(msg)"
         }
+    }
+}
+
+/// Audio-thread silence accumulator (Plan BE). Counts consecutive low-RMS buffers and reports only
+/// the two transitions the main actor cares about, so silence detection costs one locked increment
+/// per buffer instead of a spawned MainActor Task per buffer.
+final class SilenceTracker: @unchecked Sendable {
+    enum Transition: Equatable { case none, enteredSilence(count: Int), resumed }
+
+    private let lock = OSAllocatedUnfairLock<State>(initialState: State())
+    private struct State { var count = 0; var reported = false }
+
+    func observe(rms: Float, threshold: Float, limit: Int) -> Transition {
+        lock.withLock { state in
+            if rms < threshold {
+                state.count += 1
+                if state.count >= limit && !state.reported {
+                    state.reported = true
+                    return .enteredSilence(count: state.count)
+                }
+                return .none
+            } else {
+                let wasReported = state.reported
+                state.reported = false
+                state.count = 0
+                return wasReported ? .resumed : .none
+            }
+        }
+    }
+
+    /// Reset when listening restarts so a fresh session starts from silence-clear.
+    func reset() { lock.withLock { $0 = State() } }
+}
+
+/// Lock-guarded box the audio-render thread reads from the wake-word tap (Plan BE).
+///
+/// The tap runs on the Core Audio render thread and must never touch `@MainActor` state. The main
+/// actor publishes the current recognition request and forwarder set into this box under the lock;
+/// the tap reads a consistent snapshot under the same lock and never sees a torn dictionary or a
+/// half-torn-down request. `SFSpeechAudioBufferRecognitionRequest.append` is itself thread-safe;
+/// what wasn't safe was the concurrent mutation of the *references* the old tap dereferenced.
+final class WakeTapState: @unchecked Sendable {
+    private let lock = OSAllocatedUnfairLock<State>(initialState: State())
+
+    private struct State {
+        var request: SFSpeechAudioBufferRecognitionRequest?
+        var forwarders: [@Sendable (AVAudioPCMBuffer) -> Void] = []
+    }
+
+    func setRequest(_ request: SFSpeechAudioBufferRecognitionRequest?) {
+        lock.withLock { $0.request = request }
+    }
+
+    func setForwarders(_ forwarders: [String: @Sendable (AVAudioPCMBuffer) -> Void]) {
+        let values = Array(forwarders.values)
+        lock.withLock { $0.forwarders = values }
+    }
+
+    /// Called from the audio thread: append to the recognizer and fan out to consumers, all from a
+    /// single locked snapshot.
+    func dispatch(_ buffer: AVAudioPCMBuffer) {
+        let snapshot = lock.withLock { $0 }
+        snapshot.request?.append(buffer)
+        for handler in snapshot.forwarders { handler(buffer) }
     }
 }

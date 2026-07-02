@@ -169,7 +169,7 @@ class LLMService: ObservableObject {
     /// Build the full system prompt, optionally including location, tools, memory, and vision context.
     /// When `promptSections` is provided (from the ConversationClassifier), irrelevant sections are
     /// stripped to reduce token count. When nil, all sections are included (backward compatible).
-    private static func buildSystemPrompt(locationContext: String?, includeTools: Bool, includeOpenClaw: Bool, hasImage: Bool, nativeToolNames: [String] = [], gatewayToolNames: [String] = [], memoryContext: String? = nil, agentContext: String? = nil, playbookContext: String? = nil, nowPlayingContext: String? = nil, shortcutsContext: String? = nil, promptSections: ConversationClassifier.PromptSections? = nil, turn: String? = nil) async -> String {
+    private static func buildSystemPrompt(locationContext: String?, includeTools: Bool, includeOpenClaw: Bool, hasImage: Bool, nativeToolNames: [String] = [], nativeToolDescriptions: [(name: String, description: String)] = [], gatewayToolNames: [String] = [], memoryContext: String? = nil, agentContext: String? = nil, playbookContext: String? = nil, nowPlayingContext: String? = nil, shortcutsContext: String? = nil, promptSections: ConversationClassifier.PromptSections? = nil, turn: String? = nil) async -> String {
         // Agent personality mode: soul.md + skills.md + memory.md replace the standard prompt
         var prompt: String
         if Config.agentModeEnabled, let agentContext, !agentContext.isEmpty {
@@ -207,95 +207,12 @@ class LLMService: ObservableObject {
 
             if !nativeToolNames.isEmpty {
                 toolSection += "\nBuilt-in tools: \(nativeToolNames.joined(separator: ", "))."
-                toolSection += """
-
-            - get_weather: Get current weather and forecast.
-            - get_datetime: Get current date, time, day of week.
-            - daily_briefing: Combined daily briefing (date, weather, news) — use for "good morning" or "what's happening today".
-            - calculate: Evaluate math expressions.
-            - convert_units: Convert between units (length, weight, temp, volume, speed, etc).
-            - set_timer: Set a countdown timer with local notification.
-            - pomodoro: Start/stop/check a Pomodoro focus session (25 min work, 5 min break cycles).
-            - save_note / list_notes: Save and retrieve notes locally.
-            - web_search: Search the web via DuckDuckGo.
-            - get_news: Get latest news headlines, optionally by topic.
-            - translate: Translate text between languages.
-            - translate_sign_menu: Translate visible signs/menus from camera view. Returns ORIGINAL text first, then translation.
-            - ask_local_phrase: Generate traveler phrases in the local language with pronunciation and a polite variant.
-            - define_word: Look up word definitions.
-            - find_nearby: Search for nearby places (restaurants, cafes, pharmacies, gas stations, etc).
-            - where_am_i: Describe the user's current location with reverse-geocoded place context and GPS coordinates.
-            - open_app: Open iOS apps (Music, Podcasts, Maps, Google Maps, YouTube, Spotify, etc).
-            - get_directions: Directions via Apple Maps or Google Maps (set app='google' for Google Maps).
-            - identify_song: Identify a song playing nearby using Shazam.
-            - music_control: Play, pause, skip, previous track, or get now-playing info (Apple Music).
-            - convert_currency: Convert between currencies with live exchange rates.
-            - phone_call: Make a phone call to a number.
-            - send_message: Open Messages with a pre-filled text to a recipient.
-            - copy_to_clipboard: Copy text to clipboard (great after OCR, translation, or any result the user wants to keep).
-            - flashlight: Turn the device flashlight on/off.
-            - device_info: Check battery level, storage, and low power mode.
-            - save_location / list_saved_locations: Save current spot with a label ("remember where I parked") and find saved spots later with distance.
-            - step_count: Today's steps, walking distance, and floors climbed.
-            - emergency_info: Local emergency numbers for current country, exact GPS coordinates, and guidance to find nearest hospital.
-            - calendar: View today's schedule, next meeting, upcoming week, or create events. Events get a 15-min reminder notification.
-            - lookup_contact: Look up a contact by name to get their phone number or email. Use before phone_call or send_message.
-            - reminder: Create, list, or complete Apple Reminders with due dates and notifications. Syncs with iCloud.
-            - set_alarm: Set an alarm for a specific clock time (e.g. '7 AM tomorrow'). Also list or cancel alarms.
-            - brightness: Adjust screen brightness (0-100, or presets: max, min, dim, bright, up, down).
-            - smart_home: Control HomeKit smart home devices — lights, switches, fans, thermostats, locks, scenes. ALWAYS try this tool for smart home requests. Say 'list' to see devices.
-            - run_shortcut: Run an Apple Shortcut by name (e.g. 'Start Focus', 'Log Water', any user-created shortcut).
-            - summarize_conversation: Summarize current conversation, extract action items/to-dos. Use when user says "summarize", "recap", or "what did we discuss?"
-            - face_recognition: Remember faces ('remember this person as John'), forget faces, list known people, or toggle auto-recognition on/off.
-            - memory_rewind: Recall what was said recently. Transcribes last few minutes of ambient audio. Use for "what did they just say?" or "what happened?" Must be started first with action='start'.
-            - geofence: Location-based reminders. 'Remind me when I get to the office' or 'alert me when I leave home'. Create, list, delete geofenced alerts.
-            - send_via: Send messages via WhatsApp, Telegram, or Email. Specify channel ('whatsapp', 'telegram', 'email'), recipient, and body.
-            - meeting_summary: Summarize a recent meeting or conversation from ambient captions. Extracts key points, decisions, and action items. Requires ambient captions to be running.
-            - fitness_coach: Fitness coaching — start/stop workouts, log exercises (reps/sets/weight), check form via camera, get workout history from HealthKit, set step goals.
-            - openclaw_skills: Discover and manage OpenClaw skills. List available skills, check gateway status, search for capabilities. Only available when OpenClaw is configured.
-            - voice_skills: Voice-taught skills — save (teach a new trigger→action), list (show all), delete, clear. "Learn that when I say 'goodnight', turn off all lights."
-            - object_memory: Remember where physical objects are. Save ('remember my keys are on the counter'), find ('where are my keys?'), list, forget.
-            - contextual_note: Save notes with automatic location and time context. Search notes by keyword or location.
-            - social_context: Remember facts about people. Add facts ('remember John works at Stripe'), recall ('what do I know about John?'), list people.
-            - brain: Unified search across ALL on-device memory (facts, documents, people, notes, meetings, knowledge graph + encounter log). action 'query' for any "what do I know about…" when unsure where it lives; 'recall' to search PAST CONVERSATIONS — what you actually said in earlier sessions — and get a cited answer ("what did we decide about X?", "what did I say about Y last week?"); 'insights' for an on-device usage recap — top topics + activity over the last N days ("what have I been up to this week?"); 'person' for a dossier before/after meeting someone ("brief me on Alice"); 'link' to record relationships ('Alice works at Acme'); 'encounters' for recent sightings ("when did I last see Bob?"); 'save_need' for a follow-up ("Bob wants the deck"), 'needs' to list open follow-ups, 'resolve_need' to close one. Cites sources and says what's missing — answer only from its findings.
-            - home_assistant: Control Home Assistant smart home — toggle devices, check states, list entities, run automations, or use 'converse' action to send natural language commands directly to HA (e.g. action=converse, text="turn on the kitchen lights"). ALWAYS try this tool when asked about smart home control. Use entity IDs from the device list below when available; the tool also fuzzy-matches and falls back to HA's voice assistant.
-            - vehicle_status: Get the user's vehicle / EV charge %, range, charging state, and plug status. Reads live from Home Assistant — use for "what's my car's charge?", "is the car charging?", "how much range do I have?".
-            - scan_code: Scan QR codes or barcodes from the camera. Returns decoded content (URLs, text, product codes). Works offline.
-            - capture_photo: Capture a photo from the glasses camera for visual analysis. Use when you need to see what the user is looking at, or proactively when visual context would help your response.
-            - reading_assist: Read text in front of the user via the glasses camera (on-device OCR). Modes: read (clean + read aloud), simplify (rewrite at a reading level 1-5), translate (into target_language), define (plain-language definition of a term). Use for 'read this to me', 'simplify this', 'translate this sign', 'what does this word mean'.
-            - health_vault: Query or update the user's Personal Health Vault (their own notes on biometrics, conditions, diet, labs, medications, wearables). action 'query' (with question) grounds a health question in their data — cite the source file; action 'log' (file + entry) records a new entry. Never fabricate health data.
-            - health_check: "Is this safe for ME?" over the Health Vault. 'can_i_take' a medication/supplement ("can I take ibuprofen?") or 'can_i_eat' a food ("can I eat aged cheese?"). Cross-references known high-severity drug/food interactions deterministically against the user's meds/conditions/allergies. Advisory only; always cites the vault and defers to a pharmacist/doctor. Param: subject.
-            - notes_vault: The user's personal notes / second brain. 'log' to remember something ("note that…", "remember…"), 'query' to recall it ("what did I note about…"). Files: general, people, ideas, todos. Answers only from recorded notes.
-            - document_knowledge: Private on-device knowledge base of the user's documents (manuals, contracts, reports). action 'query' retrieves the most relevant passages to ground an answer — cite the document name and answer only from what's returned; 'ingest_scan' captures and saves a document seen through the glasses ("remember this manual"); 'ingest_text' saves provided text; 'list' shows saved documents; 'forget' deletes one. Use 'query' whenever the user asks about a document they've saved.
-            - study: Study Mode — turn a document into flashcards + a quiz and review hands-free with spaced repetition. Actions: scan (OCR a page through the glasses camera; repeat then make_deck), make_deck (from scanned pages, a document name via 'deck', or raw 'text'), list, quiz (start), answer (via 'value' — a number or the option), review (flashcards), flip, grade (right/wrong via 'value'), stop. Use for "study this page", "make flashcards from X", "quiz me".
-            - identify_medication: Read a medication label via the glasses camera (on-device OCR) and cross-check it against the user's recorded medications. Use for "what's this pill?", "is this my medication?". Reports the label text + match status; never makes clinical claims. Needs Medical Compliance.
-            - aircraft_overhead: Report aircraft flying near the user using live ADS-B data and their location. Use for "what's flying overhead?", "any planes nearby?". Param: radius_miles (1-200, default 25).
-            - live_coach: Real-time, one-sentence coaching feedback from the glasses camera. Use for "coach my squat form", "watch my knife technique", "help with my guitar". Actions: start (domain), stop, status. Domains: sports_tactics, cooking_form, posture, guitar, climbing, custom. Params: custom_prompt, interval_seconds, max_words, max_duration_minutes.
-            - code_agent: Hands-free control of a REMOTE coding agent (runs on the user's gateway, not the phone). Use for "have the agent add a dark-mode toggle", "ask the agent to fix the failing test". Actions: start (prompt, optional project), status, cancel, confirm, deny. Requires Agent Mode enabled in Settings. Progress and a final summary are spoken.
-            - network_calc: IP subnet/CIDR math for IT field work. operation 'subnet' with a 'cidr' (IPv4 or IPv6) returns network, broadcast, netmask, usable host range and count. Use for subnetting questions.
-            - navigation_assist: Spoken walking guidance for low-vision users — periodically calls out hazards/landmarks (steps, drop-offs, obstacles, oncoming people) using clock positions. Actions: start, stop, status. Use for "guide me", "navigation mode". An aid, not a cane/guide-dog replacement.
-            - first_aid: Hands-free first-aid coaching in an emergency — speaks step-by-step guidance and paces CPR with a metronome. Actions: start (protocol: cpr, choking, bleeding, recovery, march), next, back, aed (find nearest defibrillator), stop. Use for "start CPR", "someone is choking", "they're bleeding", "nearest AED". Advisory only — always reminds the user to call emergency services; not a substitute for professional care.
-            - identify_color: Name the dominant color of what the user is looking at (on-device, no network). Use for "what color is this?".
-            - identify_money: Identify a banknote's currency and denomination from the glasses camera, for low-vision support. Use for "how much is this note?", "what bill is this?".
-            - audio_recording: Start or stop audio-only recording (no camera — lighter on battery). Saves .m4a to Documents/Recordings with live transcription and a meeting assistant that sends lock screen summaries + suggested questions every 60 seconds. Saying 'take a picture' during recording adds a visual note to the transcript. Actions: start, stop, status. Use when the user says 'record this meeting', 'record audio', 'record this conversation', or 'start audio recording'.
-            - video_recording: Start or stop video+audio recording from the glasses camera and microphone. Recordings save to Photos with no time limit — ideal for interviews, meetings, procedures. Includes live transcription by default (saved as .txt alongside video). Actions: start, stop, status. Params: transcribe (bool, default true). Use when the user says 'start recording', 'record this', 'film this', 'watch what I'm doing', or 'stop recording'.
-            - medical_export: Export clinical transcripts to medical platforms or share manually. Actions: export_fhir (upload to FHIR server), export_file (create file), share (open share sheet), status (check config). Params: format (text/pdf/fhir_json/hl7), transcript (optional, uses latest recording). Use when the user says 'export the transcript', 'send to the EMR', 'share the notes', or 'upload to the health record'.
-            - qr_context: Scan a QR code and load its content as context (museum exhibits, venue info, procedures). Use at museums, venues, or workplaces. Can also load context from a URL directly.
-            - smart_capture: Capture a business card, receipt, or event flyer and extract structured details (mode: contact/receipt/event). Then chain to contacts/calendar/notes_vault to act. Use for "save this card", "log this receipt", "add this event from the flyer".
-            - vision_assess: Run a structured visual assessment of what the glasses camera sees and show a typed result card (kind selects the assessment). Use kind 'instrument_reading' to read a number off a gauge, thermometer, refractometer, scale, or meter ("what does this gauge read?", "read the thermometer"). Optional note adds context.
-            - golf_mode: Golf caddy assistant — track shots with GPS, get club recommendations, log scores, view round summary, and get course strategy. Actions: start_round, track_shot, club_recommendation, log_score, round_summary, strategy.
-            - live_translate: Start/stop continuous live translation. Listens to spoken foreign language and translates in real-time. Actions: start, stop, status, set_language.
-            - field_session: Start, pause, resume, end, or query a Field Assist session for grounded, domain-specific technical support (refrigeration, IT, electrical, automotive). Sessions load a domain knowledge vault and emit an audit log. Use 'start' when the technician begins work, 'end' when they finish, 'export' to generate a work-order PDF + audit JSON. Actions: start, pause, resume, end, status, list, escalate, export. Params: vault (e.g. 'refrigeration'), asset_id, mode ('ai_only' default), outcome, reason, format ('pdf'/'json'/'both').
-            - procedure_runner: Run a guided, step-by-step Field Assist procedure (diagnostics, checklists) inside an active session. Actions: list, start, next, previous, repeat, status, complete. When the active step offers choices, pass 'choice' with the branch id to 'next'. The current step and its choice ids are injected into this prompt under "ACTIVE PROCEDURE" — use those. Params: procedure_id, choice, outcome.
-            - project_note: Notes scoped to the ACTIVE field job — what the user is mid-way through. 'save' records a note about the current job ("compressor swap is next"); it surfaces automatically on later turns while the job is active. 'list' shows the job's notes; 'clear' removes them. For in-progress job state, not durable user facts. Params: text.
-            - capture_flow: Run a structured, typed capture flow (inspection / work-order form) inside an active session — each step collects a validated value (reading, enum choice, barcode, or photo) bound to a field, producing an audit-ready record. Actions: list, start, answer, skip, back, status, finish, cancel. After 'start', read the returned step prompt to the user; pass their spoken value verbatim to 'answer'. The runner range-checks numbers, maps spoken phrases to enum options, and re-prompts on a bad answer; 'finish' blocks until required fields are captured. Params: flow_id, asset_id, value.
-            - domain_calc: Refrigeration math grounded in the vault PT charts. Operations: pt_lookup (saturation temp at a pressure), superheat (suction line temp − sat temp at suction pressure), subcool (sat temp at liquid pressure − liquid line temp). Temps °F, pressures PSIG. Params: operation, refrigerant ('R-410A','R-32','R-454B','R-22'), pressure_psig, suction_pressure_psig, suction_line_temp_f, liquid_pressure_psig, liquid_line_temp_f.
-            - equipment_lookup: Look up an error code, fault, or model number in the active session's vault. The technician can read it aloud (query), or point the glasses at the nameplate/error display and omit query (or set use_camera) to read it via on-device OCR. Returns the matching reference section with its source. Params: query (optional), use_camera (optional bool), file (optional).
-            - safety_assessment: Run a High-Energy Control Assessment (HECA) on the current job-site view from the glasses camera — detects the 13 high-energy serious-injury/fatality hazards and whether each has a DIRECT control, and returns a summary + HECA score. Use for "assess this site", "is this safe?", "safety check". Actions: run, last, score, history, export (PDF of the latest report), ask (image-seeded safety-advisor follow-up — pass question). Advisory only — verify on site; not a certified inspection.
-            - photo_log: Capture a photo from the glasses camera and attach it to the active session's audit log with a caption (e.g. a gauge reading), and return the image for analysis. Use to document readings and evidence during a session. Params: caption.
-            - escalate_to_expert: Escalate the active Field Assist session to a human expert when you cannot safely resolve the issue or the technician asks for a person. Actions: request (with reason), status, resolve, cancel. Live expert video is not available yet — escalation is logged and the expert pool is notified.
-            - teleprompter: Hands-free teleprompter on the in-lens HUD — shows a script a window at a time and (audio-paced) auto-advances by listening to you read. Actions: start (text=the script, or script=a saved script name, or document=a saved knowledge-base document; optional mode audio_paced/voice/auto_scroll), stop, pause, resume, next, back, restart, faster, slower, list (saved scripts), save (text + optional title), scan (capture a printed page via the glasses camera + OCR — repeat for multiple pages, then start). Use for "start the teleprompter", "read my speech", "teleprompt my saved doc", "scan this script", "go faster/slower".
-            """
+                // Plan BG P1: the per-tool descriptions are generated from each NativeTool's own
+                // `description` (the same source as the machine-readable tool schemas), so this
+                // list can't drift from the real tool set or from the Gemini Live prompt.
+                if !nativeToolDescriptions.isEmpty {
+                    toolSection += "\n\n" + SystemPromptBuilder.toolLines(nativeToolDescriptions)
+                }
 
                 // Inject user-defined custom tool descriptions
                 let customTools = Config.customTools.filter { Config.isToolEnabled($0.name) }
@@ -480,8 +397,9 @@ class LLMService: ObservableObject {
         let includeOpenClaw = Config.isOpenClawConfigured && openClawBridge != nil
         let includeTools = hasNativeTools || includeOpenClaw
         let nativeToolNames = nativeToolRouter?.registry.toolNames ?? []
+        let nativeToolDescriptions = nativeToolRouter?.registry.toolDescriptions(for: nativeToolNames) ?? []
         let gatewayToolNames = openClawBridge?.availableToolNames ?? []
-        let fullPrompt = await Self.buildSystemPrompt(locationContext: locationContext, includeTools: includeTools, includeOpenClaw: includeOpenClaw, hasImage: imageData != nil, nativeToolNames: nativeToolNames, gatewayToolNames: gatewayToolNames, memoryContext: memoryContext, agentContext: agentContext, playbookContext: playbookContext, nowPlayingContext: nowPlayingContext, shortcutsContext: shortcutsContext, promptSections: promptSections, turn: text)
+        let fullPrompt = await Self.buildSystemPrompt(locationContext: locationContext, includeTools: includeTools, includeOpenClaw: includeOpenClaw, hasImage: imageData != nil, nativeToolNames: nativeToolNames, nativeToolDescriptions: nativeToolDescriptions, gatewayToolNames: gatewayToolNames, memoryContext: memoryContext, agentContext: agentContext, playbookContext: playbookContext, nowPlayingContext: nowPlayingContext, shortcutsContext: shortcutsContext, promptSections: promptSections, turn: text)
 
         var toolsLabel = ""
         if hasNativeTools { toolsLabel += " [NativeTools]" }
@@ -628,19 +546,9 @@ class LLMService: ObservableObject {
     /// This ensures the agent doesn't "forget" mid-conversation decisions or user facts
     /// even as the raw message history is trimmed for token budget.
     private func compressContextWindowIfNeeded() {
-        let estimatedTokens = conversationHistory.reduce(0) { total, msg in
-            let content: String
-            if let text = msg["content"] as? String {
-                content = text
-            } else if let parts = msg["content"] as? [[String: Any]] {
-                // Multi-part content (images + text)
-                content = parts.compactMap { $0["text"] as? String }.joined()
-            } else {
-                content = ""
-            }
-            // ~4 chars per token, minimum 50 for overhead (tool calls, images)
-            return total + max(content.count / 4, 50)
-        }
+        // Image-aware estimate (Plan BF): a base64 image block is counted by its payload size, not
+        // the old 50-token floor, so image-heavy conversations actually trigger compaction.
+        let estimatedTokens = HistoryHygiene.estimatedTokens(conversationHistory)
 
         guard estimatedTokens > maxEstimatedTokens, conversationHistory.count > 6 else { return }
 
@@ -709,17 +617,7 @@ class LLMService: ObservableObject {
     /// Compress the context window using an LLM to summarize old messages.
     /// Falls back to the heuristic compressor on failure.
     private func compressContextWindowWithLLM() async {
-        let estimatedTokens = conversationHistory.reduce(0) { total, msg in
-            let content: String
-            if let text = msg["content"] as? String {
-                content = text
-            } else if let parts = msg["content"] as? [[String: Any]] {
-                content = parts.compactMap { $0["text"] as? String }.joined()
-            } else {
-                content = ""
-            }
-            return total + max(content.count / 4, 50)
-        }
+        let estimatedTokens = HistoryHygiene.estimatedTokens(conversationHistory)   // image-aware (Plan BF)
 
         guard estimatedTokens > maxEstimatedTokens, conversationHistory.count > 6 else { return }
 
@@ -1255,10 +1153,23 @@ class LLMService: ObservableObject {
             request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
             request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
 
+            // Turn hygiene (Plan BF): drop stale images that would otherwise re-upload every turn,
+            // and repair any dangling tool_use so a single interrupted tool call can't 400 the whole
+            // conversation. Applied to the sent copy AND written back so the fixes persist.
+            conversationHistory = HistoryHygiene.repairDanglingToolUse(
+                HistoryHygiene.pruneImages(conversationHistory, keepLast: 1))
+
+            // Prompt caching (Plan BF): the system prompt + tool schemas are large and byte-stable
+            // within a session, so mark them ephemeral-cacheable. Anthropic then reads them from
+            // cache on every follow-up turn instead of re-billing full input tokens each time.
             var body: [String: Any] = [
                 "model": config.model,
                 "max_tokens": includeTools ? 1024 : Config.maxTokens,
-                "system": systemPrompt,
+                "system": [[
+                    "type": "text",
+                    "text": systemPrompt,
+                    "cache_control": ["type": "ephemeral"]
+                ]],
                 "messages": conversationHistory
             ]
 
@@ -1268,7 +1179,11 @@ class LLMService: ObservableObject {
                     let tools = ToolDeclarations.anthropicTools(registry: nativeToolRouter?.registry, includeOpenClaw: includeOpenClaw, mcpClient: nativeToolRouter?.mcpClient)
                     return (try? JSONSerialization.data(withJSONObject: tools)) ?? Data()
                 }
-                let tools = (try? JSONSerialization.jsonObject(with: toolsData)) as? [[String: Any]] ?? []
+                var tools = (try? JSONSerialization.jsonObject(with: toolsData)) as? [[String: Any]] ?? []
+                // Cache-breakpoint on the final tool caches the whole tools array as one prefix.
+                if !tools.isEmpty {
+                    tools[tools.count - 1]["cache_control"] = ["type": "ephemeral"]
+                }
                 body["tools"] = tools
             }
 
@@ -1325,9 +1240,24 @@ class LLMService: ObservableObject {
 
                 // Execute each tool call via NativeToolRouter
                 for toolUse in toolUseBlocks {
+                    // A tool_use with no matching tool_result 400s every later request (Plan BF).
+                    // If the block has an id we can still answer it with a synthetic error result,
+                    // even when name/input are malformed — never leave it dangling.
                     guard let toolId = toolUse["id"] as? String,
                           let toolName = toolUse["name"] as? String,
-                          let input = toolUse["input"] as? [String: Any] else { continue }
+                          let input = toolUse["input"] as? [String: Any] else {
+                        if let toolId = toolUse["id"] as? String {
+                            conversationHistory.append([
+                                "role": "user",
+                                "content": [[
+                                    "type": "tool_result",
+                                    "tool_use_id": toolId,
+                                    "content": "Error: malformed tool call (missing name or arguments); nothing was run."
+                                ]]
+                            ] as [String: Any])
+                        }
+                        continue
+                    }
 
                     print("🔧 [Anthropic] Tool call: \(toolName)(\(String(describing: input).prefix(100))...)")
                     toolCallStatus = .executing(toolName)
@@ -1564,19 +1494,25 @@ class LLMService: ObservableObject {
                           let functionName = function["name"] as? String,
                           let argsString = function["arguments"] as? String else { continue }
 
-                    let args = (try? JSONSerialization.jsonObject(with: Data(argsString.utf8)) as? [String: Any]) ?? [:]
-
-                    print("🔧 [OpenAI] Tool call: \(functionName)(\(String(describing: args).prefix(100))...)")
+                    // Malformed tool arguments (Plan BF): return a parse error the model can correct
+                    // on the next turn, rather than silently running the tool with empty args and
+                    // wasting a turn on the wrong action.
+                    let parsedArgs = try? JSONSerialization.jsonObject(with: Data(argsString.utf8)) as? [String: Any]
+                    print("🔧 [OpenAI] Tool call: \(functionName)(\(String(describing: parsedArgs ?? [:]).prefix(100))...)")
                     toolCallStatus = .executing(functionName)
 
                     let result: ToolResult
-                    if let router = nativeToolRouter {
-                        result = await router.handleToolCall(name: functionName, args: args)
-                    } else if let bridge = openClawBridge {
-                        let taskDesc = args["task"] as? String ?? argsString
-                        result = await bridge.delegateTask(task: taskDesc, toolName: functionName)
+                    if let args = parsedArgs {
+                        if let router = nativeToolRouter {
+                            result = await router.handleToolCall(name: functionName, args: args)
+                        } else if let bridge = openClawBridge {
+                            let taskDesc = args["task"] as? String ?? argsString
+                            result = await bridge.delegateTask(task: taskDesc, toolName: functionName)
+                        } else {
+                            result = .failure("No tool handler available")
+                        }
                     } else {
-                        result = .failure("No tool handler available")
+                        result = .failure("Could not parse the arguments for '\(functionName)' as JSON. Re-issue the call with valid JSON arguments.")
                     }
                     toolCallStatus = result.isSuccess ? .completed(functionName) : .failed(functionName, "Failed")
 
@@ -2157,12 +2093,14 @@ class LLMService: ObservableObject {
 
         let hasNativeTools = nativeToolRouter != nil
         let nativeToolNames = nativeToolRouter?.registry.toolNames ?? []
+        let nativeToolDescriptions = nativeToolRouter?.registry.toolDescriptions(for: nativeToolNames) ?? []
         let fullPrompt = await Self.buildSystemPrompt(
             locationContext: locationContext,
             includeTools: hasNativeTools,
             includeOpenClaw: false,
             hasImage: false,
             nativeToolNames: nativeToolNames,
+            nativeToolDescriptions: nativeToolDescriptions,
             memoryContext: memoryContext,
             turn: text
         )

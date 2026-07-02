@@ -81,8 +81,18 @@ class ConversationStore: ObservableObject {
     /// Key for persisting the active thread ID across restarts.
     private static let activeThreadKey = "conversationStore_activeThreadId"
 
-    init() {
-        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+    /// True after a read failure on an existing conversations file (e.g. file protection while
+    /// locked): the on-disk data may be intact, so saves are suppressed until a load succeeds.
+    private var saveBlocked = false
+
+    /// Serializes encrypted saves so an older snapshot can never finish after — and overwrite —
+    /// a newer one.
+    private var pendingSaveTask: Task<Void, Never>?
+
+    /// `directory` is injectable so tests can point at a temp folder instead of the app's documents.
+    init(directory: URL? = nil) {
+        let docs = directory
+            ?? FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
         storageURL = docs.appendingPathComponent("conversations.json")
         loadThreads()
         restoreActiveSession()
@@ -443,14 +453,28 @@ class ConversationStore: ObservableObject {
     // MARK: - Persistence
 
     private func save() {
+        // While locked, `threads` is deliberately empty (or a lone session started pre-unlock) —
+        // writing now would encrypt that over the user's full history. Same for the async
+        // encrypted-load window, which also runs with `isLocked == true`.
+        guard !isLocked else {
+            NSLog("[ConversationStore] Save skipped — store is locked")
+            return
+        }
+        // After a failed read of an existing file, the on-disk data may be intact — never write.
+        guard !saveBlocked else {
+            NSLog("[ConversationStore] Save skipped — last load failed to read the existing file")
+            return
+        }
         do {
             let data = try JSONEncoder().encode(threads)
 
             if encryption.isEnabled {
-                // Encrypt async on background, write result
+                // Encrypt async on background, write result. Chained on the previous save so
+                // writes land in submission order.
                 let url = storageURL
                 let enc = encryption
-                Task {
+                pendingSaveTask = Task { [previous = pendingSaveTask] in
+                    await previous?.value
                     do {
                         let encrypted = try await enc.encrypt(data)
                         var output = Data("OGENC1".utf8)
@@ -491,12 +515,23 @@ class ConversationStore: ObservableObject {
             return
         }
 
-        do {
-            let data = try Data(contentsOf: storageURL)
-            threads = try JSONDecoder().decode([ConversationThread].self, from: data)
-            NSLog("[ConversationStore] Loaded %d threads", threads.count)
-        } catch {
-            NSLog("[ConversationStore] Load failed: %@", error.localizedDescription)
+        switch JSONStore.loadArray(ConversationThread.self, at: storageURL, name: "conversations") {
+        case .loaded(let decoded):
+            threads = decoded
+            saveBlocked = false
+            NSLog("[ConversationStore] Loaded %d threads", decoded.count)
+        case .recovered(let decoded, _):
+            threads = decoded
+            saveBlocked = false
+            NSLog("[ConversationStore] Recovered %d threads (original blob backed up)", decoded.count)
+        case .corrupt:
+            // Original preserved in StoreRecovery — start fresh rather than crash-loop.
+            threads = []
+            saveBlocked = false
+        case .unreadable:
+            saveBlocked = true
+        case .absent:
+            break
         }
     }
 
