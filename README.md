@@ -308,7 +308,7 @@ Assign models to **Fast**, **Balanced**, and **Best** tiers, then let OpenGlasse
 
 ## Enterprise
 
-Commercial features for teams and regulated industries. These are licensed separately from the open-source core — see [License](#license) or contact Skunkworks NZ.
+Commercial features for teams and regulated industries. These are licensed separately from the open-source core — see [License](#license) or contact Skunkworks NZ at [g@skunkworks.kiwi](mailto:g@skunkworks.kiwi).
 
 ### Field Assist — Guided Field Service
 
@@ -512,7 +512,7 @@ Key areas for contribution:
 
 ## License
 
-Business Source License 1.1 — free for non-commercial use. Commercial use requires a separate license from Skunk0 / Skunkworks NZ. Converts to Apache 2.0 on March 24, 2030. See LICENSE file for details.
+Business Source License 1.1 — free for non-commercial use. Commercial use requires a separate license from Skunk0 / Skunkworks NZ — contact [g@skunkworks.kiwi](mailto:g@skunkworks.kiwi). Converts to Apache 2.0 on March 24, 2030. See LICENSE file for details.
 
 ## Credits
 

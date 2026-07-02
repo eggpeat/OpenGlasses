@@ -435,7 +435,7 @@ open OpenGlasses.xcodeproj
 
 ## 许可证
 
-BSL 1.1（Business Source License 1.1）——非商业用途免费。商业用途需从 Skunk0 / Skunkworks NZ 获取单独许可。2030 年 3 月 24 日转换为 Apache 2.0。详见 LICENSE 文件。
+BSL 1.1（Business Source License 1.1）——非商业用途免费。商业用途需从 Skunk0 / Skunkworks NZ 获取单独许可（联系 [g@skunkworks.kiwi](mailto:g@skunkworks.kiwi)）。2030 年 3 月 24 日转换为 Apache 2.0。详见 LICENSE 文件。
 
 ## 致谢
 
