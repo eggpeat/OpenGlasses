@@ -10,7 +10,7 @@ import SwiftUI
 @MainActor
 final class HUDPreviewSnapshotTests: XCTestCase {
 
-    func testTaskCardRendersVisibleContent() throws {
+    func testTaskCardRendersVisibleContent() async throws {
         let screen = HUDScreen(
             title: "Torque bolts",
             lines: [HUDLine("45 Nm, 2 passes", emphasis: .secondary),
@@ -18,14 +18,29 @@ final class HUDPreviewSnapshotTests: XCTestCase {
             items: [HUDItem(id: "done", label: "Done", icon: .success, style: .primary) {},
                     HUDItem(id: "back", label: "Back", style: .outline) {}]
         )
-        let renderer = ImageRenderer(content: HUDPreviewView(screen: screen).frame(width: 320, height: 240))
-        renderer.scale = 2
-        let image = try XCTUnwrap(renderer.uiImage, "ImageRenderer produced no image")
 
-        XCTAssertGreaterThan(image.size.width, 0)
-        XCTAssertGreaterThan(image.size.height, 0)
-        XCTAssertTrue(Self.brightFraction(image) > 0.002,
-                      "the preview should render visible text/buttons over the dark panel")
+        // On a cold GPU (e.g. a freshly-erased simulator) the first ImageRenderer pass can time out
+        // building the Metal pipeline and return a blank image, failing the brightness check
+        // spuriously. Render until visible content appears, letting the pipeline warm up between
+        // attempts. On a warm renderer this passes on the first attempt with no delay.
+        var image: UIImage?
+        var fraction = 0.0
+        for attempt in 0..<12 {
+            let renderer = ImageRenderer(content: HUDPreviewView(screen: screen).frame(width: 320, height: 240))
+            renderer.scale = 2
+            if let rendered = renderer.uiImage {
+                image = rendered
+                fraction = Self.brightFraction(rendered)
+                if fraction > 0.002 { break }
+            }
+            if attempt < 11 { try await Task.sleep(nanoseconds: 400_000_000) }
+        }
+
+        let finalImage = try XCTUnwrap(image, "ImageRenderer produced no image")
+        XCTAssertGreaterThan(finalImage.size.width, 0)
+        XCTAssertGreaterThan(finalImage.size.height, 0)
+        XCTAssertTrue(fraction > 0.002,
+                      "the preview should render visible text/buttons over the dark panel (after warm-up)")
     }
 
     /// Fraction of pixels noticeably brighter than the near-black panel.
