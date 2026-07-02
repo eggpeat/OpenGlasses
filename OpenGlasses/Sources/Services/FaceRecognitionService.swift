@@ -62,18 +62,20 @@ class FaceRecognitionService: ObservableObject {
         isActive = true
         frameCount = 0
 
-        // Subscribe to camera frames via callback
-        let previousCallback = cameraService.onVideoFrame
-        cameraService.onVideoFrame = { [weak self] (image: UIImage) in
-            previousCallback?(image)
-            guard let self = self else { return }
-            Task { @MainActor in
-                self.frameCount += 1
-                if self.frameCount % self.currentProcessEveryN == 0 && !self.processingFrame {
-                    self.processFrame(image)
+        // Subscribe to the shared frame publisher with a stored cancellable (Plan: face-rec
+        // lifecycle). The old code chained `cameraService.onVideoFrame`, which `stop()` never
+        // detached — so recognition kept running after stop, and every start() stacked another
+        // closure. A publisher subscription cancels cleanly and can't stack.
+        frameSubscription = cameraService.framePublisher
+            .sink { [weak self] image in
+                Task { @MainActor in
+                    guard let self, self.isActive else { return }
+                    self.frameCount += 1
+                    if self.frameCount % self.currentProcessEveryN == 0 && !self.processingFrame {
+                        self.processFrame(image)
+                    }
                 }
             }
-        }
 
         print("👤 Face recognition started")
     }
@@ -163,12 +165,14 @@ class FaceRecognitionService: ObservableObject {
     // MARK: - Frame Processing
 
     private func processFrame(_ image: UIImage) {
-        guard let cgImage = image.cgImage, !knownFaces.isEmpty else { return }
+        guard isActive, let cgImage = image.cgImage, !knownFaces.isEmpty else { return }
         processingFrame = true
 
         Task.detached(priority: .userInitiated) { [weak self] in
             guard let self = self else { return }
             do {
+                // `detectFaceprints` is nonisolated, so this Vision work runs off the main actor
+                // (the old code left it main-isolated, so the detached task hopped straight back).
                 let faceprints = try await self.detectFaceprints(in: cgImage)
 
                 await MainActor.run {
@@ -201,7 +205,7 @@ class FaceRecognitionService: ObservableObject {
 
     // MARK: - Vision Framework
 
-    private func detectFaceprints(in cgImage: CGImage) async throws -> [[Float]] {
+    private nonisolated func detectFaceprints(in cgImage: CGImage) async throws -> [[Float]] {
         // Step 1: Detect face rectangles
         let faceRequest = VNDetectFaceRectanglesRequest()
         let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
@@ -240,7 +244,7 @@ class FaceRecognitionService: ObservableObject {
         return faceprints
     }
 
-    private func cropFace(from cgImage: CGImage, boundingBox: CGRect) -> CGImage? {
+    private nonisolated func cropFace(from cgImage: CGImage, boundingBox: CGRect) -> CGImage? {
         let width = CGFloat(cgImage.width)
         let height = CGFloat(cgImage.height)
 
@@ -258,38 +262,7 @@ class FaceRecognitionService: ObservableObject {
     // MARK: - Matching
 
     private func findMatch(for faceprint: [Float]) -> Int? {
-        var bestMatch: Int?
-        var bestDistance: Float = Float.greatestFiniteMagnitude
-
-        for (idx, known) in knownFaces.enumerated() {
-            guard known.faceprint.count == faceprint.count else { continue }
-            let distance = cosineSimilarity(a: faceprint, b: known.faceprint)
-            if distance > matchThreshold && (bestMatch == nil || distance > (1.0 - bestDistance)) {
-                // Higher cosine similarity = better match
-                bestMatch = idx
-                bestDistance = 1.0 - distance
-            }
-        }
-
-        return bestMatch
-    }
-
-    private func cosineSimilarity(a: [Float], b: [Float]) -> Float {
-        guard a.count == b.count, !a.isEmpty else { return 0 }
-
-        var dotProduct: Float = 0
-        var magnitudeA: Float = 0
-        var magnitudeB: Float = 0
-
-        for i in 0..<a.count {
-            dotProduct += a[i] * b[i]
-            magnitudeA += a[i] * a[i]
-            magnitudeB += b[i] * b[i]
-        }
-
-        let magnitude = sqrt(magnitudeA) * sqrt(magnitudeB)
-        guard magnitude > 0 else { return 0 }
-        return dotProduct / magnitude
+        FaceMatcher.bestMatch(for: faceprint, among: knownFaces.map(\.faceprint), threshold: matchThreshold)
     }
 
     // MARK: - Persistence
