@@ -1,0 +1,114 @@
+# Plan BH — Gateway Remote Invoke (agent-initiated glasses control)
+
+**Status:** 📋 Planned
+
+## The problem
+The gateway link is one-directional in practice: the phone initiates every exchange
+(transcription → chat → response). An agent living on the gateway cannot initiate anything on the
+glasses — it can answer "what do you see?" only if the phone happened to attach a frame, and it
+cannot ask the glasses to take a photo, start a recording, push text to the HUD, or speak. This
+caps the agent at "voice chatbot" when the natural product is a bidirectional terminal: the same
+agent a user talks to elsewhere (desktop, chat clients) should be able to reach back to the
+glasses it is paired with.
+
+Concretely missing:
+1. **No inbound RPC.** `OpenClawEventClient` sends `connect`/`send` requests and consumes chat
+   events; unsolicited server→client method calls are not recognized, so there is no way for the
+   gateway to invoke device actions.
+2. **No command surface.** Even if a frame arrived, nothing maps "capture_photo" to
+   `CameraService`, "speak" to TTS, or "show_text" to the HUD.
+3. **No capability discovery.** The gateway can't ask what this device can currently do (glasses
+   connected? display present? recording available?), so server-side agents must guess.
+4. **No policy layer.** Remote actuation is the single highest-impact surface in the app — a
+   prompt-injected or compromised gateway agent asking the glasses to record is a wiretap. This
+   must be deny-by-default and auditable, not bolted on.
+
+## What we build
+
+### The deterministic core (headless-testable, no sockets)
+`Sources/Services/OpenClaw/RemoteInvoke/`:
+
+- **`RemoteCommandParser`** (pure): JSON-RPC-ish frame (`method`, `id`, `params`) → typed
+  `RemoteGlassesCommand`. Data-driven alias table (multiple verbs per command, locale-alias
+  friendly) mapping onto one canonical enum:
+  `capturePhoto`, `startAudioRecording` / `stopAudioRecording`, `startVideo` / `stopVideo`,
+  `startTranslation(source, target)` / `stopTranslation`, `startTranscription` /
+  `stopTranscription`, `speak(text)`, `displayShow(text, icon)` / `displayClear`,
+  `deviceStatus`, `deviceCapabilities`, `addNote(text)`, `getTranscript`, `stopAll`.
+  Unknown method/action → typed `.unsupported(action)` — never a crash, never silence.
+- **`RemoteCommandPolicy`** (pure): decides `allow / deny(reason)` from
+  (command class, `Config.agentModeEnabled`, per-class user toggles, rate state).
+  - Everything is **deny-by-default when Agent Mode is off** (house rule: all
+    gateway/autonomous features gate on `agentModeEnabled`).
+  - Command classes: *observe* (status, capabilities, transcript), *output* (speak, display),
+    *capture* (photo, video, audio recording, transcription, translation). Capture is its own
+    consent toggle and routes through the Plan BC `HighImpactToolPolicy` gate when that lands
+    (BH does not block on BC — until then capture defaults OFF).
+  - Simple token-bucket rate limit per class; over-limit → `deny(.rateLimited)`.
+- **`RemoteInvokeReply`** (pure): success/deny/unsupported/error → response envelope with the
+  request `id`. The parser + policy + reply trio is a total function: every inbound frame yields
+  exactly one well-formed reply. Table-driven tests over the frame × config matrix (the
+  ReconnectMachine/AudioRoutePolicy test pattern).
+
+This is deliberately the same command taxonomy as the BG P2 `VoiceCommandParser`: two front
+doors (wake-word voice, gateway RPC), one set of device verbs. Where the taxonomies overlap the
+enums should converge rather than duplicate.
+
+### Wiring (thin edge)
+- `OpenClawEventClient`: recognize unsolicited request frames on the existing socket, hand them
+  to the parser/policy on a `@MainActor` executor, send the reply. Requires the event socket to
+  be *held open* while Agent Mode is on (it already reconnects for events; remote invoke just
+  raises the stakes of that persistence).
+- **`RemoteCommandExecutor`**: maps each allowed command onto the existing services —
+  `CameraService` (photo/video), audio recording, `AmbientCaptionService` (transcription),
+  live translation, `TextToSpeechService` (speak), the HUD display path (`displayShow`/`clear`),
+  battery/connection status, notes. `deviceCapabilities` reports what is *currently* true
+  (glasses connected, display supported, recording available), not what the app theoretically has.
+
+### Non-negotiable safety properties
+- **Nothing remote is ever silent.** Every remote-initiated *capture* command announces itself
+  (TTS or tone) before acting; every remote command of any class is logged to an inspectable
+  audit trail (reuse the existing tool-call log surface).
+- Agent Mode off ⇒ the executor is unreachable, not merely denying.
+- Per-class toggles live in the gateway settings UI with capture OFF by default.
+- Deny replies carry structured reasons so the server-side agent can explain itself instead of
+  retrying.
+
+### Same-theme hardening (fold into this PR — small, adjacent)
+- **Token hygiene:** the gateway token is interpolated into the WS URL
+  (`OpenClawEventClient.swift:126`) — ensure no log line ever prints the URL/token
+  (redact helper). Remote invoke makes the socket long-lived, so every reconnect re-presents
+  the token; redaction must cover the reconnect path too.
+- **Reconnect-loop polish:** the client already does exponential backoff (2 s → 30 s cap,
+  reset on success) but retries forever at a fixed cadence — add jitter, and consider a
+  give-up-after-N with user-visible state once the socket is load-bearing for inbound commands
+  (a permanently-flapping socket should surface, not spin silently).
+- **Degenerate-frame guard:** `LLMImagePreparer` accepts any `CGImage`; frames below a sane
+  minimum edge (e.g. < 32 px — the 1×1 placeholder failure mode) should be rejected before they
+  are base64'd into a conversation and poison context. Guard + unit test.
+- **Paste-friendly secret entry:** the plain `SecureField`s used for API keys/tokens fight
+  iOS paste; a small shared field component (secure + paste button + reveal toggle) swapped into
+  the settings forms that take long random strings.
+
+### Assessed and already handled / not applicable (no action)
+- *Internal-port probing on HTTPS hosts:* gateway reachability here already uses `/health` on
+  the configured base URL only (`OpenClawBridge.swift:216-248`) — no internal-port probe exists.
+- *Unbounded chat-turn loop:* no client-side turn loop exists in the bridge to bound.
+- *Endpoint URL validation/guard utility:* endpoint resolution (LAN/tunnel/auto with fallback)
+  already lives in the bridge; no separate validator needed for this plan.
+
+## Out of scope (separate candidates, not this plan)
+- Additional LLM provider cases (e.g. xAI) — provider plumbing, independent of the gateway.
+- OAuth-based provider login in `ModelFormView` — bigger, own plan if wanted.
+- Locale packs / non-English wake phrases — the alias table is built to accept them later.
+- Any server-side gateway work — BH is client-side; the contract is "respond correctly to
+  `node.invoke`-style frames," testable headlessly with recorded frames.
+
+## Test plan
+- Parser/policy/reply matrix tests (pure, no sockets, no `Wearables`).
+- Executor tested behind protocol seams with fresh instances (never `.shared` — house rule).
+- Edge: one integration test feeding canned frames through a fake socket into the client.
+
+## Sequencing
+After BG P2 (shares the command taxonomy). Before BC lands, capture class stays default-off;
+when BC lands, capture routes through `HighImpactToolPolicy` like any direct-actuation tool.
