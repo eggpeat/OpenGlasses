@@ -22,7 +22,12 @@ enum ModelPricing {
     /// list prices at time of writing; override from Settings when they change.
     static let defaults: [String: Rate] = [
         // Anthropic
+        "claude-fable-5": Rate(10, 50),
+        "claude-opus-4-8": Rate(5, 25),
+        "claude-opus-4-7": Rate(5, 25),
+        "claude-opus-4-6": Rate(5, 25),
         "claude-opus-4": Rate(15, 75),
+        "claude-sonnet-5": Rate(3, 15),
         "claude-sonnet-4": Rate(3, 15),
         "claude-haiku-4": Rate(1, 5),
         "claude-3-5-sonnet": Rate(3, 15),
@@ -38,6 +43,11 @@ enum ModelPricing {
         "gpt-4": Rate(30, 60),
         "o4-mini": Rate(1.10, 4.40),
         "o3-mini": Rate(1.10, 4.40),
+        // xAI
+        "grok-4-fast": Rate(0.20, 0.50),
+        "grok-4": Rate(3, 15),
+        "grok-3-mini": Rate(0.30, 0.50),
+        "grok-3": Rate(3, 15),
         // Google
         "gemini-2.0-flash": Rate(0.10, 0.40),
         "gemini-1.5-flash": Rate(0.075, 0.30),

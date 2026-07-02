@@ -28,6 +28,12 @@ struct ModelFormView: View {
     @State private var discoveredServers: [LocalServerScanner.DiscoveredServer] = []
     @State private var scanMessage: String?
 
+    // "Sign in with Claude" OAuth state (Anthropic only)
+    @ObservedObject private var claudeOAuth = ClaudeOAuthService.shared
+    @State private var showOAuthCodeField = false
+    @State private var oauthCode = ""
+    @State private var isExchangingOAuthCode = false
+
     var body: some View {
         Section {
             TextField("e.g. Claude Sonnet, GPT-4o", text: $name)
@@ -100,7 +106,11 @@ struct ModelFormView: View {
         } else {
             // MARK: Cloud API key section
             Section {
-                SecureField(selectedProvider == .custom ? "API Key (optional for local servers)" : "API Key", text: $apiKey)
+                if selectedProvider == .anthropic {
+                    claudeSignInRows
+                }
+
+                SecureField(anthropicKeyPlaceholder, text: $apiKey)
                     .autocorrectionDisabled()
                     .textInputAutocapitalization(.never)
                     .onChange(of: apiKey) { _, _ in resetModelList() }
@@ -158,7 +168,7 @@ struct ModelFormView: View {
                         }
                     }
                 }
-                .disabled((apiKey.isEmpty && selectedProvider != .custom) || isFetchingModels)
+                .disabled((apiKey.isEmpty && selectedProvider != .custom && !anthropicOAuthReady) || isFetchingModels)
 
                 if let error = fetchError {
                     Label(error, systemImage: "xmark.circle")
@@ -328,10 +338,97 @@ struct ModelFormView: View {
         case .zai: return "Z.ai subscription — OpenAI-compatible API"
         case .qwen: return "Coding Plan subscription — coding-intl.dashscope.aliyuncs.com"
         case .minimax: return "MiniMax subscription — platform.minimaxi.com"
+        case .xai: return "Get your API key at console.x.ai"
         case .openrouter: return "500+ models with one API key — openrouter.ai/keys"
         case .custom: return "Any OpenAI-compatible endpoint — a cloud API or a self-hosted Ollama / llama.cpp / LM Studio / vLLM / LocalAI server. For a local server, set the Base URL to e.g. http://your-mac.local:11434/v1 and leave the API Key blank. Use the host's .local name or a Tailscale address — a raw 192.168.x.x IP over http may be blocked by App Transport Security."
         case .local: return "On-device inference — no internet needed"
         case .appleOnDevice: return "Apple Intelligence — built-in, no download, no API key"
+        }
+    }
+
+    // MARK: - Sign in with Claude (OAuth)
+
+    /// True when the Anthropic provider can authenticate without a pasted key.
+    private var anthropicOAuthReady: Bool {
+        selectedProvider == .anthropic && claudeOAuth.isConnected
+    }
+
+    private var anthropicKeyPlaceholder: String {
+        switch selectedProvider {
+        case .custom: return "API Key (optional for local servers)"
+        case .anthropic: return claudeOAuth.isConnected ? "API Key (optional — account connected)" : "API Key"
+        default: return "API Key"
+        }
+    }
+
+    @ViewBuilder
+    private var claudeSignInRows: some View {
+        if claudeOAuth.isConnected {
+            HStack {
+                Image(systemName: "checkmark.seal.fill")
+                    .foregroundStyle(.green)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Claude account connected")
+                    Text("Requests use your Claude subscription unless an API key is set below.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("Sign out", role: .destructive) {
+                    claudeOAuth.signOut()
+                }
+                .buttonStyle(.borderless)
+            }
+        } else {
+            Button {
+                if let url = claudeOAuth.beginSignIn() {
+                    UIApplication.shared.open(url)
+                    showOAuthCodeField = true
+                }
+            } label: {
+                Label("Sign in with Claude", systemImage: "person.crop.circle.badge.checkmark")
+            }
+
+            if showOAuthCodeField {
+                TextField("Paste authorization code", text: $oauthCode)
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+                    .font(.footnote.monospaced())
+
+                Button {
+                    Task {
+                        isExchangingOAuthCode = true
+                        let ok = await claudeOAuth.completeSignIn(pastedCode: oauthCode)
+                        isExchangingOAuthCode = false
+                        if ok {
+                            oauthCode = ""
+                            showOAuthCodeField = false
+                            resetModelList()
+                        }
+                    }
+                } label: {
+                    HStack {
+                        if isExchangingOAuthCode {
+                            ProgressView().scaleEffect(0.8)
+                            Text("Connecting…")
+                        } else {
+                            Image(systemName: "link")
+                            Text("Connect")
+                        }
+                    }
+                }
+                .disabled(oauthCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isExchangingOAuthCode)
+
+                Text("Sign in in the browser, copy the code shown on the callback page, then paste it here.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if let error = claudeOAuth.lastError {
+                Label(error, systemImage: "xmark.circle")
+                    .font(.footnote)
+                    .foregroundStyle(.red)
+            }
         }
     }
 

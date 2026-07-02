@@ -12,6 +12,7 @@ enum LLMProvider: String, CaseIterable {
     case zai = "zai"
     case qwen = "qwen"
     case minimax = "minimax"
+    case xai = "xai"
     case openrouter = "openrouter"
     case custom = "custom"
     case local = "local"
@@ -26,6 +27,7 @@ enum LLMProvider: String, CaseIterable {
         case .zai: return "Z.ai (Subscription)"
         case .qwen: return "Qwen (Subscription)"
         case .minimax: return "MiniMax (Subscription)"
+        case .xai: return "xAI (Grok)"
         case .openrouter: return "OpenRouter (500+ models)"
         case .custom: return "Custom (OpenAI-compatible)"
         case .local: return "Local (On-Device MLX)"
@@ -41,6 +43,7 @@ enum LLMProvider: String, CaseIterable {
         case .gemini: return URL(string: "https://aistudio.google.com/apikey")
         case .groq: return URL(string: "https://console.groq.com/keys")
         case .minimax: return URL(string: "https://platform.minimaxi.com")
+        case .xai: return URL(string: "https://console.x.ai")
         case .openrouter: return URL(string: "https://openrouter.ai/keys")
         case .qwen: return URL(string: "https://dashscope.console.aliyun.com/apiKey")
         case .zai, .custom, .local, .appleOnDevice: return nil
@@ -51,7 +54,7 @@ enum LLMProvider: String, CaseIterable {
     var isOpenAICompatible: Bool {
         switch self {
         case .anthropic, .gemini, .local, .appleOnDevice: return false
-        case .openai, .groq, .zai, .qwen, .minimax, .openrouter, .custom: return true
+        case .openai, .groq, .zai, .qwen, .minimax, .xai, .openrouter, .custom: return true
         }
     }
 
@@ -65,6 +68,7 @@ enum LLMProvider: String, CaseIterable {
         case .zai: return "https://api.z.ai/api/coding/paas/v4/chat/completions"
         case .qwen: return "https://coding-intl.dashscope.aliyuncs.com/v1/chat/completions"
         case .minimax: return "https://api.minimax.io/v1/chat/completions"
+        case .xai: return "https://api.x.ai/v1/chat/completions"
         case .openrouter: return "https://openrouter.ai/api/v1/chat/completions"
         case .custom: return "https://api.openai.com/v1/chat/completions"
         case .local: return ""
@@ -75,13 +79,14 @@ enum LLMProvider: String, CaseIterable {
     /// Default model for the provider
     var defaultModel: String {
         switch self {
-        case .anthropic: return "claude-sonnet-4-20250514"
+        case .anthropic: return "claude-sonnet-5"
         case .openai: return "gpt-4o"
         case .gemini: return "gemini-2.0-flash"
         case .groq: return "llama-3.3-70b-versatile"
         case .zai: return "glm-4.5"
         case .qwen: return "qwen3.5-plus"
         case .minimax: return "MiniMax-M2.7"
+        case .xai: return "grok-4"
         case .openrouter: return "anthropic/claude-sonnet-4"
         case .custom: return "gpt-4o"
         case .local: return "mlx-community/gemma-4-e2b-it-4bit"
@@ -431,7 +436,7 @@ class LLMService: ObservableObject {
             rawResponse = try await sendLocal(text, systemPrompt: fullPrompt, config: modelConfig, includeTools: includeTools, imageData: imageData, onToken: onToken)
         case .appleOnDevice:
             rawResponse = try await sendAppleOnDevice(text, systemPrompt: fullPrompt)
-        case .openai, .groq, .zai, .qwen, .minimax, .openrouter, .custom:
+        case .openai, .groq, .zai, .qwen, .minimax, .xai, .openrouter, .custom:
             rawResponse = try await sendOpenAICompatible(text, systemPrompt: fullPrompt, config: modelConfig, includeTools: includeTools, imageData: imageData, onToken: onToken)
         }
 
@@ -511,7 +516,7 @@ class LLMService: ObservableObject {
             return try await sendLocal(text, systemPrompt: system, config: config, includeTools: false, imageData: nil)
         case .appleOnDevice:
             return try await sendAppleOnDevice(text, systemPrompt: system)
-        case .openai, .groq, .zai, .qwen, .minimax, .openrouter, .custom:
+        case .openai, .groq, .zai, .qwen, .minimax, .xai, .openrouter, .custom:
             return try await sendOpenAICompatible(text, systemPrompt: system, config: config, includeTools: false, imageData: nil)
         }
     }
@@ -701,8 +706,7 @@ class LLMService: ObservableObject {
                 var request = URLRequest(url: URL(string: "https://api.anthropic.com/v1/messages")!)
                 request.httpMethod = "POST"
                 request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-                request.setValue(modelConfig.apiKey, forHTTPHeaderField: "x-api-key")
-                request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+                AnthropicAuth.apply(credential: await AnthropicAuth.resolveCredential(apiKey: modelConfig.apiKey), to: &request)
                 request.timeoutInterval = 15
                 let body: [String: Any] = [
                     "model": modelConfig.model,
@@ -718,7 +722,7 @@ class LLMService: ObservableObject {
                       let text = content.first?["text"] as? String else { return nil }
                 return text
 
-            case .openai, .groq, .zai, .qwen, .minimax, .openrouter, .custom:
+            case .openai, .groq, .zai, .qwen, .minimax, .xai, .openrouter, .custom:
                 var baseURL = modelConfig.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
                 if !baseURL.hasSuffix("/chat/completions") {
                     baseURL += baseURL.hasSuffix("/") ? "chat/completions" : "/chat/completions"
@@ -792,8 +796,7 @@ class LLMService: ObservableObject {
                 var request = URLRequest(url: URL(string: "https://api.anthropic.com/v1/messages")!)
                 request.httpMethod = "POST"
                 request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-                request.setValue(modelConfig.apiKey, forHTTPHeaderField: "x-api-key")
-                request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+                AnthropicAuth.apply(credential: await AnthropicAuth.resolveCredential(apiKey: modelConfig.apiKey), to: &request)
                 request.timeoutInterval = 20
                 let body: [String: Any] = [
                     "model": modelConfig.model,
@@ -812,7 +815,7 @@ class LLMService: ObservableObject {
                       let text = content.first?["text"] as? String else { return nil }
                 return text
 
-            case .openai, .groq, .zai, .qwen, .minimax, .openrouter, .custom:
+            case .openai, .groq, .zai, .qwen, .minimax, .xai, .openrouter, .custom:
                 var baseURL = modelConfig.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
                 if !baseURL.hasSuffix("/chat/completions") {
                     baseURL += baseURL.hasSuffix("/") ? "chat/completions" : "/chat/completions"
@@ -897,8 +900,7 @@ class LLMService: ObservableObject {
                 var request = URLRequest(url: URL(string: "https://api.anthropic.com/v1/messages")!)
                 request.httpMethod = "POST"
                 request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-                request.setValue(modelConfig.apiKey, forHTTPHeaderField: "x-api-key")
-                request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+                AnthropicAuth.apply(credential: await AnthropicAuth.resolveCredential(apiKey: modelConfig.apiKey), to: &request)
                 request.timeoutInterval = 30
                 let body: [String: Any] = [
                     "model": modelConfig.model,
@@ -916,7 +918,7 @@ class LLMService: ObservableObject {
                 guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { return nil }
                 return StructuredVisionParser.anthropic(data, toolName: toolName)
 
-            case .openai, .groq, .zai, .qwen, .minimax, .openrouter, .custom:
+            case .openai, .groq, .zai, .qwen, .minimax, .xai, .openrouter, .custom:
                 var baseURL = modelConfig.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
                 if !baseURL.hasSuffix("/chat/completions") {
                     baseURL += baseURL.hasSuffix("/") ? "chat/completions" : "/chat/completions"
@@ -997,8 +999,7 @@ class LLMService: ObservableObject {
                 var request = URLRequest(url: URL(string: "https://api.anthropic.com/v1/messages")!)
                 request.httpMethod = "POST"
                 request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-                request.setValue(modelConfig.apiKey, forHTTPHeaderField: "x-api-key")
-                request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+                AnthropicAuth.apply(credential: await AnthropicAuth.resolveCredential(apiKey: modelConfig.apiKey), to: &request)
                 request.timeoutInterval = 45
                 let body: [String: Any] = [
                     "model": modelConfig.model,
@@ -1013,7 +1014,7 @@ class LLMService: ObservableObject {
                 guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { return nil }
                 return StructuredVisionParser.anthropic(data, toolName: toolName)
 
-            case .openai, .groq, .zai, .qwen, .minimax, .openrouter, .custom:
+            case .openai, .groq, .zai, .qwen, .minimax, .xai, .openrouter, .custom:
                 var baseURL = modelConfig.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
                 if !baseURL.hasSuffix("/chat/completions") {
                     baseURL += baseURL.hasSuffix("/") ? "chat/completions" : "/chat/completions"
@@ -1093,7 +1094,7 @@ class LLMService: ObservableObject {
             return try await sendGemini(text, systemPrompt: systemPrompt, config: config, includeTools: includeTools, imageData: nil)
         case .local, .appleOnDevice:
             throw LLMError.missingAPIKey("Local providers cannot be used as cloud agent")
-        case .openai, .groq, .zai, .qwen, .minimax, .openrouter, .custom:
+        case .openai, .groq, .zai, .qwen, .minimax, .xai, .openrouter, .custom:
             return try await sendOpenAICompatible(text, systemPrompt: systemPrompt, config: config, includeTools: includeTools, imageData: nil)
         }
     }
@@ -1118,9 +1119,10 @@ class LLMService: ObservableObject {
     }
 
     private func sendAnthropic(_ text: String, systemPrompt: String, config: ModelConfig, includeTools: Bool, imageData: Data?, onToken: ((String) -> Void)? = nil) async throws -> String {
-        let apiKey = config.apiKey
+        // An explicit API key wins; otherwise fall back to a connected Claude account (OAuth).
+        let apiKey = await AnthropicAuth.resolveCredential(apiKey: config.apiKey)
         guard !apiKey.isEmpty else {
-            throw LLMError.missingAPIKey("Anthropic API key not configured")
+            throw LLMError.missingAPIKey("Anthropic API key not configured — add a key or sign in with Claude")
         }
 
         // Add user message to history
@@ -1150,8 +1152,7 @@ class LLMService: ObservableObject {
             var request = URLRequest(url: URL(string: "https://api.anthropic.com/v1/messages")!)
             request.httpMethod = "POST"
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
-            request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+            AnthropicAuth.apply(credential: apiKey, to: &request)  // already resolved above
 
             // Turn hygiene (Plan BF): drop stale images that would otherwise re-upload every turn,
             // and repair any dangling tool_use so a single interrupted tool call can't 400 the whole
