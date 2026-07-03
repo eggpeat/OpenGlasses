@@ -296,11 +296,13 @@ class OpenClawBridge: ObservableObject {
             .replacingOccurrences(of: "http://", with: "ws://")
         let token = activeToken
 
-        guard let url = URL(string: "\(wsURL)/ws?token=\(token)") else {
+        // Token is presented in the `connect` handshake below, not in the URL query string —
+        // this keeps the credential out of device, proxy, and server access logs.
+        guard let url = URL(string: "\(wsURL)/ws") else {
             throw NSError(domain: "OpenClaw", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid WebSocket URL"])
         }
 
-        NSLog("[OpenClaw] WS connecting to %@", url.absoluteString)
+        NSLog("[OpenClaw] WS connecting to %@", LogRedaction.redact(url.absoluteString))
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 30
         wsSession = URLSession(configuration: config)
@@ -339,7 +341,7 @@ class OpenClawBridge: ObservableObject {
 
         let connectData = try JSONSerialization.data(withJSONObject: connectMsg)
         let connectJSON = String(data: connectData, encoding: .utf8)!
-        NSLog("[OpenClawWS] Sending connect: %@", String(connectJSON.prefix(500)))
+        NSLog("[OpenClawWS] Sending connect: %@", LogRedaction.redact(String(connectJSON.prefix(500))))
         try await webSocketTask!.send(.string(connectJSON))
 
         // Wait for connect response

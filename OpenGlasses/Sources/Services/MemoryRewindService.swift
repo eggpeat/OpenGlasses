@@ -149,7 +149,9 @@ class MemoryRewindService: ObservableObject {
 
         // Write to temp file (SFSpeechURLRecognitionRequest needs a file URL)
         let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent("rewind_\(UUID().uuidString).wav")
-        try wavData.write(to: tempURL)
+        // Rolling-buffer audio is sensitive — encrypt the on-disk temp file at rest. It is
+        // deleted as soon as recognition finishes (see `defer`).
+        try wavData.write(to: tempURL, options: [.atomic, .completeFileProtection])
         defer { try? FileManager.default.removeItem(at: tempURL) }
 
         let request = SFSpeechURLRecognitionRequest(url: tempURL)

@@ -269,8 +269,9 @@ class WebRTCStreamingService: ObservableObject {
     }
 
     private func generateRoomId() -> String {
-        // 6-character alphanumeric room code
-        let chars = "abcdefghijklmnopqrstuvwxyz0123456789"
-        return String((0..<6).map { _ in chars.randomElement()! })
+        // A viewer who knows the room code can watch the live stream, so the code must be
+        // unguessable rather than a short slug: 128 bits of cryptographic randomness,
+        // URL-safe base64. Replaces the old 6-char alphanumeric code (~31 bits, brute-forceable).
+        return SecureToken.urlSafe(byteCount: 16)
     }
 }

@@ -270,7 +270,8 @@ class FaceRecognitionService: ObservableObject {
     private func saveFaces() {
         do {
             let data = try JSONEncoder().encode(knownFaces)
-            try data.write(to: storageURL, options: .atomic)
+            // Face embeddings are biometric data — encrypt at rest (accessible only while unlocked).
+            try data.write(to: storageURL, options: [.atomic, .completeFileProtection])
         } catch {
             print("👤 Failed to save faces: \(error)")
         }
