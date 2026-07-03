@@ -92,13 +92,9 @@ struct Config {
 
     // MARK: - Onboarding
 
-    static var hasCompletedOnboarding: Bool {
-        UserDefaults.standard.bool(forKey: "hasCompletedOnboarding")
-    }
+    @UserDefaultsBacked("hasCompletedOnboarding", default: false) static var hasCompletedOnboarding: Bool
 
-    static func setHasCompletedOnboarding(_ completed: Bool) {
-        UserDefaults.standard.set(completed, forKey: "hasCompletedOnboarding")
-    }
+    static func setHasCompletedOnboarding(_ completed: Bool) { hasCompletedOnboarding = completed }
 
     /// True when the user hasn't completed onboarding and has no configured API keys.
     static var needsOnboarding: Bool {
@@ -283,13 +279,9 @@ struct Config {
     }
 
     /// Whether automatic model routing is enabled. When off, all requests use the active model.
-    static var autoModelRoutingEnabled: Bool {
-        UserDefaults.standard.bool(forKey: "autoModelRoutingEnabled")
-    }
+    @UserDefaultsBacked("autoModelRoutingEnabled", default: false) static var autoModelRoutingEnabled: Bool
 
-    static func setAutoModelRoutingEnabled(_ enabled: Bool) {
-        UserDefaults.standard.set(enabled, forKey: "autoModelRoutingEnabled")
-    }
+    static func setAutoModelRoutingEnabled(_ enabled: Bool) { autoModelRoutingEnabled = enabled }
 
     /// Get the model explicitly assigned to a tier by the user.
     /// Falls back to keyword-based auto-detection if no model is assigned.
@@ -1416,13 +1408,9 @@ struct Config {
 
     // MARK: - OpenClaw Configuration
 
-    static var openClawEnabled: Bool {
-        UserDefaults.standard.bool(forKey: "openClawEnabled")
-    }
+    @UserDefaultsBacked("openClawEnabled", default: false) static var openClawEnabled: Bool
 
-    static func setOpenClawEnabled(_ enabled: Bool) {
-        UserDefaults.standard.set(enabled, forKey: "openClawEnabled")
-    }
+    static func setOpenClawEnabled(_ enabled: Bool) { openClawEnabled = enabled }
 
     static var openClawConnectionMode: OpenClawConnectionMode {
         if let raw = UserDefaults.standard.string(forKey: "openClawConnectionMode"),
@@ -1830,13 +1818,9 @@ struct Config {
 
     // MARK: - Privacy Filter
 
-    static var privacyFilterEnabled: Bool {
-        UserDefaults.standard.bool(forKey: "privacyFilterEnabled")
-    }
+    @UserDefaultsBacked("privacyFilterEnabled", default: false) static var privacyFilterEnabled: Bool
 
-    static func setPrivacyFilterEnabled(_ enabled: Bool) {
-        UserDefaults.standard.set(enabled, forKey: "privacyFilterEnabled")
-    }
+    static func setPrivacyFilterEnabled(_ enabled: Bool) { privacyFilterEnabled = enabled }
 
     // MARK: - Health Data Sharing with AI
 
@@ -1848,13 +1832,9 @@ struct Config {
     /// party. This MUST default to false (opt-in). On-device tracking, form
     /// analysis, and saving workouts to Apple Health do not require it; only
     /// transmitting Health-read data off-device does.
-    static var shareHealthDataWithAI: Bool {
-        UserDefaults.standard.bool(forKey: "shareHealthDataWithAI")
-    }
+    @UserDefaultsBacked("shareHealthDataWithAI", default: false) static var shareHealthDataWithAI: Bool
 
-    static func setShareHealthDataWithAI(_ enabled: Bool) {
-        UserDefaults.standard.set(enabled, forKey: "shareHealthDataWithAI")
-    }
+    static func setShareHealthDataWithAI(_ enabled: Bool) { shareHealthDataWithAI = enabled }
 
     // MARK: - Listening Toggle
 
@@ -2251,13 +2231,9 @@ struct Config {
 
     /// When `true`, keyframe thumbnails are persisted and may be attached to the
     /// agent turn (heavier). Default `false`: text-only "Recent Visual Context".
-    static var visualStateInjectThumbnails: Bool {
-        UserDefaults.standard.bool(forKey: "visualStateInjectThumbnails")   // defaults to false
-    }
+    @UserDefaultsBacked("visualStateInjectThumbnails", default: false) static var visualStateInjectThumbnails: Bool
 
-    static func setVisualStateInjectThumbnails(_ enabled: Bool) {
-        UserDefaults.standard.set(enabled, forKey: "visualStateInjectThumbnails")
-    }
+    static func setVisualStateInjectThumbnails(_ enabled: Bool) { visualStateInjectThumbnails = enabled }
 
     // MARK: - Siri "Ask a Question" Behavior
 
@@ -2723,24 +2699,16 @@ struct Config {
     }
 
     /// Whether the on-device agent model has been downloaded.
-    static var agentModelDownloaded: Bool {
-        UserDefaults.standard.bool(forKey: "agentModelDownloaded")
-    }
+    @UserDefaultsBacked("agentModelDownloaded", default: false) static var agentModelDownloaded: Bool
 
-    static func setAgentModelDownloaded(_ value: Bool) {
-        UserDefaults.standard.set(value, forKey: "agentModelDownloaded")
-    }
+    static func setAgentModelDownloaded(_ value: Bool) { agentModelDownloaded = value }
 
     /// Whether fast-tier queries may run on the *on-device* MLX agent model.
     /// Default off: the bundled gemma-4 MLX path can fatally crash during inference
     /// ("SmallVector out of range"), and that crash is uncatchable, so we don't route
     /// to it unless the user explicitly opts in. Cloud agent models are unaffected.
-    static var localAgentEnabled: Bool {
-        UserDefaults.standard.bool(forKey: "localAgentEnabled")
-    }
+    @UserDefaultsBacked("localAgentEnabled", default: false) static var localAgentEnabled: Bool
 
-    static func setLocalAgentEnabled(_ value: Bool) {
-        UserDefaults.standard.set(value, forKey: "localAgentEnabled")
-    }
+    static func setLocalAgentEnabled(_ value: Bool) { localAgentEnabled = value }
 }
 
