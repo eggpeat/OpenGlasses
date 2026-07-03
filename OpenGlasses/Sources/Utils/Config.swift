@@ -1414,13 +1414,9 @@ struct Config {
     }
 
     /// Whether to show all quick actions on the Voice tab, or only the top 4.
-    static var showAllQuickActions: Bool {
-        UserDefaults.standard.bool(forKey: "showAllQuickActions")
-    }
+    @UserDefaultsBacked("showAllQuickActions", default: false) static var showAllQuickActions: Bool
 
-    static func setShowAllQuickActions(_ show: Bool) {
-        UserDefaults.standard.set(show, forKey: "showAllQuickActions")
-    }
+    static func setShowAllQuickActions(_ show: Bool) { showAllQuickActions = show }
 
     // MARK: - OpenClaw Configuration
 
@@ -1962,13 +1958,9 @@ struct Config {
     // MARK: - Audio-Only Mode
 
     /// When enabled, disables video frame streaming to save battery. Voice still works.
-    static var audioOnlyMode: Bool {
-        UserDefaults.standard.bool(forKey: "audioOnlyMode")
-    }
+    @UserDefaultsBacked("audioOnlyMode", default: false) static var audioOnlyMode: Bool
 
-    static func setAudioOnlyMode(_ enabled: Bool) {
-        UserDefaults.standard.set(enabled, forKey: "audioOnlyMode")
-    }
+    static func setAudioOnlyMode(_ enabled: Bool) { audioOnlyMode = enabled }
 
     // MARK: - Glasses Display (in-lens HUD)
 
@@ -1987,13 +1979,9 @@ struct Config {
     /// When on, the assistant offers a spoken nudge after you state a durable fact or repeat a
     /// multi-step request ("say 'remember it'" / "save that as a skill"). Off by default. When
     /// Agent Mode is also on, those are auto-saved silently instead of nudged.
-    static var memoryNudgesEnabled: Bool {
-        UserDefaults.standard.bool(forKey: "memoryNudgesEnabled")
-    }
+    @UserDefaultsBacked("memoryNudgesEnabled", default: false) static var memoryNudgesEnabled: Bool
 
-    static func setMemoryNudgesEnabled(_ enabled: Bool) {
-        UserDefaults.standard.set(enabled, forKey: "memoryNudgesEnabled")
-    }
+    static func setMemoryNudgesEnabled(_ enabled: Bool) { memoryNudgesEnabled = enabled }
 
     // MARK: - Teleprompter
 
@@ -2302,38 +2290,26 @@ struct Config {
     /// and Siri speaks the answer hands-free (OpenGlasses normally stays running to
     /// listen for wake words). Users whose app gets killed and see "OpenGlasses is
     /// not running" can enable this for reliability at the cost of launching the app.
-    static var siriAskOpensApp: Bool {
-        UserDefaults.standard.bool(forKey: "siriAskOpensApp")
-    }
+    @UserDefaultsBacked("siriAskOpensApp", default: false) static var siriAskOpensApp: Bool
 
-    static func setSiriAskOpensApp(_ enabled: Bool) {
-        UserDefaults.standard.set(enabled, forKey: "siriAskOpensApp")
-    }
+    static func setSiriAskOpensApp(_ enabled: Bool) { siriAskOpensApp = enabled }
 
     // MARK: - Silent Mode
 
     /// When enabled, the wake word listener is off but the agent is still actionable
     /// via the watch, widget quick actions, Action Button, and manual mic tap.
     /// Scheduled agent tasks still run in the background.
-    static var silentMode: Bool {
-        UserDefaults.standard.bool(forKey: "silentMode")
-    }
+    @UserDefaultsBacked("silentMode", default: false) static var silentMode: Bool
 
-    static func setSilentMode(_ enabled: Bool) {
-        UserDefaults.standard.set(enabled, forKey: "silentMode")
-    }
+    static func setSilentMode(_ enabled: Bool) { silentMode = enabled }
 
     // MARK: - Glasses-Only Audio
 
     /// When true, agent TTS and notification sounds are silenced if glasses are not connected.
     /// When false (default), audio plays through the phone speaker even without glasses.
-    static var glassesOnlyAudio: Bool {
-        UserDefaults.standard.bool(forKey: "glassesOnlyAudio")
-    }
+    @UserDefaultsBacked("glassesOnlyAudio", default: false) static var glassesOnlyAudio: Bool
 
-    static func setGlassesOnlyAudio(_ enabled: Bool) {
-        UserDefaults.standard.set(enabled, forKey: "glassesOnlyAudio")
-    }
+    static func setGlassesOnlyAudio(_ enabled: Bool) { glassesOnlyAudio = enabled }
 
 // MARK: - Auto-Sleep
 
@@ -2440,23 +2416,15 @@ struct Config {
 
     /// Developer-only: run the local MCP glasses HTTP server (Plan E). Only effective when
     /// `agentModeEnabled` is also on.
-    static var mcpServerEnabled: Bool {
-        UserDefaults.standard.bool(forKey: "mcpServerEnabled")
-    }
+    @UserDefaultsBacked("mcpServerEnabled", default: false) static var mcpServerEnabled: Bool
 
-    static func setMCPServerEnabled(_ enabled: Bool) {
-        UserDefaults.standard.set(enabled, forKey: "mcpServerEnabled")
-    }
+    static func setMCPServerEnabled(_ enabled: Bool) { mcpServerEnabled = enabled }
 
     /// Master toggle for the Accessibility Tier (A1 Reading Accessibility). When off, the
     /// ReadingAccessibilityTool is not registered.
-    static var accessibilityModeEnabled: Bool {
-        UserDefaults.standard.bool(forKey: "accessibilityModeEnabled")
-    }
+    @UserDefaultsBacked("accessibilityModeEnabled", default: false) static var accessibilityModeEnabled: Bool
 
-    static func setAccessibilityModeEnabled(_ enabled: Bool) {
-        UserDefaults.standard.set(enabled, forKey: "accessibilityModeEnabled")
-    }
+    static func setAccessibilityModeEnabled(_ enabled: Bool) { accessibilityModeEnabled = enabled }
 
     /// Master toggle for the Field Assist feature. When off, no vaults are loaded
     /// and the FieldSessionTool is not registered.
