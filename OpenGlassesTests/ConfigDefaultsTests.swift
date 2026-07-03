@@ -9,6 +9,10 @@ final class ConfigDefaultsTests: XCTestCase {
     private let keys = [
         "silentMode", "glassesOnlyAudio", "audioOnlyMode", "memoryNudgesEnabled",
         "showAllQuickActions", "siriAskOpensApp", "mcpServerEnabled", "accessibilityModeEnabled",
+        // Cohort 2
+        "usePhoneMicForTranslation", "glassesDisplayEnabled", "intentClassifierEnabled",
+        "llmComplexityClassifierEnabled", "agentOnboardingComplete", "contextualEmbeddingEnabled",
+        "frameDedupEnabled", "visualStateMemoryEnabled",
     ]
 
     override func setUp() {
@@ -31,6 +35,14 @@ final class ConfigDefaultsTests: XCTestCase {
         XCTAssertFalse(Config.siriAskOpensApp)
         XCTAssertFalse(Config.mcpServerEnabled)
         XCTAssertFalse(Config.accessibilityModeEnabled)
+        XCTAssertFalse(Config.usePhoneMicForTranslation)
+        XCTAssertFalse(Config.glassesDisplayEnabled)
+        XCTAssertFalse(Config.intentClassifierEnabled)
+        XCTAssertFalse(Config.llmComplexityClassifierEnabled)
+        XCTAssertFalse(Config.agentOnboardingComplete)
+        XCTAssertFalse(Config.contextualEmbeddingEnabled)
+        XCTAssertFalse(Config.frameDedupEnabled)
+        XCTAssertFalse(Config.visualStateMemoryEnabled)
     }
 
     /// Each `setX` façade writes the property, and it round-trips through the exact legacy key.
@@ -43,6 +55,14 @@ final class ConfigDefaultsTests: XCTestCase {
         assertRoundTrip("siriAskOpensApp", set: Config.setSiriAskOpensApp, get: { Config.siriAskOpensApp })
         assertRoundTrip("mcpServerEnabled", set: Config.setMCPServerEnabled, get: { Config.mcpServerEnabled })
         assertRoundTrip("accessibilityModeEnabled", set: Config.setAccessibilityModeEnabled, get: { Config.accessibilityModeEnabled })
+        assertRoundTrip("usePhoneMicForTranslation", set: Config.setUsePhoneMicForTranslation, get: { Config.usePhoneMicForTranslation })
+        assertRoundTrip("glassesDisplayEnabled", set: Config.setGlassesDisplayEnabled, get: { Config.glassesDisplayEnabled })
+        assertRoundTrip("intentClassifierEnabled", set: Config.setIntentClassifierEnabled, get: { Config.intentClassifierEnabled })
+        assertRoundTrip("llmComplexityClassifierEnabled", set: Config.setLLMComplexityClassifierEnabled, get: { Config.llmComplexityClassifierEnabled })
+        assertRoundTrip("agentOnboardingComplete", set: Config.setAgentOnboardingComplete, get: { Config.agentOnboardingComplete })
+        assertRoundTrip("contextualEmbeddingEnabled", set: Config.setContextualEmbeddingEnabled, get: { Config.contextualEmbeddingEnabled })
+        assertRoundTrip("frameDedupEnabled", set: Config.setFrameDedupEnabled, get: { Config.frameDedupEnabled })
+        assertRoundTrip("visualStateMemoryEnabled", set: Config.setVisualStateMemoryEnabled, get: { Config.visualStateMemoryEnabled })
     }
 
     /// A raw value written under the legacy key (as the old setter did) is read by the new property —

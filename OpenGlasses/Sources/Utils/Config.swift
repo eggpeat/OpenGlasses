@@ -1364,13 +1364,9 @@ struct Config {
 
     /// When true, live translation uses the iPhone's built-in mic instead of glasses Bluetooth mic.
     /// Useful for translating what someone nearby is saying (their voice comes through the phone mic).
-    static var usePhoneMicForTranslation: Bool {
-        UserDefaults.standard.bool(forKey: "usePhoneMicForTranslation")
-    }
+    @UserDefaultsBacked("usePhoneMicForTranslation", default: false) static var usePhoneMicForTranslation: Bool
 
-    static func setUsePhoneMicForTranslation(_ enabled: Bool) {
-        UserDefaults.standard.set(enabled, forKey: "usePhoneMicForTranslation")
-    }
+    static func setUsePhoneMicForTranslation(_ enabled: Bool) { usePhoneMicForTranslation = enabled }
 
     // MARK: - Quick Actions
 
@@ -1966,13 +1962,9 @@ struct Config {
 
     /// When enabled, AI responses and ambient captions are mirrored to the
     /// Ray-Ban Display in-lens HUD. No-ops on glasses without a display.
-    static var glassesDisplayEnabled: Bool {
-        UserDefaults.standard.bool(forKey: "glassesDisplayEnabled")
-    }
+    @UserDefaultsBacked("glassesDisplayEnabled", default: false) static var glassesDisplayEnabled: Bool
 
-    static func setGlassesDisplayEnabled(_ enabled: Bool) {
-        UserDefaults.standard.set(enabled, forKey: "glassesDisplayEnabled")
-    }
+    static func setGlassesDisplayEnabled(_ enabled: Bool) { glassesDisplayEnabled = enabled }
 
     // MARK: - Memory loop (self-improving)
 
@@ -2045,13 +2037,9 @@ struct Config {
 
     // MARK: - Intent Classifier
 
-    static var intentClassifierEnabled: Bool {
-        UserDefaults.standard.bool(forKey: "intentClassifierEnabled")
-    }
+    @UserDefaultsBacked("intentClassifierEnabled", default: false) static var intentClassifierEnabled: Bool
 
-    static func setIntentClassifierEnabled(_ enabled: Bool) {
-        UserDefaults.standard.set(enabled, forKey: "intentClassifierEnabled")
-    }
+    static func setIntentClassifierEnabled(_ enabled: Bool) { intentClassifierEnabled = enabled }
 
     // MARK: - Smart Camera
 
@@ -2169,13 +2157,9 @@ struct Config {
     /// an OTA asset on first use and, being a different model, re-embeds stored vectors via the version
     /// stamp (a one-time cost). Until the asset is present, `Embedder` transparently falls back to
     /// `NLEmbedding`, so flipping this on is safe. Enable on-device to validate the quality lift.
-    static var contextualEmbeddingEnabled: Bool {
-        UserDefaults.standard.bool(forKey: "contextualEmbeddingEnabled")   // defaults to false
-    }
+    @UserDefaultsBacked("contextualEmbeddingEnabled", default: false) static var contextualEmbeddingEnabled: Bool
 
-    static func setContextualEmbeddingEnabled(_ enabled: Bool) {
-        UserDefaults.standard.set(enabled, forKey: "contextualEmbeddingEnabled")
-    }
+    static func setContextualEmbeddingEnabled(_ enabled: Bool) { contextualEmbeddingEnabled = enabled }
 
     // MARK: - Model pricing overrides (Plan AU — Settings editor)
 
@@ -2206,13 +2190,9 @@ struct Config {
     /// its time check and drops frames that are visually indistinguishable from
     /// the last one sent. Defaults to `false`: the time-only throttle behaves
     /// exactly as before until this is turned on.
-    static var frameDedupEnabled: Bool {
-        UserDefaults.standard.bool(forKey: "frameDedupEnabled")   // defaults to false
-    }
+    @UserDefaultsBacked("frameDedupEnabled", default: false) static var frameDedupEnabled: Bool
 
-    static func setFrameDedupEnabled(_ enabled: Bool) {
-        UserDefaults.standard.set(enabled, forKey: "frameDedupEnabled")
-    }
+    static func setFrameDedupEnabled(_ enabled: Bool) { frameDedupEnabled = enabled }
 
     /// Base dHash Hamming distance (of 64) at/below which two frames are treated
     /// as the same scene and the candidate is dropped. ~3–5 is "same scene".
@@ -2243,13 +2223,9 @@ struct Config {
     /// "Recent Visual Context" block into the session instruction. Defaults to
     /// `false`: the instruction is built exactly as before. Rides on the content
     /// gate, so `frameDedupEnabled` must also be on for keyframes to flow.
-    static var visualStateMemoryEnabled: Bool {
-        UserDefaults.standard.bool(forKey: "visualStateMemoryEnabled")   // defaults to false
-    }
+    @UserDefaultsBacked("visualStateMemoryEnabled", default: false) static var visualStateMemoryEnabled: Bool
 
-    static func setVisualStateMemoryEnabled(_ enabled: Bool) {
-        UserDefaults.standard.set(enabled, forKey: "visualStateMemoryEnabled")
-    }
+    static func setVisualStateMemoryEnabled(_ enabled: Bool) { visualStateMemoryEnabled = enabled }
 
     /// Maximum keyframes retained in the rolling visual memory (and the cap on how
     /// many appear in the injected context). 5–8 covers "the last little while".
@@ -2338,13 +2314,9 @@ struct Config {
     /// When on, an ambiguous request (action cues but no clear sequencer) is classified
     /// by a tiny LLM call to decide single- vs multi-step (Plan S Phase 2). Default off:
     /// the pure keyword heuristic alone decides, with no extra round-trip.
-    static var llmComplexityClassifierEnabled: Bool {
-        UserDefaults.standard.bool(forKey: "llmComplexityClassifierEnabled")
-    }
+    @UserDefaultsBacked("llmComplexityClassifierEnabled", default: false) static var llmComplexityClassifierEnabled: Bool
 
-    static func setLLMComplexityClassifierEnabled(_ enabled: Bool) {
-        UserDefaults.standard.set(enabled, forKey: "llmComplexityClassifierEnabled")
-    }
+    static func setLLMComplexityClassifierEnabled(_ enabled: Bool) { llmComplexityClassifierEnabled = enabled }
 
     // MARK: - Remote Agent Harness (Plan N)
 
@@ -2641,13 +2613,9 @@ struct Config {
     }
 
     /// Whether the agent has completed its initial onboarding questions.
-    static var agentOnboardingComplete: Bool {
-        UserDefaults.standard.bool(forKey: "agentOnboardingComplete")
-    }
+    @UserDefaultsBacked("agentOnboardingComplete", default: false) static var agentOnboardingComplete: Bool
 
-    static func setAgentOnboardingComplete(_ complete: Bool) {
-        UserDefaults.standard.set(complete, forKey: "agentOnboardingComplete")
-    }
+    static func setAgentOnboardingComplete(_ complete: Bool) { agentOnboardingComplete = complete }
 
     // MARK: - Conversation Persistence
 
