@@ -378,6 +378,26 @@ class LLMService: ObservableObject {
         return PromptInjectionPolicy.wrap(toolName: toolName, content: content)
     }
 
+    /// The shared tool-dispatch step used by every provider's tool loop (Plan BG P3): native tools
+    /// via `NativeToolRouter`, else the OpenClaw bridge, else a failure. Status transitions flow to
+    /// the published `toolCallStatus`. Yield detection and the parse-error path live in the
+    /// `ToolDispatcher` value type so the whole step is unit-testable with a mock executor.
+    private func makeToolDispatcher() -> ToolDispatcher {
+        ToolDispatcher(
+            execute: { [weak self] name, args, rawArgs in
+                guard let self else { return .failure("Service unavailable") }
+                if let router = self.nativeToolRouter {
+                    return await router.handleToolCall(name: name, args: args)
+                } else if let bridge = self.openClawBridge {
+                    let taskDesc = args["task"] as? String ?? (rawArgs ?? String(describing: args))
+                    return await bridge.delegateTask(task: taskDesc, toolName: name)
+                }
+                return .failure("No tool handler available")
+            },
+            onStatus: { [weak self] status in self?.toolCallStatus = status }
+        )
+    }
+
     /// - Parameter onToken: optional per-token callback for streaming the final assistant reply
     ///   into the UI as it's generated. Currently honoured by the on-device (`local`) provider;
     ///   cloud providers ignore it and return the full reply on completion.
@@ -1148,186 +1168,146 @@ class LLMService: ObservableObject {
         }
         trimHistory()
 
-        for iteration in 0..<maxToolCallIterations {
-            var request = URLRequest(url: URL(string: "https://api.anthropic.com/v1/messages")!)
-            request.httpMethod = "POST"
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            AnthropicAuth.apply(credential: apiKey, to: &request)  // already resolved above
+        // A tool_use block with an id but missing name/input can't be dispatched, yet still needs a
+        // tool_result or the next request 400s (Plan BF). Its id is carried per-turn and answered
+        // with a synthetic error alongside the real results.
+        final class TurnState { var malformedIds: [String] = [] }
+        let state = TurnState()
 
-            // Turn hygiene (Plan BF): drop stale images that would otherwise re-upload every turn,
-            // and repair any dangling tool_use so a single interrupted tool call can't 400 the whole
-            // conversation. Applied to the sent copy AND written back so the fixes persist.
-            conversationHistory = HistoryHygiene.repairDanglingToolUse(
-                HistoryHygiene.pruneImages(conversationHistory, keepLast: 1))
+        let adapter = ProviderLoopAdapter(
+            label: "Anthropic",
+            dispatcher: makeToolDispatcher(),
+            performTurn: { [weak self] in
+                guard let self else { throw LLMError.invalidResponse("Anthropic") }
+                state.malformedIds = []
 
-            // Prompt caching (Plan BF): the system prompt + tool schemas are large and byte-stable
-            // within a session, so mark them ephemeral-cacheable. Anthropic then reads them from
-            // cache on every follow-up turn instead of re-billing full input tokens each time.
-            var body: [String: Any] = [
-                "model": config.model,
-                "max_tokens": includeTools ? 1024 : Config.maxTokens,
-                "system": [[
-                    "type": "text",
-                    "text": systemPrompt,
-                    "cache_control": ["type": "ephemeral"]
-                ]],
-                "messages": conversationHistory
-            ]
+                var request = URLRequest(url: URL(string: "https://api.anthropic.com/v1/messages")!)
+                request.httpMethod = "POST"
+                request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                AnthropicAuth.apply(credential: apiKey, to: &request)  // already resolved above
 
-            if includeTools {
-                let includeOpenClaw = Config.isOpenClawConfigured && openClawBridge != nil
-                let toolsData: Data = await MainActor.run {
-                    let tools = ToolDeclarations.anthropicTools(registry: nativeToolRouter?.registry, includeOpenClaw: includeOpenClaw, mcpClient: nativeToolRouter?.mcpClient)
-                    return (try? JSONSerialization.data(withJSONObject: tools)) ?? Data()
-                }
-                var tools = (try? JSONSerialization.jsonObject(with: toolsData)) as? [[String: Any]] ?? []
-                // Cache-breakpoint on the final tool caches the whole tools array as one prefix.
-                if !tools.isEmpty {
-                    tools[tools.count - 1]["cache_control"] = ["type": "ephemeral"]
-                }
-                body["tools"] = tools
-            }
+                // Turn hygiene (Plan BF): drop stale images that would otherwise re-upload every turn,
+                // and repair any dangling tool_use so a single interrupted tool call can't 400 the whole
+                // conversation. Applied to the sent copy AND written back so the fixes persist.
+                self.conversationHistory = HistoryHygiene.repairDanglingToolUse(
+                    HistoryHygiene.pruneImages(self.conversationHistory, keepLast: 1))
 
-            if onToken != nil { body["stream"] = true }
-            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+                // Prompt caching (Plan BF): the system prompt + tool schemas are large and byte-stable
+                // within a session, so mark them ephemeral-cacheable. Anthropic then reads them from
+                // cache on every follow-up turn instead of re-billing full input tokens each time.
+                var body: [String: Any] = [
+                    "model": config.model,
+                    "max_tokens": includeTools ? 1024 : Config.maxTokens,
+                    "system": [[
+                        "type": "text",
+                        "text": systemPrompt,
+                        "cache_control": ["type": "ephemeral"]
+                    ]],
+                    "messages": self.conversationHistory
+                ]
 
-            // Final-reply turns stream into the Chat tab when a streaming caller passes `onToken`;
-            // the reconstructed content blocks + stop reason feed the existing tool loop unchanged.
-            let content: [[String: Any]]
-            let stopReason: String?
-            if let onToken {
-                (content, stopReason) = try await streamAnthropicContent(request: request, model: config.model, onToken: onToken)
-            } else {
-                let (data, response) = try await URLSession.shared.data(for: request)
-
-                guard let httpResponse = response as? HTTPURLResponse,
-                      httpResponse.statusCode == 200 else {
-                    let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
-                    if let errorJson = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                       let errorMsg = (errorJson["error"] as? [String: Any])?["message"] as? String {
-                        print("❌ Anthropic API error \(statusCode): \(errorMsg)")
-                        throw LLMError.apiError(provider: "Anthropic", statusCode: statusCode, message: errorMsg)
+                if includeTools {
+                    let includeOpenClaw = Config.isOpenClawConfigured && self.openClawBridge != nil
+                    let toolsData: Data = await MainActor.run {
+                        let tools = ToolDeclarations.anthropicTools(registry: self.nativeToolRouter?.registry, includeOpenClaw: includeOpenClaw, mcpClient: self.nativeToolRouter?.mcpClient)
+                        return (try? JSONSerialization.data(withJSONObject: tools)) ?? Data()
                     }
-                    throw LLMError.apiError(provider: "Anthropic", statusCode: statusCode, message: nil)
+                    var tools = (try? JSONSerialization.jsonObject(with: toolsData)) as? [[String: Any]] ?? []
+                    // Cache-breakpoint on the final tool caches the whole tools array as one prefix.
+                    if !tools.isEmpty {
+                        tools[tools.count - 1]["cache_control"] = ["type": "ephemeral"]
+                    }
+                    body["tools"] = tools
                 }
 
-                guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                      let parsed = json["content"] as? [[String: Any]] else {
-                    throw LLMError.invalidResponse("Anthropic")
+                if onToken != nil { body["stream"] = true }
+                request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+                // Final-reply turns stream into the Chat tab when a streaming caller passes `onToken`;
+                // the reconstructed content blocks + stop reason feed the shared tool loop unchanged.
+                let content: [[String: Any]]
+                let stopReason: String?
+                if let onToken {
+                    (content, stopReason) = try await self.streamAnthropicContent(request: request, model: config.model, onToken: onToken)
+                } else {
+                    let (data, response) = try await URLSession.shared.data(for: request)
+
+                    guard let httpResponse = response as? HTTPURLResponse,
+                          httpResponse.statusCode == 200 else {
+                        let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
+                        if let errorJson = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                           let errorMsg = (errorJson["error"] as? [String: Any])?["message"] as? String {
+                            print("❌ Anthropic API error \(statusCode): \(errorMsg)")
+                            throw LLMError.apiError(provider: "Anthropic", statusCode: statusCode, message: errorMsg)
+                        }
+                        throw LLMError.apiError(provider: "Anthropic", statusCode: statusCode, message: nil)
+                    }
+
+                    guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                          let parsed = json["content"] as? [[String: Any]] else {
+                        throw LLMError.invalidResponse("Anthropic")
+                    }
+                    content = parsed
+                    stopReason = json["stop_reason"] as? String
+                    self.recordUsage(provider: .anthropic, model: config.model, json: json)
                 }
-                content = parsed
-                stopReason = json["stop_reason"] as? String
-                recordUsage(provider: .anthropic, model: config.model, json: json)
-            }
 
-            // Check for tool use blocks
-            if stopReason == "tool_use", includeTools {
-                // Find tool_use blocks
-                var toolUseBlocks: [[String: Any]] = []
-                var textParts: [String] = []
-
-                for block in content {
-                    if let type = block["type"] as? String {
-                        if type == "tool_use" {
-                            toolUseBlocks.append(block)
-                        } else if type == "text", let t = block["text"] as? String {
-                            textParts.append(t)
+                var toolCalls: [ToolInvocation] = []
+                if stopReason == "tool_use", includeTools {
+                    for block in content where (block["type"] as? String) == "tool_use" {
+                        if let id = block["id"] as? String,
+                           let name = block["name"] as? String,
+                           let input = block["input"] as? [String: Any] {
+                            toolCalls.append(ToolInvocation(id: id, name: name, arguments: input))
+                        } else if let id = block["id"] as? String {
+                            state.malformedIds.append(id)
                         }
                     }
                 }
-
-                // Add assistant message with tool_use to history
-                conversationHistory.append(["role": "assistant", "content": content] as [String: Any])
-
-                // Execute each tool call via NativeToolRouter
-                for toolUse in toolUseBlocks {
-                    // A tool_use with no matching tool_result 400s every later request (Plan BF).
-                    // If the block has an id we can still answer it with a synthetic error result,
-                    // even when name/input are malformed — never leave it dangling.
-                    guard let toolId = toolUse["id"] as? String,
-                          let toolName = toolUse["name"] as? String,
-                          let input = toolUse["input"] as? [String: Any] else {
-                        if let toolId = toolUse["id"] as? String {
-                            conversationHistory.append([
-                                "role": "user",
-                                "content": [[
-                                    "type": "tool_result",
-                                    "tool_use_id": toolId,
-                                    "content": "Error: malformed tool call (missing name or arguments); nothing was run."
-                                ]]
-                            ] as [String: Any])
-                        }
-                        continue
-                    }
-
-                    print("🔧 [Anthropic] Tool call: \(toolName)(\(String(describing: input).prefix(100))...)")
-                    toolCallStatus = .executing(toolName)
-
-                    let result: ToolResult
-                    if let router = nativeToolRouter {
-                        result = await router.handleToolCall(name: toolName, args: input)
-                    } else if let bridge = openClawBridge {
-                        let taskDesc = input["task"] as? String ?? String(describing: input)
-                        result = await bridge.delegateTask(task: taskDesc, toolName: toolName)
-                    } else {
-                        result = .failure("No tool handler available")
-                    }
-                    toolCallStatus = result.isSuccess ? .completed(toolName) : .failed(toolName, "Failed")
-
+                let text = content.compactMap { block -> String? in
+                    guard (block["type"] as? String) == "text" else { return nil }
+                    return block["text"] as? String
+                }.joined(separator: "\n")
+                return AssistantTurn(text: text, toolCalls: toolCalls, payload: content)
+            },
+            appendAssistantToolCall: { [weak self] turn in
+                guard let self, let content = turn.payload as? [[String: Any]] else { return }
+                self.conversationHistory.append(["role": "assistant", "content": content] as [String: Any])
+            },
+            appendToolResults: { [weak self] outcomes in
+                guard let self else { return }
+                for outcome in outcomes {
+                    guard let id = outcome.invocation.id else { continue }
                     let resultContent: String
-                    switch result {
+                    switch outcome.result {
                     case .success(let text): resultContent = text
                     case .failure(let error): resultContent = "Error: \(error)"
                     }
                     // Frame untrusted external content as data, not instructions.
-                    let framedContent = wrapToolResultForModel(toolName: toolName, content: resultContent)
-
-                    conversationHistory.append([
+                    let framed = self.wrapToolResultForModel(toolName: outcome.invocation.name, content: resultContent)
+                    self.conversationHistory.append([
                         "role": "user",
-                        "content": [
-                            [
-                                "type": "tool_result",
-                                "tool_use_id": toolId,
-                                "content": framedContent
-                            ]
-                        ]
+                        "content": [["type": "tool_result", "tool_use_id": id, "content": framed]]
                     ] as [String: Any])
-
-                    // Yield-to-human: break out of the tool loop so the user can act
-                    if toolName == "yield_to_human", case .success(let yieldText) = result,
-                       yieldText.hasPrefix("YIELD_TO_HUMAN:") {
-                        let reason = yieldText
-                            .replacingOccurrences(of: "YIELD_TO_HUMAN: ", with: "")
-                            .replacingOccurrences(of: "\nWaiting for you to say \"done\" or \"continue\" when ready.", with: "")
-                        toolCallStatus = .yielded(toolName)
-                        NSLog("[LLMService] Yielding to human: %@", reason)
-                        return reason
-                    }
                 }
-
-                print("🔄 [Anthropic] Continuing after tool call (iteration \(iteration + 1))")
-                continue // Loop back to get final response
+                for id in state.malformedIds {
+                    self.conversationHistory.append([
+                        "role": "user",
+                        "content": [["type": "tool_result", "tool_use_id": id,
+                                     "content": "Error: malformed tool call (missing name or arguments); nothing was run."]]
+                    ] as [String: Any])
+                }
+            },
+            finalize: { [weak self] turn in
+                guard let self else { throw LLMError.invalidResponse("Anthropic") }
+                guard !turn.text.isEmpty else { throw LLMError.invalidResponse("Anthropic") }
+                self.conversationHistory.append(["role": "assistant", "content": turn.text])
+                return turn.text
             }
+        )
 
-            // No tool calls — extract text response
-            let responseText = content.compactMap { block -> String? in
-                guard let type = block["type"] as? String, type == "text",
-                      let text = block["text"] as? String else { return nil }
-                return text
-            }.joined(separator: "\n")
-
-            guard !responseText.isEmpty else {
-                throw LLMError.invalidResponse("Anthropic")
-            }
-
-            conversationHistory.append(["role": "assistant", "content": responseText])
-            toolCallStatus = .idle
-            return responseText
-        }
-
-        // Exhausted iterations
-        toolCallStatus = .idle
-        throw LLMError.invalidResponse("Anthropic (tool call loop exceeded)")
+        return try await runToolLoop(maxIterations: maxToolCallIterations, adapter: adapter,
+                                     setStatus: { [weak self] in self?.toolCallStatus = $0 })
     }
 
     // MARK: - OpenAI-compatible
@@ -1392,174 +1372,153 @@ class LLMService: ObservableObject {
         }
         trimHistory()
 
-        for iteration in 0..<maxToolCallIterations {
-            try Task.checkCancellation()
-            var request = URLRequest(url: url)
-            request.httpMethod = "POST"
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        let adapter = ProviderLoopAdapter(
+            label: provider.displayName,
+            dispatcher: makeToolDispatcher(),
+            performTurn: { [weak self] in
+                guard let self else { throw LLMError.invalidResponse(provider.displayName) }
+                var request = URLRequest(url: url)
+                request.httpMethod = "POST"
+                request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
 
-            // OpenRouter requires additional headers for tracking
-            if provider == .openrouter {
-                request.setValue("https://github.com/straff2002/OpenGlasses", forHTTPHeaderField: "HTTP-Referer")
-                request.setValue("OpenGlasses", forHTTPHeaderField: "X-Title")
-            }
-
-            // OpenAI format: system prompt is a message in the array.
-            // Groq's free tier has tight TPM limits — trim history aggressively.
-            let historySlice = provider == .groq ? Array(conversationHistory.suffix(6)) : conversationHistory
-            var messages: [[String: Any]] = [
-                ["role": "system", "content": systemPrompt]
-            ]
-            messages.append(contentsOf: historySlice)
-
-            var body: [String: Any] = [
-                "model": config.model,
-                "max_tokens": includeTools ? 1024 : Config.maxTokens,
-                "messages": messages
-            ]
-
-            // Only attach Tools if the provider reliably supports function calling.
-            // Custom endpoints (Ollama/LMStudio) often crash with 400 if `tools` array is in the payload.
-            let providerSupportsTools = provider == .openai || provider == .groq || provider == .zai || provider == .qwen || provider == .openrouter
-
-            if includeTools && providerSupportsTools {
-                let includeOpenClaw = Config.isOpenClawConfigured && openClawBridge != nil
-                let toolsData: Data = await MainActor.run {
-                    let tools = ToolDeclarations.openAITools(registry: nativeToolRouter?.registry, includeOpenClaw: includeOpenClaw, mcpClient: nativeToolRouter?.mcpClient)
-                    return (try? JSONSerialization.data(withJSONObject: tools)) ?? Data()
+                // OpenRouter requires additional headers for tracking
+                if provider == .openrouter {
+                    request.setValue("https://github.com/straff2002/OpenGlasses", forHTTPHeaderField: "HTTP-Referer")
+                    request.setValue("OpenGlasses", forHTTPHeaderField: "X-Title")
                 }
-                let tools = (try? JSONSerialization.jsonObject(with: toolsData)) as? [[String: Any]] ?? []
-                body["tools"] = tools
-            }
 
-            if onToken != nil {
-                body["stream"] = true
-                // Ask for a final usage chunk so the streamed path can record cost (Plan AU).
-                // Servers that don't support it ignore the field; we then simply record nothing.
-                body["stream_options"] = ["include_usage": true]
-            }
-            request.httpBody = try JSONSerialization.data(withJSONObject: body)
-            request.timeoutInterval = 60 // 60s timeout to prevent app freezing
+                // OpenAI format: system prompt is a message in the array.
+                // Groq's free tier has tight TPM limits — trim history aggressively.
+                let historySlice = provider == .groq ? Array(self.conversationHistory.suffix(6)) : self.conversationHistory
+                var messages: [[String: Any]] = [
+                    ["role": "system", "content": systemPrompt]
+                ]
+                messages.append(contentsOf: historySlice)
 
-            // Debug: log request details (redact base64 images)
-            let messageCount = (body["messages"] as? [[String: Any]])?.count ?? 0
-            let hasImage = imageData != nil && supportsVision
-            let bodySize = request.httpBody?.count ?? 0
-            print("🌐 \(provider.displayName) request: model=\(config.model) url=\(baseURL) messages=\(messageCount) hasImage=\(hasImage) bodySize=\(bodySize)")
+                var body: [String: Any] = [
+                    "model": config.model,
+                    "max_tokens": includeTools ? 1024 : Config.maxTokens,
+                    "messages": messages
+                ]
 
-            // Final-reply turns stream into the Chat tab when a streaming caller passes `onToken`;
-            // the reconstructed `message` (content + tool_calls) feeds the existing tool loop unchanged.
-            let message: [String: Any]
-            if let onToken {
-                message = try await streamOpenAIMessage(request: request, provider: provider, model: config.model, onToken: onToken)
-            } else {
-                let (data, response) = try await URLSession.shared.data(for: request)
+                // Only attach Tools if the provider reliably supports function calling.
+                // Custom endpoints (Ollama/LMStudio) often crash with 400 if `tools` array is in the payload.
+                let providerSupportsTools = provider == .openai || provider == .groq || provider == .zai || provider == .qwen || provider == .openrouter
 
-                guard let httpResponse = response as? HTTPURLResponse,
-                      httpResponse.statusCode == 200 else {
-                    let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
-                    let rawBody = String(data: data, encoding: .utf8) ?? "(non-utf8)"
-                    print("❌ \(provider.displayName) raw error response (\(statusCode)): \(rawBody.prefix(500))")
-                    if let errorJson = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                       let errorObj = errorJson["error"] as? [String: Any],
-                       let errorMsg = errorObj["message"] as? String {
-                        print("❌ \(provider.displayName) API error \(statusCode): \(errorMsg)")
-                        throw LLMError.apiError(provider: provider.displayName, statusCode: statusCode, message: errorMsg)
+                if includeTools && providerSupportsTools {
+                    let includeOpenClaw = Config.isOpenClawConfigured && self.openClawBridge != nil
+                    let toolsData: Data = await MainActor.run {
+                        let tools = ToolDeclarations.openAITools(registry: self.nativeToolRouter?.registry, includeOpenClaw: includeOpenClaw, mcpClient: self.nativeToolRouter?.mcpClient)
+                        return (try? JSONSerialization.data(withJSONObject: tools)) ?? Data()
                     }
-                    if let errorJson = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                       let errorMsg = errorJson["error"] as? String {
-                        print("❌ \(provider.displayName) error \(statusCode): \(errorMsg)")
-                        throw LLMError.apiError(provider: provider.displayName, statusCode: statusCode, message: errorMsg)
-                    }
-                    throw LLMError.apiError(provider: provider.displayName, statusCode: statusCode, message: nil)
+                    let tools = (try? JSONSerialization.jsonObject(with: toolsData)) as? [[String: Any]] ?? []
+                    body["tools"] = tools
                 }
 
-                guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                      let choices = json["choices"] as? [[String: Any]],
-                      let m = choices.first?["message"] as? [String: Any] else {
-                    throw LLMError.invalidResponse(provider.displayName)
+                if onToken != nil {
+                    body["stream"] = true
+                    // Ask for a final usage chunk so the streamed path can record cost (Plan AU).
+                    // Servers that don't support it ignore the field; we then simply record nothing.
+                    body["stream_options"] = ["include_usage": true]
                 }
-                message = m
-                recordUsage(provider: provider, model: config.model, json: json)
-            }
+                request.httpBody = try JSONSerialization.data(withJSONObject: body)
+                request.timeoutInterval = 60 // 60s timeout to prevent app freezing
 
-            // Check for tool calls
-            if let toolCalls = message["tool_calls"] as? [[String: Any]], !toolCalls.isEmpty, includeTools {
-                // Add assistant message with tool_calls to history
-                conversationHistory.append(message)
+                // Debug: log request details (redact base64 images)
+                let messageCount = (body["messages"] as? [[String: Any]])?.count ?? 0
+                let hasImage = imageData != nil && supportsVision
+                let bodySize = request.httpBody?.count ?? 0
+                print("🌐 \(provider.displayName) request: model=\(config.model) url=\(baseURL) messages=\(messageCount) hasImage=\(hasImage) bodySize=\(bodySize)")
 
-                for toolCall in toolCalls {
-                    guard let callId = toolCall["id"] as? String,
-                          let function = toolCall["function"] as? [String: Any],
-                          let functionName = function["name"] as? String,
-                          let argsString = function["arguments"] as? String else { continue }
+                // Final-reply turns stream into the Chat tab when a streaming caller passes `onToken`;
+                // the reconstructed `message` (content + tool_calls) feeds the shared tool loop unchanged.
+                let message: [String: Any]
+                if let onToken {
+                    message = try await self.streamOpenAIMessage(request: request, provider: provider, model: config.model, onToken: onToken)
+                } else {
+                    let (data, response) = try await URLSession.shared.data(for: request)
 
-                    // Malformed tool arguments (Plan BF): return a parse error the model can correct
-                    // on the next turn, rather than silently running the tool with empty args and
-                    // wasting a turn on the wrong action.
-                    let parsedArgs = try? JSONSerialization.jsonObject(with: Data(argsString.utf8)) as? [String: Any]
-                    print("🔧 [OpenAI] Tool call: \(functionName)(\(String(describing: parsedArgs ?? [:]).prefix(100))...)")
-                    toolCallStatus = .executing(functionName)
-
-                    let result: ToolResult
-                    if let args = parsedArgs {
-                        if let router = nativeToolRouter {
-                            result = await router.handleToolCall(name: functionName, args: args)
-                        } else if let bridge = openClawBridge {
-                            let taskDesc = args["task"] as? String ?? argsString
-                            result = await bridge.delegateTask(task: taskDesc, toolName: functionName)
-                        } else {
-                            result = .failure("No tool handler available")
+                    guard let httpResponse = response as? HTTPURLResponse,
+                          httpResponse.statusCode == 200 else {
+                        let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
+                        let rawBody = String(data: data, encoding: .utf8) ?? "(non-utf8)"
+                        print("❌ \(provider.displayName) raw error response (\(statusCode)): \(rawBody.prefix(500))")
+                        if let errorJson = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                           let errorObj = errorJson["error"] as? [String: Any],
+                           let errorMsg = errorObj["message"] as? String {
+                            print("❌ \(provider.displayName) API error \(statusCode): \(errorMsg)")
+                            throw LLMError.apiError(provider: provider.displayName, statusCode: statusCode, message: errorMsg)
                         }
-                    } else {
-                        result = .failure("Could not parse the arguments for '\(functionName)' as JSON. Re-issue the call with valid JSON arguments.")
+                        if let errorJson = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                           let errorMsg = errorJson["error"] as? String {
+                            print("❌ \(provider.displayName) error \(statusCode): \(errorMsg)")
+                            throw LLMError.apiError(provider: provider.displayName, statusCode: statusCode, message: errorMsg)
+                        }
+                        throw LLMError.apiError(provider: provider.displayName, statusCode: statusCode, message: nil)
                     }
-                    toolCallStatus = result.isSuccess ? .completed(functionName) : .failed(functionName, "Failed")
 
+                    guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                          let choices = json["choices"] as? [[String: Any]],
+                          let m = choices.first?["message"] as? [String: Any] else {
+                        throw LLMError.invalidResponse(provider.displayName)
+                    }
+                    message = m
+                    self.recordUsage(provider: provider, model: config.model, json: json)
+                }
+
+                var toolCalls: [ToolInvocation] = []
+                if includeTools, let calls = message["tool_calls"] as? [[String: Any]] {
+                    for toolCall in calls {
+                        guard let callId = toolCall["id"] as? String,
+                              let function = toolCall["function"] as? [String: Any],
+                              let functionName = function["name"] as? String,
+                              let argsString = function["arguments"] as? String else { continue }
+                        // Malformed tool arguments (Plan BF): nil `arguments` → the dispatcher returns a
+                        // correctable parse error instead of running the tool with empty args.
+                        let parsedArgs = try? JSONSerialization.jsonObject(with: Data(argsString.utf8)) as? [String: Any]
+                        toolCalls.append(ToolInvocation(id: callId, name: functionName,
+                                                        arguments: parsedArgs, rawArguments: argsString))
+                    }
+                }
+                let text = message["content"] as? String ?? ""
+                return AssistantTurn(text: text, toolCalls: toolCalls, payload: message)
+            },
+            appendAssistantToolCall: { [weak self] turn in
+                guard let self, let message = turn.payload as? [String: Any] else { return }
+                self.conversationHistory.append(message)
+            },
+            appendToolResults: { [weak self] outcomes in
+                guard let self else { return }
+                for outcome in outcomes {
+                    guard let callId = outcome.invocation.id else { continue }
                     let resultContent: String
-                    switch result {
+                    switch outcome.result {
                     case .success(let text): resultContent = text
                     case .failure(let error): resultContent = "Error: \(error)"
                     }
                     // Frame untrusted external content as data, not instructions.
-                    let framedContent = wrapToolResultForModel(toolName: functionName, content: resultContent)
-
-                    conversationHistory.append([
+                    let framed = self.wrapToolResultForModel(toolName: outcome.invocation.name, content: resultContent)
+                    self.conversationHistory.append([
                         "role": "tool",
                         "tool_call_id": callId,
-                        "content": framedContent
+                        "content": framed
                     ])
-
-                    // Yield-to-human: break out of the tool loop so the user can act
-                    if functionName == "yield_to_human", case .success(let yieldText) = result,
-                       yieldText.hasPrefix("YIELD_TO_HUMAN:") {
-                        let reason = yieldText
-                            .replacingOccurrences(of: "YIELD_TO_HUMAN: ", with: "")
-                            .replacingOccurrences(of: "\nWaiting for you to say \"done\" or \"continue\" when ready.", with: "")
-                        toolCallStatus = .yielded(functionName)
-                        NSLog("[LLMService] Yielding to human: %@", reason)
-                        return reason
-                    }
                 }
-
-                print("🔄 [OpenAI] Continuing after tool call (iteration \(iteration + 1))")
-                continue // Loop back to get final response
+            },
+            finalize: { [weak self] turn in
+                guard let self else { throw LLMError.invalidResponse(provider.displayName) }
+                guard let message = turn.payload as? [String: Any],
+                      let responseText = message["content"] as? String else {
+                    throw LLMError.invalidResponse(provider.displayName)
+                }
+                self.conversationHistory.append(["role": "assistant", "content": responseText])
+                return responseText
             }
+        )
 
-            // No tool calls — extract text response
-            guard let responseText = message["content"] as? String else {
-                throw LLMError.invalidResponse(provider.displayName)
-            }
-
-            conversationHistory.append(["role": "assistant", "content": responseText])
-            toolCallStatus = .idle
-            return responseText
-        }
-
-        // Exhausted iterations
-        toolCallStatus = .idle
-        throw LLMError.invalidResponse("\(provider.displayName) (tool call loop exceeded)")
+        return try await runToolLoop(maxIterations: maxToolCallIterations, adapter: adapter,
+                                     setStatus: { [weak self] in self?.toolCallStatus = $0 })
     }
 
     // MARK: - Streaming (SSE) — Chat tab live token delivery
@@ -1719,187 +1678,126 @@ class LLMService: ObservableObject {
         }
         trimHistory()
 
-        for iteration in 0..<maxToolCallIterations {
-            var request = URLRequest(url: url)
-            request.httpMethod = "POST"
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let adapter = ProviderLoopAdapter(
+            label: "Gemini",
+            dispatcher: makeToolDispatcher(),
+            performTurn: { [weak self] in
+                guard let self else { throw LLMError.invalidResponse("Gemini") }
+                var request = URLRequest(url: url)
+                request.httpMethod = "POST"
+                request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
-            // Gemini format: system instruction + contents array
-            var contents: [[String: Any]] = []
-            for msg in conversationHistory {
-                let role = msg["role"] as? String ?? "user"
-                if role == "user" || role == "model" {
-                    let geminiRole = role == "assistant" ? "model" : role
-                    if let textContent = msg["content"] as? String {
-                        contents.append([
-                            "role": geminiRole,
-                            "parts": [["text": textContent]]
-                        ])
-                    } else if let parts = msg["parts"] as? [[String: Any]] {
-                        contents.append([
-                            "role": geminiRole,
-                            "parts": parts
-                        ])
-                    }
-                } else if role == "assistant" {
-                    if let textContent = msg["content"] as? String {
-                        contents.append([
-                            "role": "model",
-                            "parts": [["text": textContent]]
-                        ])
-                    } else if let parts = msg["parts"] as? [[String: Any]] {
-                        contents.append([
-                            "role": "model",
-                            "parts": parts
-                        ])
-                    }
-                } else if role == "function" {
-                    // Function response
-                    if let parts = msg["parts"] as? [[String: Any]] {
-                        contents.append([
-                            "role": "user",
-                            "parts": parts
-                        ])
+                // Gemini format: system instruction + contents array
+                var contents: [[String: Any]] = []
+                for msg in self.conversationHistory {
+                    let role = msg["role"] as? String ?? "user"
+                    if role == "user" || role == "model" {
+                        let geminiRole = role == "assistant" ? "model" : role
+                        if let textContent = msg["content"] as? String {
+                            contents.append(["role": geminiRole, "parts": [["text": textContent]]])
+                        } else if let parts = msg["parts"] as? [[String: Any]] {
+                            contents.append(["role": geminiRole, "parts": parts])
+                        }
+                    } else if role == "assistant" {
+                        if let textContent = msg["content"] as? String {
+                            contents.append(["role": "model", "parts": [["text": textContent]]])
+                        } else if let parts = msg["parts"] as? [[String: Any]] {
+                            contents.append(["role": "model", "parts": parts])
+                        }
+                    } else if role == "function" {
+                        // Function response
+                        if let parts = msg["parts"] as? [[String: Any]] {
+                            contents.append(["role": "user", "parts": parts])
+                        }
                     }
                 }
-            }
 
-            var body: [String: Any] = [
-                "system_instruction": [
-                    "parts": [["text": systemPrompt]]
-                ],
-                "contents": contents,
-                "generationConfig": [
-                    "maxOutputTokens": includeTools ? 1024 : Config.maxTokens
+                var body: [String: Any] = [
+                    "system_instruction": ["parts": [["text": systemPrompt]]],
+                    "contents": contents,
+                    "generationConfig": ["maxOutputTokens": includeTools ? 1024 : Config.maxTokens]
                 ]
-            ]
 
-            if includeTools {
-                let includeOpenClaw = Config.isOpenClawConfigured && openClawBridge != nil
-                let toolsData: Data = await MainActor.run {
-                    let tools = ToolDeclarations.geminiRESTTools(registry: nativeToolRouter?.registry, includeOpenClaw: includeOpenClaw, mcpClient: nativeToolRouter?.mcpClient)
-                    return (try? JSONSerialization.data(withJSONObject: tools)) ?? Data()
-                }
-                let tools = (try? JSONSerialization.jsonObject(with: toolsData)) as? [[String: Any]] ?? []
-                body["tools"] = tools
-            }
-
-            request.httpBody = try JSONSerialization.data(withJSONObject: body)
-
-            let (data, response) = try await URLSession.shared.data(for: request)
-
-            guard let httpResponse = response as? HTTPURLResponse,
-                  httpResponse.statusCode == 200 else {
-                let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
-                if let errorJson = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                   let errorObj = errorJson["error"] as? [String: Any],
-                   let errorMsg = errorObj["message"] as? String {
-                    print("❌ Gemini API error \(statusCode): \(errorMsg)")
-                    throw LLMError.apiError(provider: "Gemini", statusCode: statusCode, message: errorMsg)
-                }
-                throw LLMError.apiError(provider: "Gemini", statusCode: statusCode, message: nil)
-            }
-
-            guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let candidates = json["candidates"] as? [[String: Any]],
-                  let content = candidates.first?["content"] as? [String: Any],
-                  let parts = content["parts"] as? [[String: Any]] else {
-                throw LLMError.invalidResponse("Gemini")
-            }
-            recordUsage(provider: .gemini, model: config.model, json: json)
-
-            // Check for function calls in parts
-            let functionCallParts = parts.filter { $0["functionCall"] != nil }
-
-            if !functionCallParts.isEmpty, includeTools {
-                // Add model response with function call to history
-                conversationHistory.append([
-                    "role": "assistant",
-                    "parts": parts
-                ])
-
-                var functionResponseParts: [[String: Any]] = []
-
-                for part in functionCallParts {
-                    guard let funcCall = part["functionCall"] as? [String: Any],
-                          let name = funcCall["name"] as? String,
-                          let args = funcCall["args"] as? [String: Any] else { continue }
-
-                    print("🔧 [Gemini] Tool call: \(name)(\(String(describing: args).prefix(100))...)")
-                    toolCallStatus = .executing(name)
-
-                    let result: ToolResult
-                    if let router = nativeToolRouter {
-                        result = await router.handleToolCall(name: name, args: args)
-                    } else if let bridge = openClawBridge {
-                        let taskDesc = args["task"] as? String ?? String(describing: args)
-                        result = await bridge.delegateTask(task: taskDesc, toolName: name)
-                    } else {
-                        result = .failure("No tool handler available")
+                if includeTools {
+                    let includeOpenClaw = Config.isOpenClawConfigured && self.openClawBridge != nil
+                    let toolsData: Data = await MainActor.run {
+                        let tools = ToolDeclarations.geminiRESTTools(registry: self.nativeToolRouter?.registry, includeOpenClaw: includeOpenClaw, mcpClient: self.nativeToolRouter?.mcpClient)
+                        return (try? JSONSerialization.data(withJSONObject: tools)) ?? Data()
                     }
-                    toolCallStatus = result.isSuccess ? .completed(name) : .failed(name, "Failed")
+                    let tools = (try? JSONSerialization.jsonObject(with: toolsData)) as? [[String: Any]] ?? []
+                    body["tools"] = tools
+                }
 
-                    // Frame untrusted external content as data, not instructions.
+                request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+                let (data, response) = try await URLSession.shared.data(for: request)
+
+                guard let httpResponse = response as? HTTPURLResponse,
+                      httpResponse.statusCode == 200 else {
+                    let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
+                    if let errorJson = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                       let errorObj = errorJson["error"] as? [String: Any],
+                       let errorMsg = errorObj["message"] as? String {
+                        print("❌ Gemini API error \(statusCode): \(errorMsg)")
+                        throw LLMError.apiError(provider: "Gemini", statusCode: statusCode, message: errorMsg)
+                    }
+                    throw LLMError.apiError(provider: "Gemini", statusCode: statusCode, message: nil)
+                }
+
+                guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let candidates = json["candidates"] as? [[String: Any]],
+                      let content = candidates.first?["content"] as? [String: Any],
+                      let parts = content["parts"] as? [[String: Any]] else {
+                    throw LLMError.invalidResponse("Gemini")
+                }
+                self.recordUsage(provider: .gemini, model: config.model, json: json)
+
+                var toolCalls: [ToolInvocation] = []
+                if includeTools {
+                    for part in parts where part["functionCall"] != nil {
+                        guard let funcCall = part["functionCall"] as? [String: Any],
+                              let name = funcCall["name"] as? String,
+                              let args = funcCall["args"] as? [String: Any] else { continue }
+                        toolCalls.append(ToolInvocation(id: nil, name: name, arguments: args))
+                    }
+                }
+                let text = parts.compactMap { $0["text"] as? String }.joined(separator: "\n")
+                return AssistantTurn(text: text, toolCalls: toolCalls, payload: parts)
+            },
+            appendAssistantToolCall: { [weak self] turn in
+                guard let self, let parts = turn.payload as? [[String: Any]] else { return }
+                self.conversationHistory.append(["role": "assistant", "parts": parts])
+            },
+            appendToolResults: { [weak self] outcomes in
+                guard let self else { return }
+                // Gemini batches all function responses into one `function` message.
+                var functionResponseParts: [[String: Any]] = []
+                for outcome in outcomes {
+                    let name = outcome.invocation.name
                     let resultContent: [String: Any]
-                    switch result {
+                    switch outcome.result {
                     case .success(let text):
-                        resultContent = ["result": wrapToolResultForModel(toolName: name, content: text)]
+                        // Frame untrusted external content as data, not instructions.
+                        resultContent = ["result": self.wrapToolResultForModel(toolName: name, content: text)]
                     case .failure(let error):
                         resultContent = ["error": error]
                     }
-
                     functionResponseParts.append([
-                        "functionResponse": [
-                            "name": name,
-                            "response": resultContent
-                        ]
+                        "functionResponse": ["name": name, "response": resultContent]
                     ])
                 }
-
-                // Add function responses as user role
-                conversationHistory.append([
-                    "role": "function",
-                    "parts": functionResponseParts
-                ])
-
-                // Yield-to-human: break out of the tool loop so the user can act
-                if functionCallParts.contains(where: {
-                    ($0["functionCall"] as? [String: Any])?["name"] as? String == "yield_to_human"
-                }) {
-                    if let yieldResponse = functionResponseParts.first(where: {
-                        ($0["functionResponse"] as? [String: Any])?["name"] as? String == "yield_to_human"
-                    }),
-                       let response = (yieldResponse["functionResponse"] as? [String: Any])?["response"] as? [String: Any],
-                       let yieldText = response["result"] as? String,
-                       yieldText.hasPrefix("YIELD_TO_HUMAN:") {
-                        let reason = yieldText
-                            .replacingOccurrences(of: "YIELD_TO_HUMAN: ", with: "")
-                            .replacingOccurrences(of: "\nWaiting for you to say \"done\" or \"continue\" when ready.", with: "")
-                        toolCallStatus = .yielded("yield_to_human")
-                        NSLog("[LLMService] Yielding to human: %@", reason)
-                        return reason
-                    }
-                }
-
-                print("🔄 [Gemini] Continuing after tool call (iteration \(iteration + 1))")
-                continue // Loop back to get final response
+                self.conversationHistory.append(["role": "function", "parts": functionResponseParts])
+            },
+            finalize: { [weak self] turn in
+                guard let self else { throw LLMError.invalidResponse("Gemini") }
+                guard !turn.text.isEmpty else { throw LLMError.invalidResponse("Gemini") }
+                self.conversationHistory.append(["role": "assistant", "content": turn.text])
+                return turn.text
             }
+        )
 
-            // No function calls — extract text response
-            let responseText = parts.compactMap { $0["text"] as? String }.joined(separator: "\n")
-
-            guard !responseText.isEmpty else {
-                throw LLMError.invalidResponse("Gemini")
-            }
-
-            conversationHistory.append(["role": "assistant", "content": responseText])
-            toolCallStatus = .idle
-            return responseText
-        }
-
-        // Exhausted iterations
-        toolCallStatus = .idle
-        throw LLMError.invalidResponse("Gemini (tool call loop exceeded)")
+        return try await runToolLoop(maxIterations: maxToolCallIterations, adapter: adapter,
+                                     setStatus: { [weak self] in self?.toolCallStatus = $0 })
     }
 
     // MARK: - Local (On-Device MLX)
@@ -1948,6 +1846,11 @@ class LLMService: ObservableObject {
     }
     #endif
 
+    // Unlike the cloud providers, the on-device path is deliberately NOT on the shared `runToolLoop`
+    // driver (Plan BG P3). On-device models don't expose a structured tool-use API — they emit
+    // `<tool_call>` markup — so this path is single-shot with a reduced tool set and one optional
+    // re-generation, not an iterate-until-done loop. Routing it through the iterative driver would
+    // change its behaviour, which the refactor explicitly avoids.
     private func sendLocal(_ text: String, systemPrompt: String, config: ModelConfig, includeTools: Bool, imageData: Data? = nil, onToken: ((String) -> Void)? = nil) async throws -> String {
         guard let localService = localLLMService else {
             throw LLMError.missingAPIKey("Local LLM service not initialized")
