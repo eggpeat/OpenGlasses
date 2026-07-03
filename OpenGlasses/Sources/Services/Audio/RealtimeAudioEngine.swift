@@ -1,30 +1,89 @@
 import AVFoundation
 import Foundation
 
-/// Audio engine for OpenAI Realtime mode.
-/// Both input and output use 24kHz Int16 PCM mono (OpenAI's native format).
-/// Includes client-side amplitude-based voice activity detection for fast interrupts.
+/// Injected differences between the two realtime audio paths (Plan BG P4). Everything the twin
+/// `GeminiLiveAudioManager` / `OpenAIRealtimeAudioManager` classes differed by lives here; the engine
+/// logic is otherwise identical.
+struct RealtimeAudioEngineConfig {
+    /// Owner identity for the shared `AudioSessionCoordinator` lease.
+    let owner: AudioSessionOwner
+    /// NSLog prefix, e.g. `[Audio]` / `[OpenAI Audio]`.
+    let logPrefix: String
+    let lifecycleQueueLabel: String
+    let accumulatorQueueLabel: String
+    /// Mic capture is resampled to this rate before sending (Gemini 16 kHz, OpenAI 24 kHz).
+    let inputSampleRate: Double
+    /// Received playback PCM is at this rate (both 24 kHz today, but kept independent).
+    let outputSampleRate: Double
+    let channels: UInt32
+    let bitsPerSample: UInt32
+    /// Client-side voice-activity interrupt detection. `nil` disables it (Gemini relies on server VAD).
+    let vad: VAD?
+
+    struct VAD {
+        /// RMS amplitude above which a buffer counts as speech.
+        let amplitudeThreshold: Float
+        /// Consecutive above-threshold buffers required to fire an interrupt.
+        let requiredHighFrames: Int
+    }
+
+    /// ~100 ms of input PCM — the chunk size we accumulate before sending.
+    var minSendBytes: Int { Int(inputSampleRate / 10) * Int(channels) * Int(bitsPerSample / 8) }
+    /// Preferred hardware sample-rate hint (matches the capture rate).
+    var preferredSampleRate: Double { inputSampleRate }
+
+    static let geminiLive = RealtimeAudioEngineConfig(
+        owner: .geminiLive,
+        logPrefix: "[Audio]",
+        lifecycleQueueLabel: "gemini.audio.lifecycle",
+        accumulatorQueueLabel: "audio.accumulator",
+        inputSampleRate: Config.geminiLiveInputSampleRate,
+        outputSampleRate: Config.geminiLiveOutputSampleRate,
+        channels: Config.geminiLiveAudioChannels,
+        bitsPerSample: Config.geminiLiveAudioBitsPerSample,
+        vad: nil
+    )
+
+    static let openAIRealtime = RealtimeAudioEngineConfig(
+        owner: .openAIRealtime,
+        logPrefix: "[OpenAI Audio]",
+        lifecycleQueueLabel: "openai.audio.lifecycle",
+        accumulatorQueueLabel: "openai.audio.accumulator",
+        inputSampleRate: 24000,
+        outputSampleRate: 24000,
+        channels: 1,
+        bitsPerSample: 16,
+        vad: VAD(amplitudeThreshold: 0.05, requiredHighFrames: 3)
+    )
+}
+
+/// Single realtime audio engine for both Gemini Live and OpenAI Realtime modes (Plan BG P4 —
+/// replaces the ~90%-identical `GeminiLiveAudioManager` / `OpenAIRealtimeAudioManager`). Captures the
+/// microphone as Int16 PCM (resampled to `config.inputSampleRate`) and plays back Int16 PCM at
+/// `config.outputSampleRate`. Separate from `WakeWordService`'s engine — the two cannot coexist.
 ///
 /// Self-healing across OS audio interruptions (phone calls, Siri) and Bluetooth/LE-Audio route
-/// changes: the `AVAudioEngine` is kept permanent for the manager's lifetime (teardown only stops
-/// and detaches child nodes), all graph mutations run on a single serial lifecycle queue, and a
+/// changes: the `AVAudioEngine` is kept permanent for the engine's lifetime (teardown only stops and
+/// detaches child nodes), all graph mutations run on a single serial lifecycle queue, and a
 /// generation counter discards stale tap buffers so audio from a torn-down session can't bleed into
 /// the next one. The interruption/route → action decisions live in pure, tested policies
 /// (`AudioInterruptionPolicy`, `AudioRoutePolicy`); this class only executes them.
-final class OpenAIRealtimeAudioManager {
+final class RealtimeAudioEngine {
     var onAudioCaptured: ((Data) -> Void)?
 
-    /// Fires when the user's voice amplitude exceeds the interrupt threshold
-    /// while the model is speaking. Faster than waiting for server VAD.
+    /// Fires when the user's voice amplitude exceeds the interrupt threshold while the model is
+    /// speaking (OpenAI client-side VAD). Never fires when `config.vad` is `nil`.
     var onVoiceInterrupt: (() -> Void)?
 
-    // Keep the engine container permanent for the manager's lifetime. Teardown only stops and
+    private let config: RealtimeAudioEngineConfig
+
+    // Keep the engine container permanent for the engine's lifetime. Teardown only stops and
     // detaches child nodes; it never nils or replaces this engine.
     private let audioEngine = AVAudioEngine()
     private let playerNode = AVAudioPlayerNode()
 
     // All engine-graph mutations run here so observer-driven recovery can't race start/stop.
-    private let audioLifecycleQueue = DispatchQueue(label: "openai.audio.lifecycle", qos: .userInitiated)
+    private let audioLifecycleQueue: DispatchQueue
     private let audioLifecycleQueueKey = DispatchSpecificKey<Void>()
 
     private var isCapturing = false
@@ -36,26 +95,21 @@ final class OpenAIRealtimeAudioManager {
     /// Our claim on the shared session, held while the conversation owns the mic.
     private var sessionLease: AudioSessionLease?
 
-    // Audio format: 24kHz PCM16 mono for both directions
-    static let sampleRate: Double = 24000
-    static let channels: UInt32 = 1
-    static let bitsPerSample: UInt32 = 16
-
     // Accumulate resampled PCM into ~100ms chunks before sending
-    private let sendQueue = DispatchQueue(label: "openai.audio.accumulator")
+    private let sendQueue: DispatchQueue
     private var accumulatedData = Data()
     private var accumulatorGeneration: UInt64 = 0
-    private let minSendBytes = 4800  // 100ms at 24kHz mono Int16 = 2400 frames * 2 bytes
 
-    // Client-side VAD for interruption
+    // Client-side VAD for interruption (only active when config.vad != nil)
     private var isModelCurrentlySpeaking = false
-    private let interruptAmplitudeThreshold: Float = 0.05
     private var consecutiveHighFrames = 0
-    private let requiredHighFrames = 3  // ~3 buffers above threshold to trigger
 
     private var observers: [NSObjectProtocol] = []
 
-    init() {
+    init(config: RealtimeAudioEngineConfig) {
+        self.config = config
+        self.audioLifecycleQueue = DispatchQueue(label: config.lifecycleQueueLabel, qos: .userInitiated)
+        self.sendQueue = DispatchQueue(label: config.accumulatorQueueLabel)
         audioLifecycleQueue.setSpecific(key: audioLifecycleQueueKey, value: ())
     }
 
@@ -63,7 +117,7 @@ final class OpenAIRealtimeAudioManager {
         removeObservers()
     }
 
-    /// Set this from the session manager to enable/disable interrupt detection.
+    /// Set this from the session manager to enable/disable interrupt detection (OpenAI VAD).
     var modelSpeaking: Bool {
         get { isModelCurrentlySpeaking }
         set {
@@ -72,7 +126,8 @@ final class OpenAIRealtimeAudioManager {
         }
     }
 
-    /// Configure the audio session for OpenAI Realtime.
+    /// Configure the audio session for this realtime mode.
+    /// - Parameter useIPhoneMode: `true` for `.voiceChat` (iPhone mic), `false` for `.videoChat` (glasses mic).
     func setupAudioSession(useIPhoneMode: Bool = false) throws {
         self.useIPhoneMode = useIPhoneMode
         let session = AVAudioSession.sharedInstance()
@@ -83,21 +138,21 @@ final class OpenAIRealtimeAudioManager {
         // Acquire the shared session through the coordinator (single owner); supersedes any prior
         // holder and lets a clean `release` deactivate it for whoever runs next (e.g. wake word).
         sessionLease = try AudioSessionCoordinator.shared.acquire(
-            .openAIRealtime,
+            config.owner,
             category: .playAndRecord,
             mode: mode,
             options: [.defaultToSpeaker, .allowBluetoothHFP, .allowBluetoothA2DP]
-        ) { session in
+        ) { [config] session in
             // Preferred rate/buffer are hints — a rejected hint must not abort activation.
-            try? session.setPreferredSampleRate(Self.sampleRate)
+            try? session.setPreferredSampleRate(config.preferredSampleRate)
             try? session.setPreferredIOBufferDuration(0.064)
         }
         applyRoutePolicy(session, useIPhoneMode: useIPhoneMode)
         installSessionObservers()
-        NSLog("[OpenAI Audio] Session mode: %@", useIPhoneMode ? "voiceChat" : "videoChat")
+        NSLog("%@ Session mode: %@", config.logPrefix, useIPhoneMode ? "voiceChat (iPhone)" : "videoChat (glasses)")
     }
 
-    /// Start capturing microphone audio.
+    /// Start capturing microphone audio and sending chunks via `onAudioCaptured`.
     func startCapture() throws {
         try syncOnAudioLifecycleQueue {
             try startCaptureOnQueue()
@@ -119,8 +174,8 @@ final class OpenAIRealtimeAudioManager {
 
         let playerFormat = try AudioFormatFactory.pcm(
             .pcmFormatFloat32,
-            sampleRate: Self.sampleRate,
-            channels: Self.channels,
+            sampleRate: config.outputSampleRate,
+            channels: config.channels,
             interleaved: false,
             context: "playback"
         )
@@ -130,10 +185,10 @@ final class OpenAIRealtimeAudioManager {
         let inputNode = audioEngine.inputNode
         let inputNativeFormat = inputNode.outputFormat(forBus: 0)
 
-        let needsResample = inputNativeFormat.sampleRate != Self.sampleRate
-            || inputNativeFormat.channelCount != Self.channels
+        let needsResample = inputNativeFormat.sampleRate != config.inputSampleRate
+            || inputNativeFormat.channelCount != config.channels
 
-        NSLog("[OpenAI Audio] Native: %.0fHz %dch, needs resample: %@",
+        NSLog("%@ Native input: %.0fHz %dch, needs resample: %@", config.logPrefix,
               inputNativeFormat.sampleRate, inputNativeFormat.channelCount,
               needsResample ? "YES" : "NO")
 
@@ -146,30 +201,32 @@ final class OpenAIRealtimeAudioManager {
             accumulatorGeneration = captureGeneration
         }
 
-        // Build the resample target format once and reuse it for every tap buffer (it's
-        // constant), rather than reconstructing — and force-unwrapping — it per buffer.
+        // Build the resample target format once and reuse it for every tap buffer (it's constant),
+        // rather than reconstructing — and force-unwrapping — it per buffer.
         var converter: AVAudioConverter?
-        var targetFormat: AVAudioFormat?
+        var resampleFormat: AVAudioFormat?
         if needsResample {
             let format = try AudioFormatFactory.pcm(
                 .pcmFormatFloat32,
-                sampleRate: Self.sampleRate,
-                channels: Self.channels,
+                sampleRate: config.inputSampleRate,
+                channels: config.channels,
                 interleaved: false,
                 context: "capture resampling"
             )
-            targetFormat = format
+            resampleFormat = format
             converter = AVAudioConverter(from: inputNativeFormat, to: format)
         }
 
+        let minSendBytes = config.minSendBytes
+        let vad = config.vad
         inputNode.installTap(onBus: 0, bufferSize: 4096, format: inputNativeFormat) { [weak self] buffer, _ in
             guard let self else { return }
 
             let pcmData: Data
             let amplitudeBuffer: AVAudioPCMBuffer
 
-            if let converter, let targetFormat {
-                guard let resampled = self.convertBuffer(buffer, using: converter, targetFormat: targetFormat) else {
+            if let converter, let resampleFormat {
+                guard let resampled = self.convertBuffer(buffer, using: converter, targetFormat: resampleFormat) else {
                     return
                 }
                 pcmData = self.float32ToInt16Data(resampled)
@@ -179,13 +236,13 @@ final class OpenAIRealtimeAudioManager {
                 amplitudeBuffer = buffer
             }
 
-            // Client-side VAD: check amplitude for fast interrupt
-            if self.isModelCurrentlySpeaking {
+            // Client-side VAD: check amplitude for a fast interrupt while the model is speaking.
+            if let vad, self.isModelCurrentlySpeaking {
                 let rms = self.calculateRMS(amplitudeBuffer)
-                if rms > self.interruptAmplitudeThreshold {
+                if rms > vad.amplitudeThreshold {
                     self.consecutiveHighFrames += 1
-                    if self.consecutiveHighFrames >= self.requiredHighFrames {
-                        NSLog("[OpenAI Audio] Client VAD interrupt (RMS: %.4f)", rms)
+                    if self.consecutiveHighFrames >= vad.requiredHighFrames {
+                        NSLog("%@ Client VAD interrupt (RMS: %.4f)", self.config.logPrefix, rms)
                         self.consecutiveHighFrames = 0
                         self.onVoiceInterrupt?()
                     }
@@ -198,7 +255,7 @@ final class OpenAIRealtimeAudioManager {
                 // Drop buffers from a superseded capture generation (a reset happened mid-flight).
                 guard self.accumulatorGeneration == captureGeneration else { return }
                 self.accumulatedData.append(pcmData)
-                if self.accumulatedData.count >= self.minSendBytes {
+                if self.accumulatedData.count >= minSendBytes {
                     let chunk = self.accumulatedData
                     self.accumulatedData = Data()
                     self.onAudioCaptured?(chunk)
@@ -217,7 +274,7 @@ final class OpenAIRealtimeAudioManager {
         }
     }
 
-    /// Play received PCM audio (Int16 24kHz mono).
+    /// Play received PCM audio (Int16 at `config.outputSampleRate`) through the speaker.
     func playAudio(data: Data) {
         guard !data.isEmpty else { return }
         audioLifecycleQueue.async { [weak self] in
@@ -230,16 +287,16 @@ final class OpenAIRealtimeAudioManager {
 
         guard let playerFormat = try? AudioFormatFactory.pcm(
             .pcmFormatFloat32,
-            sampleRate: Self.sampleRate,
-            channels: Self.channels,
+            sampleRate: config.outputSampleRate,
+            channels: config.channels,
             interleaved: false,
             context: "playback"
         ) else {
-            NSLog("[OpenAI Audio] Invalid playback format — dropping %d bytes", data.count)
+            NSLog("%@ Invalid playback format — dropping %d bytes", config.logPrefix, data.count)
             return
         }
 
-        let frameCount = UInt32(data.count) / (Self.bitsPerSample / 8 * Self.channels)
+        let frameCount = UInt32(data.count) / (config.bitsPerSample / 8 * config.channels)
         guard frameCount > 0 else { return }
 
         guard let buffer = AVAudioPCMBuffer(pcmFormat: playerFormat, frameCapacity: frameCount) else { return }
@@ -259,7 +316,7 @@ final class OpenAIRealtimeAudioManager {
         }
     }
 
-    /// Stop playback but keep engine running (used on interrupt).
+    /// Stop playback but keep the engine running (used on barge-in / interrupt).
     func stopPlayback() {
         audioLifecycleQueue.async { [weak self] in
             self?.stopPlaybackOnQueue()
@@ -327,9 +384,9 @@ final class OpenAIRealtimeAudioManager {
             case .pause:
                 // Keep `isCapturing` true through the pause so the matching `.ended` resumes.
                 self.audioEngine.pause()
-                NSLog("[OpenAI Audio] Interruption began — engine paused")
+                NSLog("%@ Interruption began — engine paused", self.config.logPrefix)
             case .resume:
-                NSLog("[OpenAI Audio] Interruption ended — resuming")
+                NSLog("%@ Interruption ended — resuming", self.config.logPrefix)
                 self.resumeAfterInterruptionOnQueue()
             case .resetGraph:
                 self.attemptAudioResetOnQueue()
@@ -347,7 +404,7 @@ final class OpenAIRealtimeAudioManager {
         audioLifecycleQueue.async { [weak self] in
             guard let self else { return }
             if AudioInterruptionPolicy.action(for: reason, isCapturing: self.isCapturing) == .resetGraph {
-                NSLog("[OpenAI Audio] Route changed (reason %lu) — resetting engine", raw)
+                NSLog("%@ Route changed (reason %lu) — resetting engine", self.config.logPrefix, raw)
                 self.attemptAudioResetOnQueue()
             }
         }
@@ -363,9 +420,9 @@ final class OpenAIRealtimeAudioManager {
             if isCapturing, isPlayerNodeAttached, !playerNode.isPlaying {
                 playerNode.play()
             }
-            NSLog("[OpenAI Audio] Resumed after interruption")
+            NSLog("%@ Resumed after interruption", config.logPrefix)
         } catch {
-            NSLog("[OpenAI Audio] Resume failed: %@ — resetting", error.localizedDescription)
+            NSLog("%@ Resume failed: %@ — resetting", config.logPrefix, error.localizedDescription)
             attemptAudioResetOnQueue()
         }
     }
@@ -383,9 +440,9 @@ final class OpenAIRealtimeAudioManager {
                 do {
                     try self.setupAudioSession(useIPhoneMode: mode)
                     try self.startCapture()
-                    NSLog("[OpenAI Audio] Audio reset successful")
+                    NSLog("%@ Audio reset successful", self.config.logPrefix)
                 } catch {
-                    NSLog("[OpenAI Audio] Audio reset failed: %@", error.localizedDescription)
+                    NSLog("%@ Audio reset failed: %@", self.config.logPrefix, error.localizedDescription)
                 }
             }
         }
@@ -438,16 +495,16 @@ final class OpenAIRealtimeAudioManager {
            let input = session.availableInputs?.first(where: { $0.portType == portType }) {
             do {
                 try session.setPreferredInput(input)
-                NSLog("[OpenAI Audio] Preferred input: %@ (%@)", input.portName, portType.rawValue)
+                NSLog("%@ Preferred input: %@ (%@)", config.logPrefix, input.portName, portType.rawValue)
             } catch {
-                NSLog("[OpenAI Audio] Could not set preferred input: %@", error.localizedDescription)
+                NSLog("%@ Could not set preferred input: %@", config.logPrefix, error.localizedDescription)
             }
         }
         if decision.overrideToSpeaker {
             try? session.overrideOutputAudioPort(.speaker)
         }
         if let message = decision.fallbackMessage {
-            NSLog("[OpenAI Audio] %@", message)
+            NSLog("%@ %@", config.logPrefix, message)
         }
     }
 
@@ -458,7 +515,7 @@ final class OpenAIRealtimeAudioManager {
         return try audioLifecycleQueue.sync(execute: work)
     }
 
-    // MARK: - Private
+    // MARK: - Private Helpers
 
     private func calculateRMS(_ buffer: AVAudioPCMBuffer) -> Float {
         guard let floatData = buffer.floatChannelData else { return 0 }

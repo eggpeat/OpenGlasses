@@ -22,9 +22,9 @@ enum AudioRecoveryAction: Equatable {
 /// Maps OS audio interruptions and route changes onto a recovery action.
 ///
 /// This is the deterministic core of "self-healing" realtime audio: given the event and whether we
-/// were capturing, decide what to do. The two realtime managers (`GeminiLiveAudioManager`,
-/// `OpenAIRealtimeAudioManager`) consume it; `WakeWordService` already embodies the same logic
-/// inline and is left untouched.
+/// were capturing, decide what to do. The shared `RealtimeAudioEngine` (Gemini Live + OpenAI
+/// Realtime) consumes it; `WakeWordService` already embodies the same logic inline and is left
+/// untouched.
 enum AudioInterruptionPolicy {
 
     /// Decide how to respond to an `AVAudioSession.interruptionNotification`.
