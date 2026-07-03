@@ -285,12 +285,24 @@ class GeminiLiveSessionManager: ObservableObject {
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 100_000_000)
                 guard !Task.isCancelled else { break }
-                self.connectionState = self.geminiService.connectionState
-                self.isModelSpeaking = self.geminiService.isModelSpeaking
-                self.reconnecting = self.geminiService.reconnecting
+                // Assign only on change — an unconditional write fires objectWillChange at 10 Hz for
+                // the whole session, re-evaluating every observing SwiftUI view (Plan: perf bucket A).
+                if self.connectionState != self.geminiService.connectionState {
+                    self.connectionState = self.geminiService.connectionState
+                }
+                if self.isModelSpeaking != self.geminiService.isModelSpeaking {
+                    self.isModelSpeaking = self.geminiService.isModelSpeaking
+                }
+                if self.reconnecting != self.geminiService.reconnecting {
+                    self.reconnecting = self.geminiService.reconnecting
+                }
                 if let bridge = self.openClawBridge {
-                    self.toolCallStatus = bridge.lastToolCallStatus
-                    self.openClawConnectionState = bridge.connectionState
+                    if self.toolCallStatus != bridge.lastToolCallStatus {
+                        self.toolCallStatus = bridge.lastToolCallStatus
+                    }
+                    if self.openClawConnectionState != bridge.connectionState {
+                        self.openClawConnectionState = bridge.connectionState
+                    }
                 }
             }
         }

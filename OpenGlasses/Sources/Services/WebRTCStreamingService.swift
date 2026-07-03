@@ -1,6 +1,7 @@
 import Foundation
 import Combine
 import UIKit
+import os.lock
 
 /// Lightweight WebRTC-style browser streaming via WebSocket signaling.
 /// Converts camera frames to MJPEG and streams them to connected web browsers.
@@ -18,17 +19,26 @@ class WebRTCStreamingService: ObservableObject {
     @Published var streamURL: String = ""
     @Published var errorMessage: String?
 
-    /// JPEG quality for streamed frames (0.0 - 1.0)
-    var jpegQuality: CGFloat = 0.4
+    /// JPEG quality for streamed frames (0.0 - 1.0). Read from the nonisolated send path, so
+    /// `nonisolated(unsafe)` — set once at configuration, not mutated mid-stream.
+    nonisolated(unsafe) var jpegQuality: CGFloat = 0.4
 
     /// Target FPS for the stream
     var targetFPS: Double = 15.0
 
     private var webSocket: URLSessionWebSocketTask?
+    /// One reused session for the whole stream (incl. reconnects), invalidated on stop — the old
+    /// code created a fresh URLSession per connect and never invalidated it, leaking a session pool
+    /// on every reconnect.
+    private var urlSession: URLSession?
     private var frameSubscription: AnyCancellable?
     private var heartbeatTask: Task<Void, Never>?
     private var roomId: String = ""
-    private var lastFrameTime: Date = .distantPast
+    /// Read/written only from the throttle sink's serial queue (see `startStreaming`).
+    nonisolated(unsafe) private var lastFrameTime: Date = .distantPast
+    /// Simple backpressure: drop a frame if the previous send hasn't completed, so a slow link
+    /// can't queue frames unboundedly inside URLSession.
+    private let sendGate = OSAllocatedUnfairLock(initialState: false)   // true == a send is in flight
 
     /// The signaling server URL. Users can set up their own or use a public relay.
     private var signalingURL: String {
@@ -89,6 +99,9 @@ class WebRTCStreamingService: ObservableObject {
             ws.cancel(with: .normalClosure, reason: nil)
         }
         webSocket = nil
+        urlSession?.invalidateAndCancel()
+        urlSession = nil
+        sendGate.withLock { $0 = false }
 
         isStreaming = false
         viewerCount = 0
@@ -106,8 +119,10 @@ class WebRTCStreamingService: ObservableObject {
             return
         }
 
-        let session = URLSession(configuration: .default)
-        webSocket = session.webSocketTask(with: url)
+        if urlSession == nil {
+            urlSession = URLSession(configuration: .default)
+        }
+        webSocket = urlSession?.webSocketTask(with: url)
         webSocket?.resume()
 
         receiveMessages()
@@ -184,39 +199,47 @@ class WebRTCStreamingService: ObservableObject {
     // MARK: - Frame Sending
 
     private nonisolated func sendFrame(_ image: UIImage) {
-        guard let jpegData = image.jpegData(compressionQuality: 0.4) else { return }
+        // Backpressure: if the previous frame's send hasn't completed, drop this one rather than
+        // letting frames queue unboundedly inside URLSession on a slow link.
+        let busy = sendGate.withLock { inFlight -> Bool in
+            if inFlight { return true }
+            inFlight = true
+            return false
+        }
+        guard !busy else { return }
 
-        // Base64 encode for WebSocket text transport
-        let base64 = jpegData.base64EncodedString()
-        let frameMsg: [String: Any] = [
-            "type": "frame",
-            "data": base64,
-            "timestamp": Date().timeIntervalSince1970
-        ]
+        guard let jpegData = image.jpegData(compressionQuality: jpegQuality) else {
+            sendGate.withLock { $0 = false }
+            return
+        }
 
-        guard let jsonData = try? JSONSerialization.data(withJSONObject: frameMsg),
-              let jsonStr = String(data: jsonData, encoding: .utf8) else { return }
-
-        // Send as binary for efficiency if the frame is large
-        if jpegData.count > 50_000 {
-            // Send raw binary with a 4-byte header
-            var binaryMsg = Data()
-            binaryMsg.append(contentsOf: [0x01]) // frame type marker
-            binaryMsg.append(jpegData)
-            Task { @MainActor [weak self] in
-                self?.webSocket?.send(.data(binaryMsg)) { error in
-                    if let error = error {
-                        print("📡 Frame send error: \(error)")
-                    }
-                }
-            }
+        // Build ONLY the payload we'll actually send (the old code base64+JSON-encoded every frame
+        // and then discarded it for the binary path).
+        let message: URLSessionWebSocketTask.Message
+        if WebRTCFrameEncoder.shouldSendBinary(jpegByteCount: jpegData.count) {
+            message = .data(WebRTCFrameEncoder.binaryMessage(jpegData))
         } else {
-            Task { @MainActor [weak self] in
-                self?.webSocket?.send(.string(jsonStr)) { error in
-                    if let error = error {
-                        print("📡 Frame send error: \(error)")
-                    }
-                }
+            let frameMsg: [String: Any] = [
+                "type": "frame",
+                "data": jpegData.base64EncodedString(),
+                "timestamp": Date().timeIntervalSince1970
+            ]
+            guard let jsonData = try? JSONSerialization.data(withJSONObject: frameMsg),
+                  let jsonStr = String(data: jsonData, encoding: .utf8) else {
+                sendGate.withLock { $0 = false }
+                return
+            }
+            message = .string(jsonStr)
+        }
+
+        Task { @MainActor [weak self] in
+            guard let self, let ws = self.webSocket else {
+                self?.sendGate.withLock { $0 = false }
+                return
+            }
+            ws.send(message) { [weak self] error in
+                self?.sendGate.withLock { $0 = false }
+                if let error = error { print("📡 Frame send error: \(error)") }
             }
         }
     }

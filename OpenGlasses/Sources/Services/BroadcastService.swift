@@ -34,6 +34,11 @@ class BroadcastService: ObservableObject {
     nonisolated(unsafe) private var frameCount: Int = 0
     private let targetFPS: Double = 15
 
+    /// Reused pixel-buffer pool so each frame doesn't allocate a fresh ~3.7 MB buffer (~55 MB/s of
+    /// churn at 15 fps). Mirrors VideoRecordingService. Frames are pushed serially, matching its
+    /// `nonisolated(unsafe)` discipline.
+    nonisolated(unsafe) private var pixelBufferPool: CVPixelBufferPool?
+
     // HaishinKit components
     private var rtmpConnection: RTMPConnection?
     private var rtmpStream: RTMPStream?
@@ -145,6 +150,7 @@ class BroadcastService: ObservableObject {
         frameSubscription = nil
         durationTimer?.invalidate()
         durationTimer = nil
+        pixelBufferPool = nil
 
         Task {
             if let stream = rtmpStream {
@@ -171,29 +177,38 @@ class BroadcastService: ObservableObject {
 
     // MARK: - Frame Encoding
 
+    /// Dequeue a pixel buffer from the reused pool, lazily creating the pool on first use.
+    private nonisolated func dequeuePixelBuffer(width: Int, height: Int) -> CVPixelBuffer? {
+        if pixelBufferPool == nil {
+            let poolAttrs: [String: Any] = [kCVPixelBufferPoolMinimumBufferCountKey as String: 3]
+            let bufferAttrs: [String: Any] = [
+                kCVPixelBufferCGImageCompatibilityKey as String: true,
+                kCVPixelBufferCGBitmapContextCompatibilityKey as String: true,
+                kCVPixelBufferWidthKey as String: width,
+                kCVPixelBufferHeightKey as String: height,
+                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
+            ]
+            var pool: CVPixelBufferPool?
+            CVPixelBufferPoolCreate(kCFAllocatorDefault, poolAttrs as CFDictionary,
+                                    bufferAttrs as CFDictionary, &pool)
+            pixelBufferPool = pool
+        }
+        guard let pool = pixelBufferPool else { return nil }
+        var buffer: CVPixelBuffer?
+        guard CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, pool, &buffer) == kCVReturnSuccess else {
+            return nil
+        }
+        return buffer
+    }
+
     private nonisolated func pushFrame(_ image: UIImage) {
         guard let cgImage = image.cgImage else { return }
 
         let width = 720
         let height = 1280
 
-        // Create pixel buffer
-        var pixelBuffer: CVPixelBuffer?
-        let attrs: [String: Any] = [
-            kCVPixelBufferCGImageCompatibilityKey as String: true,
-            kCVPixelBufferCGBitmapContextCompatibilityKey as String: true
-        ]
-
-        let status = CVPixelBufferCreate(
-            kCFAllocatorDefault,
-            width,
-            height,
-            kCVPixelFormatType_32BGRA,
-            attrs as CFDictionary,
-            &pixelBuffer
-        )
-
-        guard status == kCVReturnSuccess, let buffer = pixelBuffer else { return }
+        // Acquire a pixel buffer from the reused pool instead of allocating a new one per frame.
+        guard let buffer = dequeuePixelBuffer(width: width, height: height) else { return }
 
         CVPixelBufferLockBaseAddress(buffer, [])
         defer { CVPixelBufferUnlockBaseAddress(buffer, []) }
