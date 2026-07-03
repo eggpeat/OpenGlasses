@@ -2606,38 +2606,34 @@ class AppState: ObservableObject, AppStateProtocol {
             }
         }
 
-        // Tier 2: Model selection — temporarily switch to the recommended tier if available and enabled
+        // Tier 2: Model selection (Plan BG P2). The pure `ModelRoutingPolicy` decides between the
+        // on-device agent model, a temporary switch to the tier-recommended model, and keeping the
+        // active one; this applies the chosen route's side effects.
         var originalModelId: String?
         var useLocalAgent = false
-
-        // Route fast-tier queries to the agent model when agentic mode is on + model ready.
-        // If the agent model is the on-device MLX model, only do so when the user has
-        // opted in (localAgentEnabled, default off) — that path can fatally crash. Cloud
-        // agent models route normally.
         let agentIsCloud = Config.savedModels.contains(where: { $0.id == Config.agentModelId })
-        if classification.modelTier == .fast,
-           Config.agentModeEnabled,
-           Config.agentModelDownloaded,
-           (agentIsCloud || Config.localAgentEnabled),
-           !isPhotoCommand(query) {
+        let tierModel = Config.modelForTier(classification.modelTier)
+        switch ModelRoutingPolicy.decide(
+            isFastTier: classification.modelTier == .fast,
+            agentModeEnabled: Config.agentModeEnabled,
+            agentModelDownloaded: Config.agentModelDownloaded,
+            agentIsCloud: agentIsCloud,
+            localAgentEnabled: Config.localAgentEnabled,
+            isPhoto: isPhotoCommand(query),
+            autoRoutingEnabled: Config.autoModelRoutingEnabled,
+            tierModelId: tierModel?.id,
+            activeModelId: Config.activeModelId
+        ) {
+        case .localAgent:
             useLocalAgent = true
             print("🧠 Routing to agent model (fast tier, agentic mode)\(agentIsCloud ? " [cloud]" : " [on-device]")")
-        } else if classification.modelTier == .fast, Config.agentModeEnabled, Config.agentModelDownloaded, !isPhotoCommand(query) {
-            print("🧠 Skipping on-device agent (localAgentEnabled off) — routing to cloud instead")
-            if Config.autoModelRoutingEnabled,
-               let tierModel = Config.modelForTier(classification.modelTier),
-               tierModel.id != Config.activeModelId {
-                originalModelId = Config.activeModelId
-                Config.setActiveModelId(tierModel.id)
-                llmService.refreshActiveModel()
-            }
-        } else if Config.autoModelRoutingEnabled,
-           let tierModel = Config.modelForTier(classification.modelTier),
-           tierModel.id != Config.activeModelId {
+        case .switchModel(let id):
             originalModelId = Config.activeModelId
-            Config.setActiveModelId(tierModel.id)
+            Config.setActiveModelId(id)
             llmService.refreshActiveModel()
-            print("🧭 Model routed: \(classification.modelTier.rawValue) → \(tierModel.name)")
+            print("🧭 Model routed: \(classification.modelTier.rawValue) → \(tierModel?.name ?? id)")
+        case .keepCurrent:
+            break
         }
 
         // Normal message — send to LLM (with Tier 1 prompt trimming via sections)
