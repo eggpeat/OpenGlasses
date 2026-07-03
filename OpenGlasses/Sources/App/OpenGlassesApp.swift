@@ -2283,6 +2283,21 @@ class AppState: ObservableObject, AppStateProtocol {
     private func isGoodbyeCommand(_ text: String) -> Bool { voiceCommandParser.isGoodbye(text) }
     private func isPhotoCommand(_ text: String) -> Bool { voiceCommandParser.isPhoto(text) }
 
+    /// After finishing or short-circuiting a turn, either keep listening for a follow-up (while a
+    /// conversation is active) or drop back to wake-word detection. Replaces the 8+ copy-pasted
+    /// `if inConversation { … } else { await returnToWakeWord() }` blocks (Plan BG P2).
+    /// - Parameter ensureEngine: run the audio-engine keepalive first — needed after TTS playback,
+    ///   which may have interrupted the engine.
+    private func resumeListeningOrReturnToWakeWord(ensureEngine: Bool = false) async {
+        if inConversation {
+            if ensureEngine { try? await wakeWordService.ensureAudioEngineRunning() }
+            isListening = true
+            transcriptionService.startRecording()
+        } else {
+            await returnToWakeWord()
+        }
+    }
+
     /// Reuse an already-available live frame for vision-capable models without trying to
     /// start the camera. This avoids re-triggering fragile Meta camera permission flows.
     private func currentVisionFrameDataIfAvailable() -> Data? {
@@ -2384,12 +2399,7 @@ class AppState: ObservableObject, AppStateProtocol {
         // the LLM. Checked first since it's a focused, full-screen mode.
         if teleprompterService.isActive, teleprompterService.handleVoiceCommand(text) {
             print("📜 Teleprompter command handled: \(text)")
-            if inConversation {
-                isListening = true
-                transcriptionService.startRecording()
-            } else {
-                await returnToWakeWord()
-            }
+            await resumeListeningOrReturnToWakeWord()
             return
         }
 
@@ -2398,12 +2408,7 @@ class AppState: ObservableObject, AppStateProtocol {
         // Checked before intent classification so these short commands aren't filtered.
         if await hudRouter.handleVoiceCommand(text) {
             print("🎯 HUD task command handled: \(text)")
-            if inConversation {
-                isListening = true
-                transcriptionService.startRecording()
-            } else {
-                await returnToWakeWord()
-            }
+            await resumeListeningOrReturnToWakeWord()
             return
         }
 
@@ -2412,12 +2417,7 @@ class AppState: ObservableObject, AppStateProtocol {
         // saying a leaf name inside the menu navigates instead of re-opening the root.
         if hudLauncher.handleVoiceSelection(text) {
             print("🎛 HUD launcher voice selection: \(text)")
-            if inConversation {
-                isListening = true
-                transcriptionService.startRecording()
-            } else {
-                await returnToWakeWord()
-            }
+            await resumeListeningOrReturnToWakeWord()
             return
         }
 
@@ -2425,12 +2425,7 @@ class AppState: ObservableObject, AppStateProtocol {
         if HUDLauncher.isOpenCommand(text), hudLauncher.hasContent {
             print("🎛 HUD launcher opened")
             hudLauncher.open()
-            if inConversation {
-                isListening = true
-                transcriptionService.startRecording()
-            } else {
-                await returnToWakeWord()
-            }
+            await resumeListeningOrReturnToWakeWord()
             return
         }
 
@@ -2442,12 +2437,7 @@ class AppState: ObservableObject, AppStateProtocol {
             let intent = await intentClassifier.classify(transcript: text)
             if intent == .ignore {
                 print("🚫 Intent classifier: IGNORE — not responding")
-                if inConversation {
-                    isListening = true
-                    transcriptionService.startRecording()
-                } else {
-                    await returnToWakeWord()
-                }
+                await resumeListeningOrReturnToWakeWord()
                 return
             }
         }
@@ -2483,13 +2473,8 @@ class AppState: ObservableObject, AppStateProtocol {
         if isStopCommand(text) {
             print("🛑 Voice command: stop")
             speechService.stopSpeaking()
-            if inConversation {
-                print("💬 Stopped — listening for next question...")
-                isListening = true
-                transcriptionService.startRecording()
-            } else {
-                await returnToWakeWord()
-            }
+            if inConversation { print("💬 Stopped — listening for next question...") }
+            await resumeListeningOrReturnToWakeWord()
             return
         }
 
@@ -2557,14 +2542,7 @@ class AppState: ObservableObject, AppStateProtocol {
                 }
                 isProcessing = false
                 speechService.stopThinkingSound()
-                if inConversation {
-                    // Ensure audio engine is alive after TTS playback
-                    try? await wakeWordService.ensureAudioEngineRunning()
-                    isListening = true
-                    transcriptionService.startRecording()
-                } else {
-                    await returnToWakeWord()
-                }
+                await resumeListeningOrReturnToWakeWord(ensureEngine: true)
             }
             return
         }
@@ -2605,13 +2583,7 @@ class AppState: ObservableObject, AppStateProtocol {
 
             if isProcessing {
                 isProcessing = false
-                if inConversation {
-                    try? await wakeWordService.ensureAudioEngineRunning()
-                    isListening = true
-                    transcriptionService.startRecording()
-                } else {
-                    await returnToWakeWord()
-                }
+                await resumeListeningOrReturnToWakeWord(ensureEngine: true)
                 return
             }
         }
@@ -2654,79 +2626,84 @@ class AppState: ObservableObject, AppStateProtocol {
         isProcessing = true
         speechService.startThinkingSound()
 
-        do {
-            let rawResponse: String
-            if useLocalAgent {
-                // Fast path: on-device Gemma 4 agent
-                rawResponse = try await llmService.sendViaLocalAgent(
-                    query,
-                    locationContext: classification.relevantSections.contains(.location) ? locationService.locationContext : nil,
-                    memoryContext: Config.userMemoryEnabled ? userMemory.systemPromptContext(query: Config.userMemoryRetrievalEnabled ? query : nil) : nil
-                )
-            } else {
-                // Standard path: cloud LLM
-                let imageData = await smartCameraImageData(for: query)
-                rawResponse = try await llmService.sendMessage(
-                    query,
-                    locationContext: classification.relevantSections.contains(.location) ? locationService.locationContext : nil,
-                    imageData: imageData,
-                    memoryContext: Config.userMemoryEnabled ? userMemory.systemPromptContext(query: Config.userMemoryRetrievalEnabled ? query : nil) : nil,
-                    playbookContext: classification.relevantSections.contains(.playbook) ? playbookStore.playbookContext() : nil,
-                    nowPlayingContext: nowPlayingAtStart?.promptContext,
-                    shortcutsContext: ShortcutsCatalog.shared.promptBlock(),
-                    promptSections: classification.relevantSections
-                )
-            }
-            nowPlayingAtStart = nil  // consumed for this turn
-
-            // Parse and execute memory commands from the response
-            let response: String
-            if Config.userMemoryEnabled {
-                response = userMemory.parseAndExecuteCommands(in: rawResponse)
-
-                // Periodic nudge: after N turns, inject a hidden review prompt
-                // into the LLM history so the next response considers what to remember
-                if userMemory.incrementTurnAndCheckNudge() {
-                    llmService.injectSystemMessage(SemanticMemoryStore.nudgePrompt)
+        // Run the turn inside a tracked, cancellable task (Plan BG P2). Barge-in / stop / cancel
+        // cancel it, so a normal text turn no longer speaks its now-stale response after the user
+        // interrupts — previously only the photo path was cancellable, so a barged-in text turn
+        // would still speak the earlier answer once the LLM call returned.
+        currentLLMTask = Task {
+            do {
+                let rawResponse: String
+                if useLocalAgent {
+                    // Fast path: on-device Gemma 4 agent
+                    rawResponse = try await llmService.sendViaLocalAgent(
+                        query,
+                        locationContext: classification.relevantSections.contains(.location) ? locationService.locationContext : nil,
+                        memoryContext: Config.userMemoryEnabled ? userMemory.systemPromptContext(query: Config.userMemoryRetrievalEnabled ? query : nil) : nil
+                    )
+                } else {
+                    // Standard path: cloud LLM
+                    let imageData = await smartCameraImageData(for: query)
+                    rawResponse = try await llmService.sendMessage(
+                        query,
+                        locationContext: classification.relevantSections.contains(.location) ? locationService.locationContext : nil,
+                        imageData: imageData,
+                        memoryContext: Config.userMemoryEnabled ? userMemory.systemPromptContext(query: Config.userMemoryRetrievalEnabled ? query : nil) : nil,
+                        playbookContext: classification.relevantSections.contains(.playbook) ? playbookStore.playbookContext() : nil,
+                        nowPlayingContext: nowPlayingAtStart?.promptContext,
+                        shortcutsContext: ShortcutsCatalog.shared.promptBlock(),
+                        promptSections: classification.relevantSections
+                    )
                 }
-            } else {
-                response = rawResponse
+                nowPlayingAtStart = nil  // consumed for this turn
+
+                // Parse and execute memory commands from the response
+                let response: String
+                if Config.userMemoryEnabled {
+                    response = userMemory.parseAndExecuteCommands(in: rawResponse)
+
+                    // Periodic nudge: after N turns, inject a hidden review prompt
+                    // into the LLM history so the next response considers what to remember
+                    if userMemory.incrementTurnAndCheckNudge() {
+                        llmService.injectSystemMessage(SemanticMemoryStore.nudgePrompt)
+                    }
+                } else {
+                    response = rawResponse
+                }
+
+                // If the user barged in / stopped while the LLM was working, don't speak the
+                // now-stale reply.
+                try Task.checkCancellation()
+
+                lastResponse = response
+                print("🤖 \(llmService.activeModelName): \(response)")
+
+                // Save to conversation store
+                if Config.conversationPersistenceEnabled {
+                    conversationStore.appendMessage(role: "assistant", content: response)
+                }
+
+                // Start wake word listener during TTS so user can say "stop"
+                startStopListener()
+                await speechService.speak(response)
+                stopStopListener()
+            } catch is CancellationError {
+                print("🛑 LLM turn cancelled")
+            } catch {
+                errorMessage = "Failed to get response: \(error.localizedDescription)"
+                await speechService.speak("Sorry, I encountered an error.")
             }
 
-            lastResponse = response
-            print("🤖 \(llmService.activeModelName): \(response)")
-
-            // Save to conversation store
-            if Config.conversationPersistenceEnabled {
-                conversationStore.appendMessage(role: "assistant", content: response)
+            // Restore original model if we switched for this request
+            if let originalId = originalModelId {
+                Config.setActiveModelId(originalId)
+                llmService.refreshActiveModel()
             }
 
-            // Start wake word listener during TTS so user can say "stop"
-            startStopListener()
-            await speechService.speak(response)
-            stopStopListener()
-        } catch {
-            errorMessage = "Failed to get response: \(error.localizedDescription)"
-            await speechService.speak("Sorry, I encountered an error.")
-        }
-
-        // Restore original model if we switched for this request
-        if let originalId = originalModelId {
-            Config.setActiveModelId(originalId)
-            llmService.refreshActiveModel()
-        }
-
-        // After responding, stay in conversation — listen for follow-up
-        isProcessing = false
-        speechService.stopThinkingSound()
-        if inConversation {
-            print("💬 Continuing conversation — listening for follow-up...")
-            // Ensure audio engine is alive after TTS playback (may have been interrupted)
-            try? await wakeWordService.ensureAudioEngineRunning()
-            isListening = true
-            transcriptionService.startRecording()
-        } else {
-            await returnToWakeWord()
+            // After responding, stay in conversation — listen for follow-up
+            isProcessing = false
+            speechService.stopThinkingSound()
+            if inConversation { print("💬 Continuing conversation — listening for follow-up...") }
+            await resumeListeningOrReturnToWakeWord(ensureEngine: true)
         }
     }
 
