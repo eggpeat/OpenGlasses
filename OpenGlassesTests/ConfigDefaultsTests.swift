@@ -13,6 +13,9 @@ final class ConfigDefaultsTests: XCTestCase {
         "usePhoneMicForTranslation", "glassesDisplayEnabled", "intentClassifierEnabled",
         "llmComplexityClassifierEnabled", "agentOnboardingComplete", "contextualEmbeddingEnabled",
         "frameDedupEnabled", "visualStateMemoryEnabled",
+        // Cohort 3
+        "hasCompletedOnboarding", "autoModelRoutingEnabled", "openClawEnabled", "privacyFilterEnabled",
+        "shareHealthDataWithAI", "agentModelDownloaded", "localAgentEnabled", "visualStateInjectThumbnails",
     ]
 
     override func setUp() {
@@ -43,6 +46,14 @@ final class ConfigDefaultsTests: XCTestCase {
         XCTAssertFalse(Config.contextualEmbeddingEnabled)
         XCTAssertFalse(Config.frameDedupEnabled)
         XCTAssertFalse(Config.visualStateMemoryEnabled)
+        XCTAssertFalse(Config.hasCompletedOnboarding)
+        XCTAssertFalse(Config.autoModelRoutingEnabled)
+        XCTAssertFalse(Config.openClawEnabled)
+        XCTAssertFalse(Config.privacyFilterEnabled)
+        XCTAssertFalse(Config.shareHealthDataWithAI)
+        XCTAssertFalse(Config.agentModelDownloaded)
+        XCTAssertFalse(Config.localAgentEnabled)
+        XCTAssertFalse(Config.visualStateInjectThumbnails)
     }
 
     /// Each `setX` façade writes the property, and it round-trips through the exact legacy key.
@@ -63,6 +74,14 @@ final class ConfigDefaultsTests: XCTestCase {
         assertRoundTrip("contextualEmbeddingEnabled", set: Config.setContextualEmbeddingEnabled, get: { Config.contextualEmbeddingEnabled })
         assertRoundTrip("frameDedupEnabled", set: Config.setFrameDedupEnabled, get: { Config.frameDedupEnabled })
         assertRoundTrip("visualStateMemoryEnabled", set: Config.setVisualStateMemoryEnabled, get: { Config.visualStateMemoryEnabled })
+        assertRoundTrip("hasCompletedOnboarding", set: Config.setHasCompletedOnboarding, get: { Config.hasCompletedOnboarding })
+        assertRoundTrip("autoModelRoutingEnabled", set: Config.setAutoModelRoutingEnabled, get: { Config.autoModelRoutingEnabled })
+        assertRoundTrip("openClawEnabled", set: Config.setOpenClawEnabled, get: { Config.openClawEnabled })
+        assertRoundTrip("privacyFilterEnabled", set: Config.setPrivacyFilterEnabled, get: { Config.privacyFilterEnabled })
+        assertRoundTrip("shareHealthDataWithAI", set: Config.setShareHealthDataWithAI, get: { Config.shareHealthDataWithAI })
+        assertRoundTrip("agentModelDownloaded", set: Config.setAgentModelDownloaded, get: { Config.agentModelDownloaded })
+        assertRoundTrip("localAgentEnabled", set: Config.setLocalAgentEnabled, get: { Config.localAgentEnabled })
+        assertRoundTrip("visualStateInjectThumbnails", set: Config.setVisualStateInjectThumbnails, get: { Config.visualStateInjectThumbnails })
     }
 
     /// A raw value written under the legacy key (as the old setter did) is read by the new property —
