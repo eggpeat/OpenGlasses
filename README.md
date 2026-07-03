@@ -2,7 +2,7 @@
 
 [中文文档 (Chinese)](README.zh-CN.md)
 
-An open-source voice-powered AI assistant for Ray-Ban and Oakley Meta smart glasses. 85+ built-in tools, multi-LLM support (cloud + on-device) with automatic model routing, a **fully offline voice mode** (on-device speech-to-text, AI, and voice), personas with simultaneous wake words, an in-lens HUD with hands-free task control on Ray-Ban Display glasses, an on-device knowledge graph, live translation, hands-free field-service guidance, real-time vision coaching, MCP tool servers, and CarPlay + Apple Watch companions — all controlled hands-free by voice.
+A source-available voice-powered AI assistant for Ray-Ban and Oakley Meta smart glasses. 85+ built-in tools, multi-LLM support (cloud + on-device) with automatic model routing, a **fully offline voice mode** (on-device speech-to-text, AI, and voice), personas with simultaneous wake words, an in-lens HUD with hands-free task control on Ray-Ban Display glasses, an on-device knowledge graph, live translation, hands-free field-service guidance, real-time vision coaching, MCP tool servers, and CarPlay + Apple Watch companions — all controlled hands-free by voice.
 
 > **Note**: The Meta Wearables SDK is currently in **developer preview**. App Store distribution is pending approval — each user must build the app from source with their own Meta developer credentials.
 
@@ -308,7 +308,7 @@ Assign models to **Fast**, **Balanced**, and **Best** tiers, then let OpenGlasse
 
 ## Enterprise
 
-Commercial features for teams and regulated industries. These are licensed separately from the open-source core — see [License](#license) or contact Skunkworks NZ at [g@skunkworks.kiwi](mailto:g@skunkworks.kiwi).
+Commercial features for teams and regulated industries. These are licensed separately from the source-available core — see [License](#license) or contact Skunkworks NZ at [g@skunkworks.kiwi](mailto:g@skunkworks.kiwi).
 
 ### Field Assist — Guided Field Service
 
@@ -501,7 +501,7 @@ All settings are in-app — no source code editing needed.
 
 ## Contributing
 
-Contributions welcome! This is fully open-source. Fork, improve, submit PRs.
+Contributions welcome! This is source-available under the Business Source License 1.1 (free for non-commercial use; converts to Apache 2.0 in 2030). Fork, improve, submit PRs.
 
 Key areas for contribution:
 - New native tools
@@ -522,4 +522,4 @@ Powered by [Anthropic Claude](https://www.anthropic.com/), [Meta Wearables SDK](
 
 ---
 
-**Note**: Independent open-source project, not affiliated with Meta or Anthropic.
+**Note**: Independent source-available project, not affiliated with Meta or Anthropic.
