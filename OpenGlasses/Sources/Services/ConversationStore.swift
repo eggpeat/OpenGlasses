@@ -413,7 +413,7 @@ class ConversationStore: ObservableObject {
             if FileManager.default.fileExists(atPath: storageURL.path),
                encryption.isFileEncrypted(at: storageURL) {
                 let plaintext = try await encryption.decryptFile(at: storageURL)
-                try plaintext.write(to: storageURL, options: .atomic)
+                try plaintext.write(to: storageURL, options: [.atomic, .completeFileProtection])
             }
             await encryption.deleteKey()
             Config.setConversationEncryptionEnabled(false)
@@ -479,13 +479,15 @@ class ConversationStore: ObservableObject {
                         let encrypted = try await enc.encrypt(data)
                         var output = Data("OGENC1".utf8)
                         output.append(encrypted)
-                        try output.write(to: url, options: .atomic)
+                        try output.write(to: url, options: [.atomic, .completeFileProtection])
                     } catch {
                         NSLog("[ConversationStore] Encrypted save failed: %@", error.localizedDescription)
                     }
                 }
             } else {
-                try data.write(to: storageURL, options: .atomic)
+                // Conversation history can hold sensitive content — encrypt at rest even when
+                // the optional biometric encryption layer is off.
+                try data.write(to: storageURL, options: [.atomic, .completeFileProtection])
             }
         } catch {
             NSLog("[ConversationStore] Save failed: %@", error.localizedDescription)

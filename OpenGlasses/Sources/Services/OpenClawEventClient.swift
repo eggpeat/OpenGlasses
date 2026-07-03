@@ -74,7 +74,7 @@ class OpenClawEventClient {
         webSocketTask = session?.webSocketTask(with: url)
         webSocketTask?.resume()
 
-        NSLog("[OpenClawWS] Connecting to %@ (gateway: %@)", url.absoluteString, gateway.name)
+        NSLog("[OpenClawWS] Connecting to %@ (gateway: %@)", LogRedaction.redact(url.absoluteString), gateway.name)
         startReceiving()
     }
 
@@ -118,19 +118,22 @@ class OpenClawEventClient {
         }
     }
 
+    // The gateway token is presented in the `connect` handshake (see `sendConnectHandshake`),
+    // never in the URL — keeping it out of the query string prevents it leaking into device,
+    // proxy, and server access logs.
     private static func tunnelWebSocketURL(for gateway: GatewayConfig) -> String {
         let base = gateway.tunnelHost
             .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
             .replacingOccurrences(of: "https://", with: "wss://")
             .replacingOccurrences(of: "http://", with: "ws://")
-        return "\(base)/ws?token=\(gateway.token)"
+        return "\(base)/ws"
     }
 
     private static func lanWebSocketURL(for gateway: GatewayConfig) -> String {
         let host = gateway.lanHost
             .replacingOccurrences(of: "http://", with: "")
             .replacingOccurrences(of: "https://", with: "")
-        return "ws://\(host):\(gateway.port)/ws?token=\(gateway.token)"
+        return "ws://\(host):\(gateway.port)/ws"
     }
 
     private func startReceiving() {
@@ -188,7 +191,7 @@ class OpenClawEventClient {
         case .waitingApproval:
             NSLog("[OpenClawWS] Device pairing pending — awaiting approval on the gateway")
         case .error(let msg):
-            NSLog("[OpenClawWS] Connect failed: %@ (full response: %@)", msg, rawText)
+            NSLog("[OpenClawWS] Connect failed: %@ (full response: %@)", msg, LogRedaction.redact(rawText))
         case .disconnected, .connecting:
             break
         }
