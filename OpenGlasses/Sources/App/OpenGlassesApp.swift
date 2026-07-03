@@ -2298,6 +2298,61 @@ class AppState: ObservableObject, AppStateProtocol {
         }
     }
 
+    /// The ordered pre-LLM voice-command chain (Plan BG P2). Each handler checks the transcript and,
+    /// if it applies, drives its mode and resumes listening, reporting that it consumed the turn so
+    /// the flow stops before the LLM. Order is preserved exactly from the original if-ladder:
+    /// teleprompter → HUD task → launcher select → launcher open → intent-ignore filter.
+    private func preLLMHandlers() -> [VoiceCommandHandler] {
+        [
+            // Teleprompter (Phase 2): while a session is running it owns the display, so
+            // "next/back/pause/resume/restart/faster/slower/stop" drive the prompter rather than
+            // the LLM. Checked first since it's a focused, full-screen mode.
+            VoiceCommandHandler(label: "teleprompter") { [weak self] text in
+                guard let self, self.teleprompterService.isActive,
+                      self.teleprompterService.handleVoiceCommand(text) else { return false }
+                print("📜 Teleprompter command handled: \(text)")
+                await self.resumeListeningOrReturnToWakeWord()
+                return true
+            },
+            // HUD task control (Display Phase 3 / Plan X): while a Now/Next card is on the glasses,
+            // "next/done/skip/back" drive the task instead of the LLM. Before intent classification
+            // so these short commands aren't filtered.
+            VoiceCommandHandler(label: "hud-task") { [weak self] text in
+                guard let self, await self.hudRouter.handleVoiceCommand(text) else { return false }
+                print("🎯 HUD task command handled: \(text)")
+                await self.resumeListeningOrReturnToWakeWord()
+                return true
+            },
+            // HUD launcher voice nav (Display Phase 4 / Plan Y): while a menu is open, a spoken item
+            // label (or "back"/"close") selects it. Before the open command so saying a leaf name
+            // inside the menu navigates instead of re-opening the root.
+            VoiceCommandHandler(label: "hud-launcher-select") { [weak self] text in
+                guard let self, self.hudLauncher.handleVoiceSelection(text) else { return false }
+                print("🎛 HUD launcher voice selection: \(text)")
+                await self.resumeListeningOrReturnToWakeWord()
+                return true
+            },
+            // HUD launcher (Display Phase 4 / Plan Y): "menu" opens the band-navigable launcher.
+            VoiceCommandHandler(label: "hud-launcher-open") { [weak self] text in
+                guard let self, HUDLauncher.isOpenCommand(text), self.hudLauncher.hasContent else { return false }
+                print("🎛 HUD launcher opened")
+                self.hudLauncher.open()
+                await self.resumeListeningOrReturnToWakeWord()
+                return true
+            },
+            // Intent classification — filter bystander/filler speech.
+            VoiceCommandHandler(label: "intent-ignore") { [weak self] text in
+                guard let self, self.intentClassifier.isEnabled,
+                      !self.isPhotoCommand(text), !self.isStopCommand(text), !self.isGoodbyeCommand(text)
+                else { return false }
+                guard await self.intentClassifier.classify(transcript: text) == .ignore else { return false }
+                print("🚫 Intent classifier: IGNORE — not responding")
+                await self.resumeListeningOrReturnToWakeWord()
+                return true
+            },
+        ]
+    }
+
     /// Reuse an already-available live frame for vision-capable models without trying to
     /// start the camera. This avoids re-triggering fragile Meta camera permission flows.
     private func currentVisionFrameDataIfAvailable() -> Data? {
@@ -2394,53 +2449,16 @@ class AppState: ObservableObject, AppStateProtocol {
         speechService.playEndListeningTone()
         print("📝 Transcription: \(text)")
 
-        // Teleprompter (Phase 2): while a session is running it owns the display, so
-        // "next/back/pause/resume/restart/faster/slower/stop" drive the prompter rather than
-        // the LLM. Checked first since it's a focused, full-screen mode.
-        if teleprompterService.isActive, teleprompterService.handleVoiceCommand(text) {
-            print("📜 Teleprompter command handled: \(text)")
-            await resumeListeningOrReturnToWakeWord()
-            return
-        }
-
-        // HUD task control (Display Phase 3 / Plan X): while a Now/Next card is on the
-        // glasses, "next/done/skip/back" drive the task instead of going to the LLM.
-        // Checked before intent classification so these short commands aren't filtered.
-        if await hudRouter.handleVoiceCommand(text) {
-            print("🎯 HUD task command handled: \(text)")
-            await resumeListeningOrReturnToWakeWord()
-            return
-        }
-
-        // HUD launcher voice nav (Display Phase 4 / Plan Y): while a menu is open, a spoken
-        // item label (or "back"/"close") selects it. Checked before the open command so
-        // saying a leaf name inside the menu navigates instead of re-opening the root.
-        if hudLauncher.handleVoiceSelection(text) {
-            print("🎛 HUD launcher voice selection: \(text)")
-            await resumeListeningOrReturnToWakeWord()
-            return
-        }
-
-        // HUD launcher (Display Phase 4 / Plan Y): "menu" opens the band-navigable launcher.
-        if HUDLauncher.isOpenCommand(text), hudLauncher.hasContent {
-            print("🎛 HUD launcher opened")
-            hudLauncher.open()
-            await resumeListeningOrReturnToWakeWord()
+        // Pre-LLM voice-command chain (Plan BG P2): teleprompter, HUD task card, HUD launcher
+        // selection/open, and the intent-ignore filter each get first crack at the transcript. The
+        // first one that consumes it drives its own mode and short-circuits before the LLM. Order
+        // matters and is preserved from the original if-ladder (see `preLLMHandlers`).
+        if await ConversationFlowEngine(handlers: preLLMHandlers()).route(text) != nil {
             return
         }
 
         // Will be updated below if persona detected in text
         var query = text
-
-        // Intent classification — filter bystander/filler speech
-        if intentClassifier.isEnabled && !isPhotoCommand(text) && !isStopCommand(text) && !isGoodbyeCommand(text) {
-            let intent = await intentClassifier.classify(transcript: text)
-            if intent == .ignore {
-                print("🚫 Intent classifier: IGNORE — not responding")
-                await resumeListeningOrReturnToWakeWord()
-                return
-            }
-        }
 
         // Check for persona names in the transcription (for Action Button / push-to-talk mode)
         // e.g. "Hey Claude, what's the weather" → activate Claude persona, strip prefix.
