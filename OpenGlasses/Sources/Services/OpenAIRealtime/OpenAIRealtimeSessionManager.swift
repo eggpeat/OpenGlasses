@@ -18,7 +18,7 @@ class OpenAIRealtimeSessionManager: ObservableObject {
 
     // Internal components
     private let realtimeService = OpenAIRealtimeService()
-    private let audioManager = OpenAIRealtimeAudioManager()
+    private let audioManager = RealtimeAudioEngine(config: .openAIRealtime)
     private let frameThrottler = FrameThrottler(interval: 2.0)  // Less frequent than Gemini — OpenAI charges per image
     private var stateObservation: Task<Void, Never>?
 

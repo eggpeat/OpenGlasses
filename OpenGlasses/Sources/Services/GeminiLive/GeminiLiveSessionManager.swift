@@ -27,7 +27,7 @@ class GeminiLiveSessionManager: ObservableObject {
 
     // Internal components
     private let geminiService = GeminiLiveService()
-    private let audioManager = GeminiLiveAudioManager()
+    private let audioManager = RealtimeAudioEngine(config: .geminiLive)
     private let frameThrottler = FrameThrottler()
     private var toolCallRouter: ToolCallRouter?
     private var stateObservation: Task<Void, Never>?
