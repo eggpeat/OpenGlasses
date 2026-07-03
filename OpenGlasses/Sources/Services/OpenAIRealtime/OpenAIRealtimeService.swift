@@ -343,15 +343,17 @@ class OpenAIRealtimeService: ObservableObject {
                 guard let task = self.webSocketTask else { break }
                 do {
                     let message = try await task.receive()
+                    let text: String?
                     switch message {
-                    case .string(let text):
-                        await self.handleMessage(text)
-                    case .data(let data):
-                        if let text = String(data: data, encoding: .utf8) {
-                            await self.handleMessage(text)
-                        }
-                    @unknown default:
-                        break
+                    case .string(let t): text = t
+                    case .data(let d): text = String(data: d, encoding: .utf8)
+                    @unknown default: text = nil
+                    }
+                    guard let text else { continue }
+                    // Parse JSON + decode the audio delta OFF the main actor, then apply on main —
+                    // response.audio.delta arrives many times/sec while the model speaks.
+                    if let parsed = await Self.parse(text) {
+                        self.handleMessage(parsed)
                     }
                 } catch {
                     if !Task.isCancelled {
@@ -370,12 +372,30 @@ class OpenAIRealtimeService: ObservableObject {
         }
     }
 
-    private func handleMessage(_ text: String) async {
+    /// A message parsed off the main actor: decoded JSON plus the pre-decoded audio delta.
+    /// `@unchecked Sendable` is safe — single-owner handoff, built off-main and consumed once on main.
+    private struct ParsedOpenAIMessage: @unchecked Sendable {
+        let json: [String: Any]
+        let type: String
+        let audioDelta: Data?
+    }
+
+    private nonisolated static func parse(_ text: String) async -> ParsedOpenAIMessage? {
         guard let data = text.data(using: .utf8),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let type = json["type"] as? String else {
-            return
+            return nil
         }
+        var audioDelta: Data?
+        if type == "response.audio.delta", let delta = json["delta"] as? String {
+            audioDelta = Data(base64Encoded: delta)
+        }
+        return ParsedOpenAIMessage(json: json, type: type, audioDelta: audioDelta)
+    }
+
+    private func handleMessage(_ parsed: ParsedOpenAIMessage) {
+        let json = parsed.json
+        let type = parsed.type
 
         switch type {
         case "session.created":
@@ -389,9 +409,8 @@ class OpenAIRealtimeService: ObservableObject {
             resolveConnect(success: true)
 
         case "response.audio.delta":
-            // Model audio chunk
-            if let delta = json["delta"] as? String,
-               let audioData = Data(base64Encoded: delta) {
+            // Model audio chunk — base64-decoded off the main actor in `parse`.
+            if let audioData = parsed.audioDelta {
                 if !isModelSpeaking {
                     isModelSpeaking = true
                     if let speechEnd = lastUserSpeechEnd, !responseLatencyLogged {

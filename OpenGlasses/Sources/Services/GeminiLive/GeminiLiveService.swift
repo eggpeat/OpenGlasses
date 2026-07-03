@@ -376,15 +376,18 @@ class GeminiLiveService: ObservableObject {
                 guard let task = self.webSocketTask else { break }
                 do {
                     let message = try await task.receive()
+                    let text: String?
                     switch message {
-                    case .string(let text):
-                        await self.handleMessage(text)
-                    case .data(let data):
-                        if let text = String(data: data, encoding: .utf8) {
-                            await self.handleMessage(text)
-                        }
-                    @unknown default:
-                        break
+                    case .string(let t): text = t
+                    case .data(let d): text = String(data: d, encoding: .utf8)
+                    @unknown default: text = nil
+                    }
+                    guard let text else { continue }
+                    // Parse JSON + decode audio base64 OFF the main actor (`parse` is nonisolated
+                    // async), then apply state/callbacks on main — the old code did both on main for
+                    // every message, at 10-25 msgs/sec while the model speaks.
+                    if let parsed = await Self.parse(text) {
+                        self.handleMessage(parsed)
                     }
                 } catch {
                     if !Task.isCancelled {
@@ -403,11 +406,40 @@ class GeminiLiveService: ObservableObject {
         }
     }
 
-    private func handleMessage(_ text: String) async {
+    /// A message parsed off the main actor: the decoded JSON plus any audio chunks already
+    /// base64-decoded off-main. `@unchecked Sendable` is safe here because it's a single-owner
+    /// handoff — built on a background executor, consumed once on the main actor, never mutated
+    /// or shared concurrently.
+    private struct ParsedGeminiMessage: @unchecked Sendable {
+        let json: [String: Any]
+        let audioChunks: [Data]
+    }
+
+    /// Parse the raw text and pre-decode audio, entirely off the main actor.
+    private nonisolated static func parse(_ text: String) async -> ParsedGeminiMessage? {
         guard let data = text.data(using: .utf8),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return
+            return nil
         }
+        var chunks: [Data] = []
+        if let serverContent = json["serverContent"] as? [String: Any],
+           let modelTurn = serverContent["modelTurn"] as? [String: Any],
+           let parts = modelTurn["parts"] as? [[String: Any]] {
+            for part in parts {
+                if let inlineData = part["inlineData"] as? [String: Any],
+                   let mimeType = inlineData["mimeType"] as? String,
+                   mimeType.hasPrefix("audio/pcm"),
+                   let base64Data = inlineData["data"] as? String,
+                   let audioData = Data(base64Encoded: base64Data) {
+                    chunks.append(audioData)
+                }
+            }
+        }
+        return ParsedGeminiMessage(json: json, audioChunks: chunks)
+    }
+
+    private func handleMessage(_ parsed: ParsedGeminiMessage) {
+        let json = parsed.json
 
         // Token usage (cumulative) → record the delta for the cost tracker (Plan AU).
         if let cumulative = RealtimeUsage.geminiCumulative(json) {
@@ -460,26 +492,25 @@ class GeminiLiveService: ObservableObject {
                 return
             }
 
-            // Model audio/text output
+            // Model audio output — chunks were base64-decoded off the main actor in `parse`.
+            for audioData in parsed.audioChunks {
+                if !isModelSpeaking {
+                    isModelSpeaking = true
+                    // Log response latency
+                    if let speechEnd = lastUserSpeechEnd, !responseLatencyLogged {
+                        let latency = Date().timeIntervalSince(speechEnd)
+                        NSLog("[Latency] %.0fms (user speech end -> first audio)", latency * 1000)
+                        responseLatencyLogged = true
+                    }
+                }
+                onAudioReceived?(audioData)
+            }
+
+            // Model text output (logged)
             if let modelTurn = serverContent["modelTurn"] as? [String: Any],
                let parts = modelTurn["parts"] as? [[String: Any]] {
-                for part in parts {
-                    if let inlineData = part["inlineData"] as? [String: Any],
-                       let mimeType = inlineData["mimeType"] as? String,
-                       mimeType.hasPrefix("audio/pcm"),
-                       let base64Data = inlineData["data"] as? String,
-                       let audioData = Data(base64Encoded: base64Data) {
-                        if !isModelSpeaking {
-                            isModelSpeaking = true
-                            // Log response latency
-                            if let speechEnd = lastUserSpeechEnd, !responseLatencyLogged {
-                                let latency = Date().timeIntervalSince(speechEnd)
-                                NSLog("[Latency] %.0fms (user speech end -> first audio)", latency * 1000)
-                                responseLatencyLogged = true
-                            }
-                        }
-                        onAudioReceived?(audioData)
-                    } else if let text = part["text"] as? String {
+                for part in parts where part["inlineData"] == nil {
+                    if let text = part["text"] as? String {
                         NSLog("[Gemini] %@", text)
                     }
                 }
