@@ -1406,6 +1406,13 @@ struct Config {
 
     static func setShowAllQuickActions(_ show: Bool) { showAllQuickActions = show }
 
+    // MARK: - Uncertainty Web Search (Plan BI)
+
+    /// Local backends (MLX, Apple Foundation) can't tool-call `web_search`; when on, a hedged or
+    /// freshness-sensitive local answer gets one transparent web-grounded re-ask. Default on —
+    /// `WebSearchTool` always has the keyless DuckDuckGo fallback, so no configuration is needed.
+    @UserDefaultsBacked("localWebSearchFallbackEnabled", default: true) static var localWebSearchFallbackEnabled: Bool
+
     // MARK: - Remote Invoke (Plan BH)
 
     // Per-class consent for gateway-initiated device commands. The whole surface additionally
