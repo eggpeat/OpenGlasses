@@ -9,7 +9,7 @@ audit ring) wired into `OpenClawEventClient` (`type:"req"` frames answered on th
 socket). Settings: per-class toggles + activity log in Gateway settings. Hardening riders:
 reconnect jitter, `LLMImagePreparer.isDegenerate` frame guard, `SecretInputField` (paste + reveal)
 swapped into 12 token/key forms. Token-in-URL hygiene was already fixed (handshake auth +
-`LogRedaction`). Deferred: live end-to-end against a real gateway (device/backend-pending).
+`LogRedaction`). Follow-up shipped: signed Ed25519 device identity on both gateway handshakes (`OpenClawDeviceIdentity` + shared `OpenClawConnectParams`, protocol v3/v4 — remote gateways can zero-scope token-only connects), capability advertisement at connect time, and `device.event` push (connection + glasses attach/detach, observe-consent-gated). Deferred: live end-to-end against a real gateway (device/backend-pending).
 
 ## The problem
 The gateway link is one-directional in practice: the phone initiates every exchange

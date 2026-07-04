@@ -384,6 +384,15 @@ class AppState: ObservableObject, AppStateProtocol {
     @Published var isConnected: Bool = false {
         didSet {
             speechService.glassesConnected = isConnected
+            // Tell the gateway-side agent the glasses attached/detached (device.event push,
+            // Plan BH follow-up). Consent-gated like the remote observe class; the client
+            // itself no-ops unless the socket is authenticated.
+            if oldValue != isConnected, Config.agentModeEnabled, Config.remoteInvokeObserveEnabled {
+                openClawEventClient.sendDeviceEvent(type: "glasses", payload: [
+                    "connected": isConnected,
+                    "battery": glassesService.batteryLevel ?? -1,
+                ])
+            }
             // Clean up hardware-facing interfaces when glasses disconnect.
             // The agent and in-flight LLM requests keep running — results
             // can appear in notifications or be read when the app is opened.
