@@ -1,6 +1,15 @@
 # Plan BH — Gateway Remote Invoke (agent-initiated glasses control)
 
-**Status:** 📋 Planned
+**Status:** 🚧 Core shipped — pure `RemoteCommandParser` (alias table, total: command / unsupported /
+malformed) + `RemoteCommandPolicy` (deny-by-default on `agentModeEnabled`, per-class consent
+toggles with capture OFF, `halt` class for stops, token-bucket rate limits) + `RemoteInvokeReply`
+envelope + `RemoteCommandExecutor` (closure seams onto the live services; capture = confirm →
+announce → act via `ToolConfirmationCoordinator`) + `RemoteInvokeService` (pipeline + persisted
+audit ring) wired into `OpenClawEventClient` (`type:"req"` frames answered on the existing
+socket). Settings: per-class toggles + activity log in Gateway settings. Hardening riders:
+reconnect jitter, `LLMImagePreparer.isDegenerate` frame guard, `SecretInputField` (paste + reveal)
+swapped into 12 token/key forms. Token-in-URL hygiene was already fixed (handshake auth +
+`LogRedaction`). Deferred: live end-to-end against a real gateway (device/backend-pending).
 
 ## The problem
 The gateway link is one-directional in practice: the phone initiates every exchange

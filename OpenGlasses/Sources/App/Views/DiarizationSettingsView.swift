@@ -35,9 +35,7 @@ struct DiarizationSettingsView: View {
             }
 
             Section {
-                SecureField("Deepgram API Key", text: $keyInput)
-                    .autocorrectionDisabled()
-                    .textInputAutocapitalization(.never)
+                SecretInputField(placeholder: "Deepgram API Key", text: $keyInput)
                     .onChange(of: keyInput) { _, newValue in
                         Config.setDeepgramAPIKey(newValue.trimmingCharacters(in: .whitespacesAndNewlines))
                     }

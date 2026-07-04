@@ -32,11 +32,9 @@ struct AgentHarnessSettingsView: View {
             }
 
             Section {
-                SecureField("OpenAI Codex API token", text: $codexToken)
-                    .autocorrectionDisabled().textInputAutocapitalization(.never)
+                SecretInputField(placeholder: "OpenAI Codex API token", text: $codexToken)
                 urlField("Base URL (optional override)", text: $codexBaseURL)
-                SecureField("Claude Code API token", text: $claudeToken)
-                    .autocorrectionDisabled().textInputAutocapitalization(.never)
+                SecretInputField(placeholder: "Claude Code API token", text: $claudeToken)
                 urlField("Base URL (optional override)", text: $claudeBaseURL)
                 Button {
                     saveRemotePresets()
@@ -64,9 +62,7 @@ struct AgentHarnessSettingsView: View {
                 TextField("Header name", text: $config.authHeader)
                     .autocorrectionDisabled()
                     .textInputAutocapitalization(.never)
-                SecureField("Header value (e.g. Bearer …)", text: $config.authValue)
-                    .autocorrectionDisabled()
-                    .textInputAutocapitalization(.never)
+                SecretInputField(placeholder: "Header value (e.g. Bearer …)", text: $config.authValue)
             }
 
             Section {

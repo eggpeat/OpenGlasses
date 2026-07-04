@@ -532,6 +532,8 @@ class AppState: ObservableObject, AppStateProtocol {
     // OpenClaw + Realtime sessions
     let openClawBridge = OpenClawBridge()
     let openClawEventClient = OpenClawEventClient()
+    /// Remote invoke (Plan BH): gateway-initiated device commands, deny-by-default.
+    lazy var remoteInvoke: RemoteInvokeService = makeRemoteInvokeService()
     let geminiLiveSession = GeminiLiveSessionManager()
     let openAIRealtimeSession = OpenAIRealtimeSessionManager()
     let backgroundVoice = BackgroundVoiceService()
@@ -1012,6 +1014,17 @@ class AppState: ObservableObject, AppStateProtocol {
             guard let self else { return }
             Task { @MainActor in
                 await self.triageOpenClawNotification(message)
+            }
+        }
+        // Remote invoke (Plan BH): gateway-initiated device commands. Parser/policy/reply are
+        // pure and tested; the policy denies everything while Agent Mode is off, before the
+        // executor is ever consulted. Every exchange is audited (gateway settings).
+        openClawEventClient.onRemoteRequest = { [weak self] frame, respond in
+            guard let self else { return }
+            Task { @MainActor in
+                if let reply = await self.remoteInvoke.handleFrame(frame) {
+                    respond(reply)
+                }
             }
         }
         // Sync gateway memories when OpenClaw connects
@@ -2447,7 +2460,9 @@ class AppState: ObservableObject, AppStateProtocol {
     private func currentVisionFrameDataIfAvailable() -> Data? {
         guard Config.activeModel?.visionEnabled == true else { return nil }
         guard cameraService.isStreaming, let frame = cameraService.latestFrame else { return nil }
-        return frame.jpegData(compressionQuality: Config.geminiLiveVideoJPEGQuality)
+        guard let data = frame.jpegData(compressionQuality: Config.geminiLiveVideoJPEGQuality),
+              !LLMImagePreparer.isDegenerate(data) else { return nil }
+        return data
     }
 
     // MARK: - Smart Camera Activation
@@ -2501,9 +2516,12 @@ class AppState: ObservableObject, AppStateProtocol {
     private func smartCameraCapture(reason: String) async -> Data? {
         print("📷 Smart Camera: activating (\(reason))")
 
-        // If camera is already streaming, just grab the frame
+        // If camera is already streaming, just grab the frame — but never a degenerate
+        // placeholder (don't restart a running stream over a bad frame; just send no image).
         if cameraService.isStreaming, let frame = cameraService.latestFrame {
-            return frame.jpegData(compressionQuality: Config.geminiLiveVideoJPEGQuality)
+            guard let data = frame.jpegData(compressionQuality: Config.geminiLiveVideoJPEGQuality),
+                  !LLMImagePreparer.isDegenerate(data) else { return nil }
+            return data
         }
 
         // Try to start streaming and capture
@@ -2511,9 +2529,11 @@ class AppState: ObservableObject, AppStateProtocol {
             try await cameraService.startStreaming()
             // Brief wait for first frame
             try await Task.sleep(nanoseconds: 500_000_000)
-            if let frame = cameraService.latestFrame {
+            if let frame = cameraService.latestFrame,
+               let data = frame.jpegData(compressionQuality: Config.geminiLiveVideoJPEGQuality),
+               !LLMImagePreparer.isDegenerate(data) {
                 print("📷 Smart Camera: captured frame")
-                return frame.jpegData(compressionQuality: Config.geminiLiveVideoJPEGQuality)
+                return data
             }
             // Try photo capture as fallback
             let photoData = try await cameraService.capturePhoto()
@@ -2889,6 +2909,141 @@ class AppState: ObservableObject, AppStateProtocol {
     private func stopStopListener() {
         wakeWordService.listenForStop = false
         wakeWordService.pauseRecognitionPublic()
+    }
+
+    // MARK: - Remote Invoke (Plan BH)
+
+    /// Build the remote-invoke pipeline: pure parser/policy/reply + an executor whose stage
+    /// bodies map onto the live services. Capture-class commands confirm via the same
+    /// `ToolConfirmationCoordinator` UX as high-impact tools, then announce over TTS before any
+    /// sensor starts — nothing remote is ever silent.
+    private func makeRemoteInvokeService() -> RemoteInvokeService {
+        let executor = RemoteCommandExecutor(deps: .init(
+            confirmCapture: { [weak self] summary in
+                guard let self else { return false }
+                return await self.toolConfirmationCoordinator.requestConfirmation(
+                    toolName: "remote_invoke", summary: summary)
+            },
+            announce: { [weak self] text in
+                await self?.speechService.speak(text)
+            },
+            capturePhoto: { [weak self] in
+                guard let self else { throw RemoteInvokeError.unavailable }
+                let data = try await self.cameraService.capturePhoto()
+                self.cameraService.restoreAudioForWakeWord()
+                self.cameraService.saveToPhotoLibrary(data)
+            },
+            startAudioRecording: { [weak self] in
+                guard let self else { throw RemoteInvokeError.unavailable }
+                try self.audioRecorder.startRecording()
+            },
+            stopAudioRecording: { [weak self] in
+                guard let self else { return nil }
+                return await self.audioRecorder.stopRecording()?.lastPathComponent
+            },
+            startVideo: { [weak self] in
+                guard let self else { throw RemoteInvokeError.unavailable }
+                if !self.cameraService.isStreaming {
+                    try await self.cameraService.startStreaming()
+                }
+                let frameSize = self.cameraService.latestFrame?.size ?? CGSize(width: 720, height: 1280)
+                try self.videoRecorder.startRecording(
+                    from: self.cameraService.framePublisher,
+                    bitrate: max(Config.recordingBitrate, 4_000_000),
+                    outputSize: frameSize
+                )
+            },
+            stopVideo: { [weak self] in
+                guard let self else { return nil }
+                return await self.videoRecorder.stopRecording()?.lastPathComponent
+            },
+            startTranslation: { [weak self] source, target in
+                self?.liveTranslation.start(from: source ?? "auto", to: target ?? "en")
+            },
+            stopTranslation: { [weak self] in
+                self?.liveTranslation.stop()
+            },
+            startTranscription: { [weak self] in
+                self?.ambientCaptions.start()
+            },
+            stopTranscription: { [weak self] in
+                self?.ambientCaptions.stop()
+            },
+            speak: { [weak self] text in
+                await self?.speechService.speak(text)
+            },
+            displayShow: { [weak self] text, icon in
+                guard let self, self.glassesDisplay.deviceSupportsDisplay() else { return false }
+                self.glassesDisplay.showNotification(title: "Agent", body: text, icon: Self.remoteHUDIcon(for: icon))
+                return true
+            },
+            displayClear: { [weak self] in
+                self?.glassesDisplay.clear()
+            },
+            deviceStatus: { [weak self] in
+                guard let self else { return [:] }
+                return [
+                    "glasses_connected": String(self.glassesService.isConnected),
+                    "device_name": self.glassesService.deviceName ?? "none",
+                    "battery": self.glassesService.batteryLevel.map(String.init) ?? "unknown",
+                    "listening": String(self.isListening),
+                    "recording_audio": String(self.audioRecorder.isRecording),
+                    "recording_video": String(self.videoRecorder.isRecording),
+                    "transcribing": String(self.ambientCaptions.isActive),
+                    "translating": String(self.liveTranslation.isActive),
+                ]
+            },
+            deviceCapabilities: { [weak self] in
+                guard let self else { return [:] }
+                // What is *currently* true, not what the app theoretically has.
+                return [
+                    "camera": String(self.glassesService.isConnected),
+                    "display": String(self.glassesDisplay.deviceSupportsDisplay()),
+                    "speak": "true",
+                    "audio_recording": "true",
+                    "video_recording": String(self.glassesService.isConnected),
+                    "transcription": "true",
+                    "translation": "true",
+                    "notes": "true",
+                ]
+            },
+            addNote: { [weak self] text in
+                guard let self else { throw RemoteInvokeError.unavailable }
+                return try await self.nativeToolRouter.registry.executeTool(
+                    name: "save_note", arguments: ["content": text])
+            },
+            getTranscript: { [weak self] in
+                guard let self else { return "" }
+                // History is newest-first; reply chronologically, bounded.
+                return self.ambientCaptions.captionHistory.prefix(20).reversed()
+                    .map { $0.text }.joined(separator: "\n")
+            },
+            stopAll: { [weak self] in
+                guard let self else { return }
+                self.speechService.stopSpeaking()
+                if self.audioRecorder.isRecording { _ = await self.audioRecorder.stopRecording() }
+                if self.videoRecorder.isRecording { _ = await self.videoRecorder.stopRecording() }
+                if self.ambientCaptions.isActive { self.ambientCaptions.stop() }
+                if self.liveTranslation.isActive { self.liveTranslation.stop() }
+            }
+        ))
+        return RemoteInvokeService(
+            environment: .init(
+                agentModeEnabled: { Config.agentModeEnabled },
+                toggles: { Config.remoteInvokeToggles },
+                now: { Date() }
+            ),
+            executor: executor
+        )
+    }
+
+    private static func remoteHUDIcon(for name: String?) -> GlassesDisplayService.HUDIcon {
+        switch name?.lowercased() {
+        case "success": return .success
+        case "warning": return .warning
+        case "error": return .error
+        default: return .info
+        }
     }
 
     // MARK: - OpenClaw Notification Triage

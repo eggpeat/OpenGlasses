@@ -19,6 +19,16 @@ enum LLMImagePreparer {
     static let maxLongEdge: CGFloat = 1568
     /// Byte ceiling for the encoded JPEG, kept comfortably under Anthropic's 5 MB hard limit.
     static let maxBytes = 4_500_000
+    /// Frames below this long edge carry no usable content (the 1×1 placeholder failure mode).
+    static let minLongEdge = 32
+
+    /// True for undecodable or absurdly small images (long edge < `minLongEdge`). Such frames
+    /// should be dropped before they are base64'd into a conversation and poison context —
+    /// a degenerate placeholder frame reads as "the camera saw nothing" to the model.
+    static func isDegenerate(_ data: Data) -> Bool {
+        guard let image = UIImage(data: data), let cg = image.cgImage else { return true }
+        return max(cg.width, cg.height) < minLongEdge
+    }
 
     /// Returns JPEG `Data` within `maxLongEdge` / `maxBytes` where possible. Already-bounded
     /// input is returned unchanged (no re-encode). Undecodable input is returned as-is —

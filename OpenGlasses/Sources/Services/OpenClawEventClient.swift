@@ -7,6 +7,9 @@ class OpenClawEventClient {
     var onNotification: ((String) -> Void)?
     /// Surfaces live pairing/connection state to the gateway settings UI.
     var onPairingStatusChange: ((PairingStatus) -> Void)?
+    /// Remote invoke (Plan BH): an unsolicited server→client request frame arrived. The handler
+    /// produces exactly one reply frame and passes it to the completion for sending.
+    var onRemoteRequest: (([String: Any], @escaping ([String: Any]) -> Void) -> Void)?
 
     private var webSocketTask: URLSessionWebSocketTask?
     private var session: URLSession?
@@ -169,6 +172,33 @@ class OpenClawEventClient {
             handleEvent(json)
         } else if type == "res" {
             handleConnectResponse(json, rawText: text)
+        } else if type == "req" {
+            handleRequestFrame(json)
+        }
+    }
+
+    /// Remote invoke (Plan BH): an unsolicited server→client request. The wired handler owns
+    /// parse/policy/execute and always produces exactly one reply frame; with no handler wired
+    /// we still answer (unsupported) rather than leave the gateway hanging.
+    private func handleRequestFrame(_ json: [String: Any]) {
+        guard let handler = onRemoteRequest else {
+            if let request = RemoteCommandParser.parse(json) {
+                sendFrame(RemoteInvokeReply.unsupported(id: request.id, action: "remote_invoke"))
+            }
+            return
+        }
+        handler(json) { [weak self] reply in
+            self?.sendFrame(reply)
+        }
+    }
+
+    private func sendFrame(_ frame: [String: Any]) {
+        guard let data = try? JSONSerialization.data(withJSONObject: frame),
+              let string = String(data: data, encoding: .utf8) else { return }
+        webSocketTask?.send(.string(string)) { error in
+            if let error {
+                NSLog("[OpenClawWS] Reply send error: %@", error.localizedDescription)
+            }
         }
     }
 
@@ -298,8 +328,12 @@ class OpenClawEventClient {
 
     private func scheduleReconnect() {
         guard shouldReconnect else { return }
-        NSLog("[OpenClawWS] Reconnecting in %.0fs", reconnectDelay)
-        DispatchQueue.main.asyncAfter(deadline: .now() + reconnectDelay) { [weak self] in
+        // Jitter (±20%) so a fleet of clients doesn't stampede a recovering gateway in lockstep.
+        // The socket is load-bearing for inbound remote invoke (Plan BH), so we keep retrying
+        // forever — but connection state is surfaced via `onPairingStatusChange`, never silent.
+        let delay = reconnectDelay * Double.random(in: 0.8...1.2)
+        NSLog("[OpenClawWS] Reconnecting in %.1fs", delay)
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
             guard let self, self.shouldReconnect else { return }
             self.reconnectDelay = min(self.reconnectDelay * 2, self.maxReconnectDelay)
             self.establishConnection()

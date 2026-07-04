@@ -109,9 +109,7 @@ struct MCPCatalogInstallView: View {
 
             if entry.auth.kind != .none {
                 Section {
-                    SecureField("Token", text: $token)
-                        .autocorrectionDisabled()
-                        .textInputAutocapitalization(.never)
+                    SecretInputField(placeholder: "Token", text: $token)
                 } header: {
                     Text(entry.auth.kind == .oauth ? "Access token (paste)" : "Bearer token")
                 } footer: {
