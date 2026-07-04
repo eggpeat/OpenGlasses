@@ -1,6 +1,6 @@
 # Plan BE — Wake-Word Service Hardening
 
-**Status:** 📋 Planned (audit round 12, priority 4)
+**Status:** ✅ Shipped ([#157](https://github.com/straff2002/OpenGlasses/pull/157)) — `WakeTapState` lock-guarded tap snapshot (audio-thread race); owned NotificationCenter tokens (per-reconnect leak); on-device wake recognition (`Config.onDeviceWakeWordEnabled`, default on); coordinator-aware interruption recovery; `SilenceTracker` off the main actor (`WakeWordHardeningTests`).
 
 ## The problem
 `WakeWordService` is the app's always-on path, and the July 2026 audit found its four worst
