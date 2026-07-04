@@ -1,6 +1,6 @@
 # Plan BF — LLM Turn Hygiene: history repair, image pruning, prompt caching
 
-**Status:** 📋 Planned (audit round 12, priority 5)
+**Status:** ✅ Shipped ([#157](https://github.com/straff2002/OpenGlasses/pull/157)) — `HistoryHygiene` (dangling `tool_use` repair, old-image prune, image-aware token estimate); synthetic error `tool_result`s; Anthropic `cache_control` on system prompt + tool schemas (`HistoryHygieneTests`).
 
 ## The problem
 Three compounding defects in how `LLMService` manages the conversation it sends every turn:

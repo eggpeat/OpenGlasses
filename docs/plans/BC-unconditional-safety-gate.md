@@ -1,6 +1,6 @@
 # Plan BC — Unconditional Tool Safety Gate & MCP Server Auth
 
-**Status:** 📋 Planned (audit round 12, priority 2)
+**Status:** ✅ Shipped ([#157](https://github.com/straff2002/OpenGlasses/pull/157)) — `HighImpactToolPolicy` confirmation regardless of Agent Mode; `MCPGlassesServer` bearer-token auth (Keychain, shown in Settings); `URLFetchGuard` SSRF screen in `QRContextTool` (`SafetyGateTests`).
 
 ## The problem
 Two high-severity security findings from the July 2026 audit:

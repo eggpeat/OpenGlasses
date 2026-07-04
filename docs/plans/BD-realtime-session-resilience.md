@@ -1,6 +1,6 @@
 # Plan BD — Realtime Session Resilience
 
-**Status:** 📋 Planned (audit round 12, priority 3)
+**Status:** ✅ Shipped ([#157](https://github.com/straff2002/OpenGlasses/pull/157)) — pure `RealtimeReconnect` (backoff/give-up + fatal-vs-recoverable classifier) shared by Gemini Live + OpenAI Realtime; `goAway` reconnects; recoverable errors no longer terminal-deafen; connect-timeout/coalescing/counter fixes; audible failure cue (`RealtimeReconnectTests`). Live long-session soak is device-pending.
 
 ## The problem
 The July 2026 audit found that **every long realtime session currently dies or wedges**, and the
