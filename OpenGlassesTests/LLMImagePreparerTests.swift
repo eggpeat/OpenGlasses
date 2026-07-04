@@ -59,4 +59,24 @@ final class LLMImagePreparerTests: XCTestCase {
         let garbage = Data([0x00, 0x01, 0x02, 0x03, 0x04])
         XCTAssertEqual(LLMImagePreparer.prepared(garbage), garbage)
     }
+
+    // MARK: - Degenerate-frame guard (Plan BH hardening)
+
+    func testTinyPlaceholderFramesAreDegenerate() {
+        // The 1×1 placeholder failure mode, and anything under the minimum edge.
+        XCTAssertTrue(LLMImagePreparer.isDegenerate(jpeg(width: 1, height: 1)))
+        XCTAssertTrue(LLMImagePreparer.isDegenerate(jpeg(width: 16, height: 16)))
+        XCTAssertTrue(LLMImagePreparer.isDegenerate(jpeg(width: 31, height: 8)))
+    }
+
+    func testUndecodableDataIsDegenerate() {
+        XCTAssertTrue(LLMImagePreparer.isDegenerate(Data([0xDE, 0xAD, 0xBE, 0xEF])))
+        XCTAssertTrue(LLMImagePreparer.isDegenerate(Data()))
+    }
+
+    func testRealFramesAreNotDegenerate() {
+        XCTAssertFalse(LLMImagePreparer.isDegenerate(jpeg(width: 32, height: 32)),
+                       "the minimum edge itself passes")
+        XCTAssertFalse(LLMImagePreparer.isDegenerate(jpeg(width: 1280, height: 720)))
+    }
 }

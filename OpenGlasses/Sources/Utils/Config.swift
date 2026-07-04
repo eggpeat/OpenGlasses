@@ -1406,6 +1406,23 @@ struct Config {
 
     static func setShowAllQuickActions(_ show: Bool) { showAllQuickActions = show }
 
+    // MARK: - Remote Invoke (Plan BH)
+
+    // Per-class consent for gateway-initiated device commands. The whole surface additionally
+    // gates on `agentModeEnabled`; capture (photo/video/audio/transcription/translation) is the
+    // surveillance class and defaults OFF.
+    @UserDefaultsBacked("remoteInvokeObserveEnabled", default: true) static var remoteInvokeObserveEnabled: Bool
+    @UserDefaultsBacked("remoteInvokeOutputEnabled", default: true) static var remoteInvokeOutputEnabled: Bool
+    @UserDefaultsBacked("remoteInvokeCaptureEnabled", default: false) static var remoteInvokeCaptureEnabled: Bool
+
+    static var remoteInvokeToggles: RemoteCommandPolicy.Toggles {
+        RemoteCommandPolicy.Toggles(
+            observe: remoteInvokeObserveEnabled,
+            output: remoteInvokeOutputEnabled,
+            capture: remoteInvokeCaptureEnabled
+        )
+    }
+
     // MARK: - OpenClaw Configuration
 
     @UserDefaultsBacked("openClawEnabled", default: false) static var openClawEnabled: Bool

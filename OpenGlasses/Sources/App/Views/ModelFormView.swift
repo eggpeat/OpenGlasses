@@ -110,9 +110,7 @@ struct ModelFormView: View {
                     claudeSignInRows
                 }
 
-                SecureField(anthropicKeyPlaceholder, text: $apiKey)
-                    .autocorrectionDisabled()
-                    .textInputAutocapitalization(.never)
+                SecretInputField(placeholder: anthropicKeyPlaceholder, text: $apiKey)
                     .onChange(of: apiKey) { _, _ in resetModelList() }
 
                 if let url = selectedProvider.consoleURL {
