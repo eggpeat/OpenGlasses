@@ -2252,25 +2252,18 @@ class AppState: ObservableObject, AppStateProtocol {
     func handleWakeWordDetected(manual: Bool = false) async {
         print("🎤 \(manual ? "Tap-to-talk" : "Wake word") detected! Starting conversation...")
         manuallyTriggered = manual
-        inConversation = true
-
-        // Ensure audio session + engine are alive BEFORE marking ourselves as listening.
-        // Tap-to-talk calls stopListening() first (engine = nil), and startListening()
-        // bails on `guard !isListening`, so setting isListening early would leave the shared
-        // engine dead and force TranscriptionService onto a fragile fallback engine.
-        wakeWordService.configureAudioSession()
-        try? await wakeWordService.ensureAudioEngineRunning()
-        isListening = true
-
-        // Snapshot what's playing before pausing it
-        nowPlayingAtStart = NowPlayingSnapshot.current()
-
-        // Pause podcasts/music so the user can speak clearly (skips if call in progress)
-        wakeWordService.pauseOtherAudio()
-
-        speechService.playAcknowledgmentTone()
-        transcriptionService.startRecording()
-        updateLiveActivity()
+        // The engine-before-listening ordering lives (tested) in ConversationStartSequence.
+        await ConversationStartSequence.run(.init(
+            beginConversation: { [self] in inConversation = true },
+            configureAudioSession: { [self] in wakeWordService.configureAudioSession() },
+            ensureAudioEngineRunning: { [self] in try await wakeWordService.ensureAudioEngineRunning() },
+            markListening: { [self] in isListening = true },
+            snapshotNowPlaying: { [self] in nowPlayingAtStart = NowPlayingSnapshot.current() },
+            pauseOtherAudio: { [self] in wakeWordService.pauseOtherAudio() },
+            playAcknowledgmentTone: { [self] in speechService.playAcknowledgmentTone() },
+            startRecording: { [self] in transcriptionService.startRecording() },
+            updateLiveActivity: { [self] in updateLiveActivity() }
+        ))
     }
 
     // MARK: - Voice Commands
@@ -2348,6 +2341,102 @@ class AppState: ObservableObject, AppStateProtocol {
                 guard await self.intentClassifier.classify(transcript: text) == .ignore else { return false }
                 print("🚫 Intent classifier: IGNORE — not responding")
                 await self.resumeListeningOrReturnToWakeWord()
+                return true
+            },
+        ]
+    }
+
+    /// The post-store voice-command chain (Plan BG P2): stop, goodbye, and photo. These run after
+    /// the user's turn is persisted to the conversation store and after persona detection, so the
+    /// photo handler prompts the LLM with the persona-stripped `query` while command matching uses
+    /// the raw transcript. Same first-consumer-wins contract as `preLLMHandlers`.
+    private func postStoreHandlers(query: String) -> [VoiceCommandHandler] {
+        [
+            // "stop" — interrupt TTS, stay in conversation
+            VoiceCommandHandler(label: "stop") { [weak self] text in
+                guard let self, self.isStopCommand(text) else { return false }
+                print("🛑 Voice command: stop")
+                self.speechService.stopSpeaking()
+                if self.inConversation { print("💬 Stopped — listening for next question...") }
+                await self.resumeListeningOrReturnToWakeWord()
+                return true
+            },
+            // "goodbye" — end conversation, back to wake word
+            VoiceCommandHandler(label: "goodbye") { [weak self] text in
+                guard let self, self.isGoodbyeCommand(text) else { return false }
+                print("👋 Voice command: goodbye")
+                self.speechService.stopSpeaking()
+                self.inConversation = false
+                self.lastResponse = "Goodbye!"
+                await self.speechService.speak("Goodbye!")
+                await self.returnToWakeWord()
+                return true
+            },
+            // "take a picture" — capture photo from glasses camera, describe via the vision LLM
+            VoiceCommandHandler(label: "photo") { [weak self] text in
+                guard let self, self.isPhotoCommand(text) else { return false }
+                print("📸 Voice command: take a picture")
+                self.isProcessing = true
+                // Start capture immediately — play the shutter tone, no spoken "taking a picture"
+                self.speechService.playAcknowledgmentTone()
+                self.speechService.startThinkingSound()
+
+                self.currentLLMTask = Task {
+                    await ConversationTurnRunner.run(.init(
+                        send: {
+                            // Capture and send to LLM concurrently — no extra round-trip speech
+                            let photoData = try await self.cameraService.capturePhoto()
+                            try Task.checkCancellation()
+                            // Restore audio for wake word after camera capture (camera reconfigures for Bluetooth)
+                            self.cameraService.restoreAudioForWakeWord()
+                            self.cameraService.saveToPhotoLibrary(photoData)
+                            print("📸 Photo captured, sending to LLM with prompt: \(query)")
+
+                            return try await self.llmService.sendMessage(
+                                query,
+                                locationContext: self.locationService.locationContext,
+                                imageData: photoData,
+                                memoryContext: Config.userMemoryEnabled ? self.userMemory.systemPromptContext(query: Config.userMemoryRetrievalEnabled ? query : nil) : nil
+                            )
+                        },
+                        postProcess: { rawResponse in
+                            Config.userMemoryEnabled ? self.userMemory.parseAndExecuteCommands(in: rawResponse) : rawResponse
+                        },
+                        accept: { response in
+                            self.lastResponse = response
+                            if Config.conversationPersistenceEnabled {
+                                self.conversationStore.appendMessage(role: "assistant", content: response)
+                            }
+                            print("🤖 \(self.llmService.activeModelName) (vision): \(response)")
+
+                            // If an audio or video recording is active, inject the description
+                            // into the caption history so the meeting assistant has visual context.
+                            if self.audioRecorder.isRecording || self.videoRecorder.isRecording {
+                                self.ambientCaptions.insertVisualNote(response)
+                            }
+                        },
+                        speak: { response in
+                            // Start wake word listener during TTS so user can say "stop"
+                            self.startStopListener()
+                            await self.speechService.speak(response)
+                            self.stopStopListener()
+                        },
+                        onCancelled: {
+                            print("🛑 Photo/LLM task cancelled")
+                        },
+                        onError: { error in
+                            self.cameraService.restoreAudioForWakeWord()
+                            print("📸 Photo capture failed: \(error)")
+                            self.lastResponse = "Photo failed: \(error.localizedDescription)"
+                            await self.speechService.speak("Sorry, I couldn't take a photo or process the image. \(error.localizedDescription)")
+                        },
+                        finish: {
+                            self.isProcessing = false
+                            self.speechService.stopThinkingSound()
+                            await self.resumeListeningOrReturnToWakeWord(ensureEngine: true)
+                        }
+                    ))
+                }
                 return true
             },
         ]
@@ -2487,90 +2576,11 @@ class AppState: ObservableObject, AppStateProtocol {
             conversationStore.appendMessage(role: "user", content: text)
         }
 
-        // Voice command: "stop" — interrupt TTS, stay in conversation
-        if isStopCommand(text) {
-            print("🛑 Voice command: stop")
-            speechService.stopSpeaking()
-            if inConversation { print("💬 Stopped — listening for next question...") }
-            await resumeListeningOrReturnToWakeWord()
-            return
-        }
-
-        // Voice command: "goodbye" — end conversation, back to wake word
-        if isGoodbyeCommand(text) {
-            print("👋 Voice command: goodbye")
-            speechService.stopSpeaking()
-            inConversation = false
-            lastResponse = "Goodbye!"
-            await speechService.speak("Goodbye!")
-            await returnToWakeWord()
-            return
-        }
-
-        // Voice command: "take a picture" — capture photo from glasses camera
-        if isPhotoCommand(text) {
-            print("📸 Voice command: take a picture")
-            isProcessing = true
-            // Start capture immediately — play the shutter tone, no spoken "taking a picture"
-            speechService.playAcknowledgmentTone()
-            speechService.startThinkingSound()
-
-            currentLLMTask = Task {
-                await ConversationTurnRunner.run(.init(
-                    send: { [self] in
-                        // Capture and send to LLM concurrently — no extra round-trip speech
-                        let photoData = try await cameraService.capturePhoto()
-                        try Task.checkCancellation()
-                        // Restore audio for wake word after camera capture (camera reconfigures for Bluetooth)
-                        cameraService.restoreAudioForWakeWord()
-                        cameraService.saveToPhotoLibrary(photoData)
-                        print("📸 Photo captured, sending to LLM with prompt: \(query)")
-
-                        return try await llmService.sendMessage(
-                            query,
-                            locationContext: locationService.locationContext,
-                            imageData: photoData,
-                            memoryContext: Config.userMemoryEnabled ? userMemory.systemPromptContext(query: Config.userMemoryRetrievalEnabled ? query : nil) : nil
-                        )
-                    },
-                    postProcess: { [self] rawResponse in
-                        Config.userMemoryEnabled ? userMemory.parseAndExecuteCommands(in: rawResponse) : rawResponse
-                    },
-                    accept: { [self] response in
-                        lastResponse = response
-                        if Config.conversationPersistenceEnabled {
-                            conversationStore.appendMessage(role: "assistant", content: response)
-                        }
-                        print("🤖 \(llmService.activeModelName) (vision): \(response)")
-
-                        // If an audio or video recording is active, inject the description
-                        // into the caption history so the meeting assistant has visual context.
-                        if audioRecorder.isRecording || videoRecorder.isRecording {
-                            ambientCaptions.insertVisualNote(response)
-                        }
-                    },
-                    speak: { [self] response in
-                        // Start wake word listener during TTS so user can say "stop"
-                        startStopListener()
-                        await speechService.speak(response)
-                        stopStopListener()
-                    },
-                    onCancelled: {
-                        print("🛑 Photo/LLM task cancelled")
-                    },
-                    onError: { [self] error in
-                        cameraService.restoreAudioForWakeWord()
-                        print("📸 Photo capture failed: \(error)")
-                        lastResponse = "Photo failed: \(error.localizedDescription)"
-                        await speechService.speak("Sorry, I couldn't take a photo or process the image. \(error.localizedDescription)")
-                    },
-                    finish: { [self] in
-                        isProcessing = false
-                        speechService.stopThinkingSound()
-                        await resumeListeningOrReturnToWakeWord(ensureEngine: true)
-                    }
-                ))
-            }
+        // Post-store voice-command chain (Plan BG P2): stop, goodbye, photo. Runs after the user
+        // turn is persisted (so "stop"/"goodbye" still appear in the thread) and after persona
+        // detection (the photo prompt uses the persona-stripped `query`). The first consumer
+        // short-circuits before the LLM; order is preserved from the original if-ladder.
+        if await ConversationFlowEngine(handlers: postStoreHandlers(query: query)).route(text) != nil {
             return
         }
 
@@ -2769,56 +2779,74 @@ class AppState: ObservableObject, AppStateProtocol {
         let streamThreadId = conversationStore.activeThreadId
         if let streamThreadId { streamingTurn = StreamingTurn(threadId: streamThreadId, text: "") }
 
-        do {
-            // Use provided image, or fall back to smart camera if no image attached
-            let image: Data?
-            if let imageData {
-                image = imageData
-            } else {
-                image = await smartCameraImageData(for: query)
-            }
-            let rawResponse = try await llmService.sendMessage(
-                query,
-                locationContext: locationService.locationContext,
-                imageData: image,
-                memoryContext: Config.userMemoryEnabled ? userMemory.systemPromptContext(query: Config.userMemoryRetrievalEnabled ? query : nil) : nil,
-                playbookContext: playbookStore.playbookContext(),
-                shortcutsContext: ShortcutsCatalog.shared.promptBlock(),
-                onToken: { [weak self] chunk in
-                    guard let self, let id = streamThreadId else { return }
-                    if self.streamingTurn?.threadId == id { self.streamingTurn?.text += chunk }
+        // Typed turns run the same skeleton as voice turns, tracked in `currentLLMTask` so
+        // barge-in / cancel stops a typed turn too (Plan BG P2: every turn is cancellable).
+        // Awaited so callers (Siri intent, askUnderPersona) still see the turn complete.
+        let turn = Task {
+            await ConversationTurnRunner.run(.init(
+                send: { [self] in
+                    // Use provided image, or fall back to smart camera if no image attached
+                    let image: Data?
+                    if let imageData {
+                        image = imageData
+                    } else {
+                        image = await smartCameraImageData(for: query)
+                    }
+                    return try await llmService.sendMessage(
+                        query,
+                        locationContext: locationService.locationContext,
+                        imageData: image,
+                        memoryContext: Config.userMemoryEnabled ? userMemory.systemPromptContext(query: Config.userMemoryRetrievalEnabled ? query : nil) : nil,
+                        playbookContext: playbookStore.playbookContext(),
+                        shortcutsContext: ShortcutsCatalog.shared.promptBlock(),
+                        onToken: { [weak self] chunk in
+                            guard let self, let id = streamThreadId else { return }
+                            if self.streamingTurn?.threadId == id { self.streamingTurn?.text += chunk }
+                        }
+                    )
+                },
+                postProcess: { [self] rawResponse in
+                    Config.userMemoryEnabled ? userMemory.parseAndExecuteCommands(in: rawResponse) : rawResponse
+                },
+                accept: { [self] response in
+                    lastResponse = response
+                    streamingTurn = nil  // clear before persisting so the live bubble doesn't duplicate the saved message
+
+                    if Config.conversationPersistenceEnabled {
+                        conversationStore.appendMessage(role: "assistant", content: response)
+                    }
+
+                    // Memory loop (Phase 3): spot a durable fact or a repeated multi-step request and
+                    // offer to remember it (or silently save it in Agent Mode).
+                    MemoryLoopService.shared.observeTurn(userText: query, assistantText: response,
+                                                         toolNames: nativeToolRouter.takeTurnToolNames())
+                },
+                speak: { [self] response in
+                    // Speak the response (user can still say "stop")
+                    guard speakResponse else { return }
+                    startStopListener()
+                    await speechService.speak(response)
+                    stopStopListener()
+                },
+                onCancelled: { [self] in
+                    streamingTurn = nil
+                    print("🛑 Text turn cancelled")
+                },
+                onError: { [self] error in
+                    streamingTurn = nil
+                    errorMessage = "Failed to get response: \(error.localizedDescription)"
+                    if speakResponse {
+                        await speechService.speak("Sorry, I encountered an error.")
+                    }
+                },
+                finish: { [self] in
+                    isProcessing = false
+                    speechService.stopThinkingSound()
                 }
-            )
-
-            let response = Config.userMemoryEnabled ? userMemory.parseAndExecuteCommands(in: rawResponse) : rawResponse
-            lastResponse = response
-            streamingTurn = nil  // clear before persisting so the live bubble doesn't duplicate the saved message
-
-            if Config.conversationPersistenceEnabled {
-                conversationStore.appendMessage(role: "assistant", content: response)
-            }
-
-            // Memory loop (Phase 3): spot a durable fact or a repeated multi-step request and
-            // offer to remember it (or silently save it in Agent Mode).
-            MemoryLoopService.shared.observeTurn(userText: query, assistantText: response,
-                                                 toolNames: nativeToolRouter.takeTurnToolNames())
-
-            // Speak the response (user can still say "stop")
-            if speakResponse {
-                startStopListener()
-                await speechService.speak(response)
-                stopStopListener()
-            }
-        } catch {
-            streamingTurn = nil
-            errorMessage = "Failed to get response: \(error.localizedDescription)"
-            if speakResponse {
-                await speechService.speak("Sorry, I encountered an error.")
-            }
+            ))
         }
-
-        isProcessing = false
-        speechService.stopThinkingSound()
+        currentLLMTask = turn
+        await turn.value
     }
 
     /// Run a one-shot query under a specific persona, then restore the prior

@@ -3,13 +3,13 @@
 **Status:** 🚧 Phased, one PR per phase. **P1 shipped** (registry-generated tool prompts).
 **P3 shipped** (one tool-loop driver). **P4 shipped** (merged realtime audio engine).
 **P5 shipped incrementally** (`@UserDefaultsBacked` cohorts, model types → `Models/`, NotesTool rename).
-**P2 shipped incrementally:** pure `VoiceCommandParser`; `ConversationFlowEngine` +
-`VoiceCommandHandler` pre-LLM chain; `resumeListeningOrReturnToWakeWord` dedup; cancellable
-turns; pure `ModelRoutingPolicy`; `ConversationTurnRunner` (the LLM-turn skeleton — send →
-post-process → cancel-check → accept → speak → always-finish — behind testable closure seams,
-adopted by the photo and normal turns). Still open in P2 (small follow-ups): fold the inline
-stop/goodbye/photo ifs into a post-store handler chain; adopt the turn runner in
-`sendTextMessage`; extract the wake-detected start sequence behind a seam. All P2 changes to the
+**P2 complete:** pure `VoiceCommandParser`; `ConversationFlowEngine` + `VoiceCommandHandler`
+chains (pre-LLM: teleprompter/HUD task/launcher/intent-ignore; post-store: stop/goodbye/photo);
+`resumeListeningOrReturnToWakeWord` dedup; pure `ModelRoutingPolicy`; `ConversationTurnRunner`
+(the LLM-turn skeleton — send → post-process → cancel-check → accept → speak → always-finish —
+behind testable closure seams, adopted by the photo, normal, and typed turns, all tracked in
+`currentLLMTask` so barge-in/stop/cancel stops any turn); `ConversationStartSequence` (the
+wake-detected choreography, locking the engine-before-listening ordering). All P2 changes to the
 live voice path still want an on-glasses smoke test.
 
 ## The problem
