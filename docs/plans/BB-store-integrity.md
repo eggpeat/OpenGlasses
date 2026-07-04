@@ -1,6 +1,6 @@
 # Plan BB — Store Integrity & Data-Loss Hardening
 
-**Status:** 📋 Planned (audit round 12, priority 1)
+**Status:** ✅ Shipped ([#157](https://github.com/straff2002/OpenGlasses/pull/157)) — `JSONStore` (backup-on-corrupt, salvage decode, unreadable-state save suppression); PlaybookStore/AgentDocumentStore overwrite fixes; SemanticMemoryStore parameterized SQL + save reporting; encrypted-ConversationStore serialization; same pattern across Teleprompter/Study/SafetyAssessment/Vault stores (`StoreIntegrityTests`).
 
 ## The problem
 A July 2026 six-track code audit found the persistence layer's biggest risk is not corruption —
