@@ -1841,8 +1841,22 @@ class LLMService: ObservableObject {
             appleSession = LanguageModelSession(instructions: systemPrompt)
         }
 
-        let response = try await appleSession!.respond(to: text)
-        return response.content
+        let session = appleSession!
+        let response = try await session.respond(to: text)
+
+        // Uncertainty gate (Plan BI): no tool channel is wired on the Apple on-device path, so a
+        // hedged or freshness-sensitive answer gets one transparent web-grounded re-ask.
+        var answer = response.content
+        if Config.localWebSearchFallbackEnabled,
+           UncertaintyDetector.assess(question: text, answer: answer).shouldSearch {
+            answer = await UncertaintyReask.answer(
+                question: text,
+                originalAnswer: answer,
+                search: { query in try await WebSearchTool().execute(args: ["query": query]) },
+                regenerate: { grounding in try await session.respond(to: grounding).content }
+            )
+        }
+        return answer
     }
     #endif
 
@@ -1982,9 +1996,30 @@ class LLMService: ObservableObject {
         let cleanResponse = response
             .replacingOccurrences(of: #"<tool_call>.*?</tool_call>"#, with: "", options: .regularExpression)
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        conversationHistory.append(["role": "assistant", "content": cleanResponse])
+
+        // Uncertainty gate (Plan BI): the local path can't reach `web_search` through a tool
+        // loop, so a hedged or freshness-sensitive answer gets one transparent web-grounded
+        // re-ask. Off-flag or confident answers pass straight through.
+        var finalAnswer = cleanResponse
+        if Config.localWebSearchFallbackEnabled,
+           UncertaintyDetector.assess(question: text, answer: cleanResponse).shouldSearch {
+            finalAnswer = await UncertaintyReask.answer(
+                question: text,
+                originalAnswer: cleanResponse,
+                search: { query in try await WebSearchTool().execute(args: ["query": query]) },
+                regenerate: { grounding in
+                    try await localService.generate(
+                        userMessage: grounding,
+                        systemPrompt: fullPrompt,
+                        history: history
+                    )
+                }
+            )
+        }
+
+        conversationHistory.append(["role": "assistant", "content": finalAnswer])
         trimHistory()
-        return cleanResponse
+        return finalAnswer
     }
 
     // MARK: - Local Agent Model

@@ -1,6 +1,12 @@
 # Plan BI — Uncertainty-Triggered Web Search (local backends)
 
-**Status:** 📋 Planned.
+**Status:** ✅ Shipped — pure `UncertaintyDetector` (anchored epistemic hedges + word-boundary
+freshness markers; freshness wins the reason) + `UncertaintyReask` (search → grounding splice →
+exactly one regenerate; every failure path falls back to the original answer; transparency
+prefix, never a silent swap), wired into `sendLocal` and `sendAppleOnDeviceImpl` behind
+`Config.localWebSearchFallbackEnabled` (default on; `WebSearchTool`'s DuckDuckGo fallback is
+keyless so no `isWebSearchConfigured` gate was needed). On-device answer-quality tuning of the
+hedge/freshness lists is the follow-up; logit-based confidence remains deferred.
 
 ## Why this shape
 
