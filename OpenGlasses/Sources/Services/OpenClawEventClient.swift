@@ -19,6 +19,9 @@ class OpenClawEventClient {
     private let maxReconnectDelay: TimeInterval = 30
     /// The gateway resolved for the current connection — its credential drives the handshake.
     private var currentGateway: GatewayConfig?
+    /// Nonce from the gateway's `connect.challenge` — signed into the device-identity block so
+    /// remote gateways grant real scopes (token-only connects can be granted zero scopes).
+    private var challengeNonce: String?
 
     func connect() {
         guard Config.isOpenClawConfigured else {
@@ -31,8 +34,10 @@ class OpenClawEventClient {
     }
 
     func disconnect() {
+        sendDeviceEvent(type: "connection", payload: ["status": "disconnected"])
         shouldReconnect = false
         isConnected = false
+        challengeNonce = nil
         webSocketTask?.cancel(with: .normalClosure, reason: nil)
         webSocketTask = nil
         session?.invalidateAndCancel()
@@ -202,6 +207,25 @@ class OpenClawEventClient {
         }
     }
 
+    /// Fire-and-forget `device.event` push (Plan BH follow-up): tell the gateway-side agent
+    /// something changed on the device without being asked — connection state, glasses
+    /// attach/detach, battery. The request/reply invoke path stays unchanged; this is the
+    /// outbound half of the bidirectional terminal. No-op unless the socket is authenticated.
+    func sendDeviceEvent(type: String, payload: [String: Any]) {
+        guard isConnected else { return }
+        var body: [String: Any] = [
+            "type": type,
+            "timestamp": Int(Date().timeIntervalSince1970),
+        ]
+        if !payload.isEmpty { body["data"] = payload }
+        sendFrame([
+            "type": "event",
+            "event": "device.event",
+            "payload": body,
+        ])
+        NSLog("[OpenClawWS] Sent device.event type=%@", type)
+    }
+
     /// Map a connect `res` to a pairing outcome: persist a freshly-issued device token, update
     /// connection state, and surface the status. Pure interpretation lives in
     /// `PairingResponseInterpreter`; this applies its side effects.
@@ -218,6 +242,7 @@ class OpenClawEventClient {
             isConnected = true
             reconnectDelay = 2
             NSLog("[OpenClawWS] Connected and authenticated")
+            sendDeviceEvent(type: "connection", payload: ["status": "connected"])
         case .waitingApproval:
             NSLog("[OpenClawWS] Device pairing pending — awaiting approval on the gateway")
         case .error(let msg):
@@ -234,6 +259,7 @@ class OpenClawEventClient {
 
         switch event {
         case "connect.challenge":
+            challengeNonce = payload["nonce"] as? String
             sendConnectHandshake()
         case "device.paired":
             if let outcome = PairingResponseInterpreter.interpretPairedEvent(payload),
@@ -269,27 +295,20 @@ class OpenClawEventClient {
             token = Config.openClawGatewayToken
         }
 
-        var client: [String: Any] = [
-            "id": "gateway-client",
-            "displayName": "OpenGlasses",
-            "version": Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0",
-            "platform": "ios",
-            "mode": "node"
-        ]
-        if !deviceId.isEmpty { client["deviceId"] = deviceId }
-
+        // Shared builder (protocol v3/v4): role/scopes, capability advertisement, and — when the
+        // gateway issued a challenge nonce — the signed Ed25519 device-identity block.
         let connectMsg: [String: Any] = [
             "type": "req",
             "id": UUID().uuidString,
             "method": "connect",
-            "params": [
-                "minProtocol": 3,
-                "maxProtocol": 3,
-                "client": client,
-                "auth": [
-                    "token": token
-                ]
-            ] as [String: Any]
+            "params": OpenClawConnectParams.build(
+                clientId: "gateway-client",
+                displayName: "OpenGlasses",
+                version: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0",
+                token: token,
+                challengeNonce: challengeNonce,
+                pairedDeviceId: deviceId.isEmpty ? nil : deviceId
+            )
         ]
 
         guard let data = try? JSONSerialization.data(withJSONObject: connectMsg),

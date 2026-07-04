@@ -56,6 +56,22 @@ extension RemoteGlassesCommand {
         }
     }
 
+    /// Every canonical wire name — advertised to the gateway at connect time
+    /// (`OpenClawConnectParams.deviceCapabilities`) so the agent knows the command surface
+    /// without a round-trip. Tests assert each entry round-trips through the parser.
+    static let allCanonicalActions: [String] = [
+        "capture_photo",
+        "start_audio_recording", "stop_audio_recording",
+        "start_video", "stop_video",
+        "start_translation", "stop_translation",
+        "start_transcription", "stop_transcription",
+        "speak",
+        "display_show", "display_clear",
+        "device_status", "device_capabilities",
+        "add_note", "get_transcript",
+        "stop_all",
+    ]
+
     /// Canonical wire name, used in audit entries and replies.
     var canonicalAction: String {
         switch self {
