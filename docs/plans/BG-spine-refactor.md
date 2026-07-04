@@ -1,10 +1,16 @@
 # Plan BG — Spine Refactor (phased): single-source tool prompts, flow engine, provider adapters, audio-engine merge
 
 **Status:** 🚧 Phased, one PR per phase. **P1 shipped** (registry-generated tool prompts).
-**P2 groundwork shipped** — pure `VoiceCommandParser` (stop/goodbye/photo + persona-prefix
-stripping) extracted from `handleTranscription` with tests. Still open in P2: the full
-`ConversationFlowEngine` + `VoiceCommandHandler` chain, the resume-listening dedup, and the
-cancellable-turn fix — they restructure the live voice path and want device verification. P3–P5 planned.
+**P3 shipped** (one tool-loop driver). **P4 shipped** (merged realtime audio engine).
+**P5 shipped incrementally** (`@UserDefaultsBacked` cohorts, model types → `Models/`, NotesTool rename).
+**P2 shipped incrementally:** pure `VoiceCommandParser`; `ConversationFlowEngine` +
+`VoiceCommandHandler` pre-LLM chain; `resumeListeningOrReturnToWakeWord` dedup; cancellable
+turns; pure `ModelRoutingPolicy`; `ConversationTurnRunner` (the LLM-turn skeleton — send →
+post-process → cancel-check → accept → speak → always-finish — behind testable closure seams,
+adopted by the photo and normal turns). Still open in P2 (small follow-ups): fold the inline
+stop/goodbye/photo ifs into a post-store handler chain; adopt the turn runner in
+`sendTextMessage`; extract the wake-detected start sequence behind a seam. All P2 changes to the
+live voice path still want an on-glasses smoke test.
 
 ## The problem
 The July 2026 audit's clearest structural signal: **whatever got extracted got tested; the three
