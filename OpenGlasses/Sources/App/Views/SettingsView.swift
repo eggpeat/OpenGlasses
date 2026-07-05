@@ -7,6 +7,7 @@ struct SettingsView: View {
     @AppStorage("accentColorName") private var accentColorName: String = "violet"
 
     // Model configs editing
+    @State private var simpleModeEnabled = Config.simpleModeEnabled
     @State private var modelConfigs: [ModelConfig] = Config.savedModels
     @State private var editingModel: ModelConfig? = nil
     @State private var showAddModel = false
@@ -105,6 +106,10 @@ struct SettingsView: View {
                 Text("Alternative ways to start the assistant without the wake word — for noisy, silent, or no-speech situations. All are off by default. The Volume Button trigger can interfere with normal volume control.")
             }
 
+            // Simple Mode hides the owner-only configuration surface (models, personas,
+            // behavior, tools, integrations, advanced) — the device keeps working exactly
+            // as configured; the sections below just stop being visible/editable.
+            if !simpleModeEnabled {
             // MARK: AI Models
             Section {
                 ForEach(modelConfigs) { model in
@@ -442,6 +447,8 @@ struct SettingsView: View {
                 Text("ElevenLabs voices, Perplexity search, broadcast targets, and live-streaming live under Services. Gateways are OpenClaw bridges to your devices (smart home, automations). MCP Servers expose external tool servers the AI can call.")
             }
 
+            }
+
             // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
             // MARK: — Glasses & Privacy
             // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -548,6 +555,7 @@ struct SettingsView: View {
                 Text("Theme, accent colour, and which languages the assistant speaks and understands.")
             }
 
+            if !simpleModeEnabled {
             // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
             // MARK: — Advanced
             // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -586,6 +594,18 @@ struct SettingsView: View {
                 Text("Advanced")
             } footer: {
                 Text("Diagnostic tools for power users — inspect the prompts being sent to the AI and watch live network requests. Useful for debugging or building your own integrations.")
+            }
+
+            }
+
+            // MARK: Simple Mode (always visible so the owner can leave it)
+            Section {
+                Toggle(isOn: $simpleModeEnabled) {
+                    Label("Simple Mode", systemImage: "dial.low")
+                }
+                .onChange(of: simpleModeEnabled) { _, v in Config.simpleModeEnabled = v }
+            } footer: {
+                Text("Hides model, persona, behavior, tool, integration, and advanced settings — for handing the device to someone who just needs it to work. Everything keeps running exactly as configured.")
             }
 
             // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
