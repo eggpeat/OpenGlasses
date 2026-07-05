@@ -25,7 +25,9 @@
 	<key>WKApplication</key>
 	<true/>
 	<key>WKCompanionAppBundleIdentifier</key>
-	<string>com.openglasses.app</string>
+	<!-- Substituted from project.watch.yml so a rebrand via project.local.yml propagates;
+	     a hardcoded value here breaks Watch install with InvalidCompanionAppBundleIdentifier. -->
+	<string>$(WK_COMPANION_APP_BUNDLE_IDENTIFIER)</string>
 	<key>WKRunsIndependentlyOfCompanionApp</key>
 	<true/>
 </dict>

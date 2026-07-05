@@ -265,10 +265,7 @@ struct OnboardingView: View {
                             .foregroundStyle(.white.opacity(0.5))
 
                         HStack {
-                            SecureField("sk-...", text: $apiKey)
-                                .font(.system(.body, design: .monospaced))
-                                .autocorrectionDisabled()
-                                .textInputAutocapitalization(.never)
+                            SecretInputField(placeholder: "sk-...", text: $apiKey)
                                 .foregroundStyle(.white)
                                 .onChange(of: apiKey) { _, _ in
                                     validationError = nil
@@ -464,10 +461,7 @@ struct OnboardingView: View {
                             .foregroundStyle(.white)
                     }
 
-                    SecureField("ElevenLabs API Key", text: $elevenLabsKey)
-                        .font(.system(.body, design: .monospaced))
-                        .autocorrectionDisabled()
-                        .textInputAutocapitalization(.never)
+                    SecretInputField(placeholder: "ElevenLabs API Key", text: $elevenLabsKey)
                         .foregroundStyle(.white)
                         .padding(14)
                         .contentShape(Rectangle())
@@ -505,10 +499,7 @@ struct OnboardingView: View {
                             .foregroundStyle(.white)
                     }
 
-                    SecureField("Perplexity API Key", text: $perplexityKey)
-                        .font(.system(.body, design: .monospaced))
-                        .autocorrectionDisabled()
-                        .textInputAutocapitalization(.never)
+                    SecretInputField(placeholder: "Perplexity API Key", text: $perplexityKey)
                         .foregroundStyle(.white)
                         .padding(14)
                         .contentShape(Rectangle())

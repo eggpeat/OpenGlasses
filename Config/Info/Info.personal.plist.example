@@ -1,6 +1,15 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
+<!--
+  WARNING: project.local.yml points INFOPLIST_FILE at Info.personal.plist, which REPLACES the
+  app's entire Info.plist. Your real Info.personal.plist must therefore contain ALL standard
+  keys (CFBundle*, usage descriptions, background modes, ...) PLUS the MWDAT dict below —
+  an MWDAT-only file builds but fails at runtime/processing ("missing bundle identifier").
+
+  Don't hand-copy this example. Run `./Scripts/setup-local-dev.sh`, which seeds the file from
+  the full OpenGlasses/Info.plist; then merge in the MWDAT dict shown here.
+-->
 <dict>
 	<key>MWDAT</key>
 	<dict>

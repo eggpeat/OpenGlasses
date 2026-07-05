@@ -7,6 +7,11 @@ targets:
       base:
         CODE_SIGN_ENTITLEMENTS: Config/Entitlements/Personal/OpenGlasses.entitlements
         DEVELOPMENT_TEAM: YOUR_APPLE_TEAM_ID
+        # NOTE: this REPLACES the app's entire Info.plist — Info.personal.plist must be a
+        # full plist (all CFBundle*/usage keys) plus the MWDAT dict, not MWDAT-only.
+        # `./Scripts/setup-local-dev.sh` seeds it correctly from OpenGlasses/Info.plist.
+        # If you also change PRODUCT_BUNDLE_IDENTIFIER (rebrand), override
+        # WK_COMPANION_APP_BUNDLE_IDENTIFIER on the OpenGlassesWatch target to match.
         INFOPLIST_FILE: Config/Info/Info.personal.plist
 
   GlassesActivityWidget:
