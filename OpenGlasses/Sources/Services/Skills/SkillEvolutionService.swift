@@ -41,7 +41,9 @@ final class SkillEvolutionService: ObservableObject {
     var rateThreshold = 6.0          // failures/hour for the burst path
     var window: TimeInterval = 1800  // 30 min
 
-    init(store: EvolvedSkillStore = .shared) { self.store = store }
+    // Default resolved in the body: `.shared` is main-actor-isolated and can't be a default
+    // argument (evaluated in the caller's possibly-nonisolated context) under Swift 6.
+    init(store: EvolvedSkillStore? = nil) { self.store = store ?? .shared }
 
     /// Record an unsatisfactory turn. No-op unless Agent Mode is on (the whole feature is gated).
     func record(_ sample: FailureSample) {

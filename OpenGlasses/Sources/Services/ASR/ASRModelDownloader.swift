@@ -96,7 +96,9 @@ final class ASRModelDownloader: ObservableObject {
 
     /// Fetches each required file directly from HuggingFace (the files are unpacked, so no tree
     /// enumeration). Progress is per-file completed fraction.
-    static let liveInstaller: Installer = { bundle, destination, progress in
+    // nonisolated: a pure closure literal (no main-actor state at definition) so it can be the
+    // default argument of the nonisolated init below.
+    nonisolated static let liveInstaller: Installer = { bundle, destination, progress in
         let files = bundle.requiredFiles
         for (index, name) in files.enumerated() {
             let url = bundle.huggingFaceResolveURL(for: name)
@@ -107,6 +109,9 @@ final class ASRModelDownloader: ObservableObject {
             let dest = destination.appendingPathComponent(name)
             try? FileManager.default.removeItem(at: dest)
             try FileManager.default.moveItem(at: tempURL, to: dest)
+            // NB: the `await` is required — calling the @MainActor `progress` closure from this
+            // nonisolated context is an actor hop. (The "no async operations" warning is a known
+            // diagnostic quirk that disagrees with the type system; removing await fails to build.)
             await progress(Double(index + 1) / Double(max(files.count, 1)))
         }
     }

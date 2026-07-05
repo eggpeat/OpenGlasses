@@ -23,7 +23,8 @@ class MemoryRewindService: ObservableObject {
     /// Periodically refreshes the published duration off the audio hot path.
     private var durationTimer: Timer?
 
-    private static func bytesPerMinute(at rate: Double) -> Int { Int(rate) * 2 * 60 }
+    // Pure (no main-actor state) — nonisolated so the ingest-queue paths can call it.
+    private nonisolated static func bytesPerMinute(at rate: Double) -> Int { Int(rate) * 2 * 60 }
 
     /// Reference to wake word service for audio tap
     weak var wakeWordService: WakeWordService?
@@ -71,7 +72,9 @@ class MemoryRewindService: ObservableObject {
         print("⏪ Memory rewind stopped")
     }
 
-    private func refreshDuration() {
+    // nonisolated: only touches ingest-queue state and hops to @MainActor for the UI update,
+    // so it's safe to call from the nonisolated duration timer.
+    private nonisolated func refreshDuration() {
         ingestQueue.async { [weak self] in
             guard let self, let ring = self.ring else { return }
             let minutes = Double(ring.count) / Double(Self.bytesPerMinute(at: self.bufferSampleRate))

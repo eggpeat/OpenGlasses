@@ -21,8 +21,11 @@ extension FieldSessionService: ProcedureHosting {}
 final class ProcedureHUDTaskSource: HUDTaskSource {
     private let host: ProcedureHosting
 
-    init(host: ProcedureHosting = FieldSessionService.shared) {
-        self.host = host
+    // Default resolved in the body (not the signature): `FieldSessionService.shared` is
+    // main-actor-isolated, and a default argument is evaluated in the caller's (possibly
+    // nonisolated) context, which Swift 6 rejects.
+    init(host: ProcedureHosting? = nil) {
+        self.host = host ?? FieldSessionService.shared
     }
 
     var changes: AnyPublisher<Void, Never> {
