@@ -21,4 +21,20 @@ final class LocalModelRoutingTests: XCTestCase {
         XCTAssertTrue(LocalLLMService.visionModelIds.allSatisfy { $0.contains("SmolVLM") },
                       "only genuine VLMs belong in the vision factory route")
     }
+
+    /// The on-device prompt guard must sit below the observed OOM point (an ~8.2k-token prompt
+    /// Jetsam-killed the app) yet well above the lean agent prompt, so it only trips on a
+    /// pathological input — where a catchable throw beats an uncatchable memory kill.
+    func testOnDevicePromptGuardIsBelowTheObservedOOMPoint() {
+        XCTAssertLessThan(LocalLLMService.maxPromptTokens, 8241,
+                          "must reject before the size that actually OOM-killed the app")
+        XCTAssertGreaterThanOrEqual(LocalLLMService.maxPromptTokens, 2048,
+                          "but leave headroom for a normal lean prompt + some history")
+    }
+
+    func testPromptTooLongErrorIsDescriptive() {
+        let msg = LocalLLMError.promptTooLong(tokens: 9000, limit: 4096).errorDescription ?? ""
+        XCTAssertTrue(msg.contains("9000") && msg.contains("4096"))
+        XCTAssertTrue(msg.lowercased().contains("cloud"), "tell the user the actionable fallback")
+    }
 }

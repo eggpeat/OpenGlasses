@@ -105,6 +105,13 @@ final class LocalLLMService: ObservableObject {
         "mlx-community/SmolVLM2-500M-Video-Instruct-mlx",
     ]
 
+    /// Hard ceiling on the tokenized prompt fed to an on-device model. Prefill + KV cache for a
+    /// 2B model scale with sequence length; an ~8k-token prompt (the full ~100-tool system
+    /// prompt) exhausted memory and got the app Jetsam-killed on an iPhone. Well above any lean
+    /// prompt the agent path now builds, so it only trips on a pathological input — where a
+    /// catchable throw beats an uncatchable OOM process kill.
+    static let maxPromptTokens = 4096
+
     /// Whether the currently loaded model supports vision.
     var isVisionModel: Bool {
         guard let id = loadedModelId else { return false }
@@ -252,6 +259,14 @@ final class LocalLLMService: ObservableObject {
         // NSLog (not print) so it survives the fatal MLX crash in the unified log,
         // confirming the 2D fix is live and what shape reaches the model.
         NSLog("🔬 LocalLLM.generate model=%@ tokenIDs.shape=%@ count=%d", loadedModelId ?? "?", "\(tokenIDs.shape)", tokens.count)
+
+        // Refuse a prompt that would OOM the device. MLX allocation failure is an *uncatchable*
+        // trap (it Jetsam-kills the process), so we must reject BEFORE feeding it to the model —
+        // a catchable error lets the caller fall back to cloud instead of the app dying.
+        guard tokens.count <= Self.maxPromptTokens else {
+            throw LocalLLMError.promptTooLong(tokens: tokens.count, limit: Self.maxPromptTokens)
+        }
+
         let input = LMInput(text: .init(tokens: tokenIDs))
 
         // Watch for backgrounding *during* generation. The pre-check above covers
@@ -379,6 +394,7 @@ enum LocalLLMError: LocalizedError {
     case modelNotLoaded
     case generationFailed(String)
     case backgrounded
+    case promptTooLong(tokens: Int, limit: Int)
 
     var errorDescription: String? {
         switch self {
@@ -388,6 +404,8 @@ enum LocalLLMError: LocalizedError {
             return "Local model generation failed: \(reason)"
         case .backgrounded:
             return "On-device models can't run while the app is in the background. Switch to a cloud model for background tasks."
+        case .promptTooLong(let tokens, let limit):
+            return "Prompt is too long for the on-device model (\(tokens) tokens; limit \(limit)). Switch to a cloud model for this request."
         }
     }
 }
