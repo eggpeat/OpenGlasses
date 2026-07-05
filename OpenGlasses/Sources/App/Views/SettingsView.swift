@@ -27,13 +27,8 @@ struct SettingsView: View {
     @State private var isTogglingEncryption = false
 
     // Service settings (owned here, bound to ServicesSettingsView)
-    @State private var elevenLabsKeyInput = Config.elevenLabsAPIKey
-    @State private var selectedVoice = Config.elevenLabsVoiceId
-    @State private var emotionAwareTTSEnabled = Config.emotionAwareTTSEnabled
-    @State private var perplexityKeyInput = Config.perplexityAPIKey
-    @State private var broadcastPlatform = Config.broadcastPlatform
-    @State private var broadcastRTMPURL = Config.broadcastRTMPURL
-    @State private var broadcastStreamKey = Config.broadcastStreamKey
+    // ElevenLabs / TTS voice, web-search keys, and live-streaming config are owned
+    // by ServicesSettingsView (self-contained, persists to Config on change).
 
     var body: some View {
         Form {
@@ -416,16 +411,7 @@ struct SettingsView: View {
 
             Section {
                 NavigationLink {
-                    ServicesSettingsView(
-                        appState: appState,
-                        elevenLabsKeyInput: $elevenLabsKeyInput,
-                        selectedVoice: $selectedVoice,
-                        emotionAwareTTSEnabled: $emotionAwareTTSEnabled,
-                        perplexityKeyInput: $perplexityKeyInput,
-                        broadcastPlatform: $broadcastPlatform,
-                        broadcastRTMPURL: $broadcastRTMPURL,
-                        broadcastStreamKey: $broadcastStreamKey
-                    )
+                    ServicesSettingsView(appState: appState)
                 } label: {
                     Label("Services & Integrations", systemImage: "square.grid.2x2")
                 }
@@ -695,26 +681,14 @@ struct SettingsView: View {
         }
         appState.llmService.refreshActiveModel()
 
-        Config.setElevenLabsAPIKey(elevenLabsKeyInput)
-        Config.setElevenLabsVoiceId(selectedVoice)
-        // Reset quota cache in case user added credits or changed key
-        appState.speechService.resetElevenLabsQuota()
-
-        Config.setPerplexityAPIKey(perplexityKeyInput)
         Config.setPrivacyFilterEnabled(privacyFilterEnabled)
         appState.privacyFilter.isEnabled = privacyFilterEnabled
         Config.setUseGlassesMicForWakeWord(useGlassesMicForWakeWord)
-
-        Config.setEmotionAwareTTSEnabled(emotionAwareTTSEnabled)
 
         Config.setIntentClassifierEnabled(intentClassifierEnabled)
         Config.setUserMemoryEnabled(userMemoryEnabled)
         Config.setMemoryNudgesEnabled(memoryNudgesEnabled)
         Config.setConversationPersistenceEnabled(conversationPersistenceEnabled)
-
-        Config.setBroadcastPlatform(broadcastPlatform)
-        Config.setBroadcastRTMPURL(broadcastRTMPURL)
-        Config.setBroadcastStreamKey(broadcastStreamKey)
 
         if appState.currentMode == .direct {
             Task {

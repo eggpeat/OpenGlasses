@@ -1840,6 +1840,24 @@ struct Config {
         !perplexityAPIKey.isEmpty
     }
 
+    // MARK: - Tavily Search
+
+    /// Tavily API key. Stored in the Keychain (see `KeychainService`).
+    static var tavilyAPIKey: String {
+        if let key = KeychainService.string(for: "tavilyAPIKey"), !key.isEmpty {
+            return key
+        }
+        return ""
+    }
+
+    static func setTavilyAPIKey(_ key: String) {
+        KeychainService.setString(key, for: "tavilyAPIKey")
+    }
+
+    static var isTavilyConfigured: Bool {
+        !tavilyAPIKey.isEmpty
+    }
+
     // MARK: - Privacy Filter
 
     @UserDefaultsBacked("privacyFilterEnabled", default: false) static var privacyFilterEnabled: Bool
