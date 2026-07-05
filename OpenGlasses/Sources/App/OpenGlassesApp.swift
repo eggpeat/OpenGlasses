@@ -669,17 +669,10 @@ class AppState: ObservableObject, AppStateProtocol {
 
         addDebugEvent("AppState initialized")
 
-        // Register Gemma 4 model type — not yet in the official mlx-swift-lm registry
-        Task {
-            await LLMTypeRegistry.shared.registerModelType("gemma4") { data in
-                let config = try JSONDecoder().decode(Gemma4TextConfiguration.self, from: data)
-                return Gemma4TextModel(config)
-            }
-            await LLMTypeRegistry.shared.registerModelType("gemma4_text") { data in
-                let config = try JSONDecoder().decode(Gemma4TextConfiguration.self, from: data)
-                return Gemma4TextModel(config)
-            }
-        }
+        // (Gemma-4 is now supplied by mlx-swift-lm's own LLMModelFactory registration; the
+        // former custom port + override here shadowed the library's tested model for every
+        // "gemma4" text load and was only reached — never — because the model mistakenly
+        // loaded through the vision factory. See LocalLLMService.visionModelIds.)
 
         // Share the audio engine so transcription works in background
         transcriptionService.sharedAudioEngineProvider = wakeWordService

@@ -2029,31 +2029,42 @@ class LLMService: ObservableObject {
     /// Builds its own lightweight prompt and routes through sendLocal().
     func sendViaLocalAgent(_ text: String, locationContext: String? = nil, memoryContext: String? = nil) async throws -> String {
         let agentModelId = Config.agentModelId
-
         let hasNativeTools = nativeToolRouter != nil
-        let nativeToolNames = nativeToolRouter?.registry.toolNames ?? []
-        let nativeToolDescriptions = nativeToolRouter?.registry.toolDescriptions(for: nativeToolNames) ?? []
-        let fullPrompt = await Self.buildSystemPrompt(
-            locationContext: locationContext,
-            includeTools: hasNativeTools,
-            includeOpenClaw: false,
-            hasImage: false,
-            nativeToolNames: nativeToolNames,
-            nativeToolDescriptions: nativeToolDescriptions,
-            memoryContext: memoryContext,
-            turn: text
-        )
 
-        // If a cloud model config is selected as the agent, route through it
+        // Cloud agent: build the full tool-laden system prompt — cloud models handle a large
+        // context and tool-call natively.
         if let cloudConfig = Config.savedModels.first(where: { $0.id == agentModelId }) {
+            let nativeToolNames = nativeToolRouter?.registry.toolNames ?? []
+            let nativeToolDescriptions = nativeToolRouter?.registry.toolDescriptions(for: nativeToolNames) ?? []
+            let fullPrompt = await Self.buildSystemPrompt(
+                locationContext: locationContext,
+                includeTools: hasNativeTools,
+                includeOpenClaw: false,
+                hasImage: false,
+                nativeToolNames: nativeToolNames,
+                nativeToolDescriptions: nativeToolDescriptions,
+                memoryContext: memoryContext,
+                turn: text
+            )
             print("🧠 Cloud agent: \(cloudConfig.name)")
             return try await sendCloud(text, systemPrompt: fullPrompt, config: cloudConfig, includeTools: hasNativeTools)
         }
 
-        // Otherwise use the local on-device model
+        // On-device agent: build a LEAN prompt — `includeTools: false` omits the ~100 native-tool
+        // descriptions (~8k tokens) that OOM-crash a 2B model on a phone. `sendLocal` appends its
+        // own reduced ~12-tool block, so the model still has usable tools. This is the difference
+        // between an ~8k-token prompt (Jetsam kill) and a few hundred tokens.
         guard let localService = localLLMService else {
             throw LLMError.missingAPIKey("Local LLM service not initialized")
         }
+        let leanPrompt = await Self.buildSystemPrompt(
+            locationContext: locationContext,
+            includeTools: false,
+            includeOpenClaw: false,
+            hasImage: false,
+            memoryContext: memoryContext,
+            turn: text
+        )
         if !localService.isModelLoaded || localService.loadedModelId != agentModelId {
             try await localService.loadModel(agentModelId)
         }
@@ -2066,7 +2077,7 @@ class LLMService: ObservableObject {
             baseURL: ""
         )
         print("🧠 Local agent: \(agentModelId)")
-        return try await sendLocal(text, systemPrompt: fullPrompt, config: localConfig, includeTools: hasNativeTools)
+        return try await sendLocal(text, systemPrompt: leanPrompt, config: localConfig, includeTools: hasNativeTools)
     }
 
     // MARK: - Helpers
