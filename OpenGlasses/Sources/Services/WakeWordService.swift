@@ -101,7 +101,7 @@ class WakeWordService: NSObject, ObservableObject {
 
     override init() {
         super.init()
-        speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
+        speechRecognizer = SFSpeechRecognizer(locale: SpeechLocaleResolver.current)
     }
 
     /// Force reconfigure audio session (e.g. when mic source changes)

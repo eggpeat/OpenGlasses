@@ -1406,6 +1406,16 @@ struct Config {
 
     static func setShowAllQuickActions(_ show: Bool) { showAllQuickActions = show }
 
+    // MARK: - Speech Recognition Locale
+
+    /// Which locale the speech features (wake word, transcription, captions, rewind, teleprompter)
+    /// recognize in. `"auto"` follows the device's preferred language; an explicit identifier
+    /// (e.g. `"de-DE"`) pins it. Resolved against what `SFSpeechRecognizer` actually supports —
+    /// see `SpeechLocaleResolver`. Default `"auto"` (was hardcoded en-US everywhere).
+    @UserDefaultsBacked("speechRecognitionLocale", default: "auto") static var speechRecognitionLocale: String
+
+    static func setSpeechRecognitionLocale(_ id: String) { speechRecognitionLocale = id }
+
     // MARK: - Simple Mode
 
     /// Hide the owner-only configuration surface in Settings (models, personas, behavior, tools,

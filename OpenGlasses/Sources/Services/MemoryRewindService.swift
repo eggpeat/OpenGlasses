@@ -29,7 +29,7 @@ class MemoryRewindService: ObservableObject {
     /// Reference to wake word service for audio tap
     weak var wakeWordService: WakeWordService?
 
-    private let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
+    private let recognizer = SFSpeechRecognizer(locale: SpeechLocaleResolver.current)
 
     // MARK: - Public API
 

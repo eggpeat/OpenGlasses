@@ -57,7 +57,7 @@ class AmbientCaptionService: ObservableObject {
     private var lastFinalizedText = ""
 
     init() {
-        recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
+        recognizer = SFSpeechRecognizer(locale: SpeechLocaleResolver.current)
     }
 
     // MARK: - Public API
