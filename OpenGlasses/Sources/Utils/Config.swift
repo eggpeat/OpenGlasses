@@ -1406,6 +1406,13 @@ struct Config {
 
     static func setShowAllQuickActions(_ show: Bool) { showAllQuickActions = show }
 
+    // MARK: - Simple Mode
+
+    /// Hide the owner-only configuration surface in Settings (models, personas, behavior, tools,
+    /// integrations, advanced) — for handing the device to someone who just needs it to work.
+    /// Pure UI gating: nothing about routing or behavior changes. Default off.
+    @UserDefaultsBacked("simpleModeEnabled", default: false) static var simpleModeEnabled: Bool
+
     // MARK: - Uncertainty Web Search (Plan BI)
 
     /// Local backends (MLX, Apple Foundation) can't tool-call `web_search`; when on, a hedged or
