@@ -15,6 +15,10 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.openglasses.app.watchkitapp
+        # Substituted into OpenGlassesWatch/Info.plist (WKCompanionAppBundleIdentifier).
+        # Must equal the iOS app's PRODUCT_BUNDLE_IDENTIFIER — override BOTH in
+        # project.local.yml when rebranding, or Watch install fails.
+        WK_COMPANION_APP_BUNDLE_IDENTIFIER: com.openglasses.app
         MARKETING_VERSION: "2.2.0"
         CURRENT_PROJECT_VERSION: "11"
         SWIFT_VERSION: "5.9"
