@@ -73,7 +73,7 @@ final class TeleprompterService: ObservableObject {
     private var geometry = TeleprompterPaginator.Geometry(maxLines: 3, maxChars: 32)
 
     // Live recognition (device-pending shell).
-    private let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
+    private let recognizer = SFSpeechRecognizer(locale: SpeechLocaleResolver.current)
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
     static let recognitionConsumerID = "teleprompter"

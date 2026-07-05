@@ -39,7 +39,7 @@ class TranscriptionService: ObservableObject {
     private var captureSampleRate: Double = 16000
 
     init() {
-        speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
+        speechRecognizer = SFSpeechRecognizer(locale: SpeechLocaleResolver.current)
     }
 
     func startRecording() {
