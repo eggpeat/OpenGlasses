@@ -174,6 +174,17 @@ class LLMService: ObservableObject {
     /// Build the full system prompt, optionally including location, tools, memory, and vision context.
     /// When `promptSections` is provided (from the ConversationClassifier), irrelevant sections are
     /// stripped to reduce token count. When nil, all sections are included (backward compatible).
+    /// The lean system prompt for an on-device model: persona/behavior + location + memory, but
+    /// NOT the ~100 native-tool descriptions (~8k tokens) that OOM a 2B model on a phone, and none
+    /// of the heavy optional contexts (playbook/shortcuts/OpenClaw). `sendLocal` appends its own
+    /// reduced tool block, so the model still has usable tools. Used by every on-device path
+    /// (active-model `sendMessage` and fast-tier `sendViaLocalAgent`) so they can't diverge.
+    static func leanOnDevicePrompt(locationContext: String?, memoryContext: String?, hasImage: Bool, turn: String) async -> String {
+        await buildSystemPrompt(
+            locationContext: locationContext, includeTools: false, includeOpenClaw: false,
+            hasImage: hasImage, memoryContext: memoryContext, turn: turn)
+    }
+
     private static func buildSystemPrompt(locationContext: String?, includeTools: Bool, includeOpenClaw: Bool, hasImage: Bool, nativeToolNames: [String] = [], nativeToolDescriptions: [(name: String, description: String)] = [], gatewayToolNames: [String] = [], memoryContext: String? = nil, agentContext: String? = nil, playbookContext: String? = nil, nowPlayingContext: String? = nil, shortcutsContext: String? = nil, promptSections: ConversationClassifier.PromptSections? = nil, turn: String? = nil) async -> String {
         // Agent personality mode: soul.md + skills.md + memory.md replace the standard prompt
         var prompt: String
@@ -418,13 +429,27 @@ class LLMService: ObservableObject {
         }
 
         let provider = modelConfig.llmProvider
+        let isOnDevice = (provider == .local || provider == .appleOnDevice)
         let hasNativeTools = nativeToolRouter != nil
         let includeOpenClaw = Config.isOpenClawConfigured && openClawBridge != nil
         let includeTools = hasNativeTools || includeOpenClaw
-        let nativeToolNames = nativeToolRouter?.registry.toolNames ?? []
-        let nativeToolDescriptions = nativeToolRouter?.registry.toolDescriptions(for: nativeToolNames) ?? []
-        let gatewayToolNames = openClawBridge?.availableToolNames ?? []
-        let fullPrompt = await Self.buildSystemPrompt(locationContext: locationContext, includeTools: includeTools, includeOpenClaw: includeOpenClaw, hasImage: imageData != nil, nativeToolNames: nativeToolNames, nativeToolDescriptions: nativeToolDescriptions, gatewayToolNames: gatewayToolNames, memoryContext: memoryContext, agentContext: agentContext, playbookContext: playbookContext, nowPlayingContext: nowPlayingContext, shortcutsContext: shortcutsContext, promptSections: promptSections, turn: text)
+        let nativeToolNames = nativeToolRouter?.registry.toolNames ?? []   // used by the agent-plan block too
+
+        // On-device models get a LEAN prompt regardless of how they were reached (active model or
+        // agent). The full ~100-tool prompt is ~8k tokens and OOM-kills a 2B model on a phone;
+        // `sendLocal` appends its own reduced tool block, so the model still has usable tools.
+        // Cloud providers get the full tool-laden prompt. (`sendLocal` keeps `includeTools` so it
+        // still adds the reduced set — only the PROMPT drops the ~100-tool dump.)
+        let fullPrompt: String
+        if isOnDevice {
+            fullPrompt = await Self.leanOnDevicePrompt(
+                locationContext: locationContext, memoryContext: memoryContext,
+                hasImage: imageData != nil, turn: text)
+        } else {
+            let nativeToolDescriptions = nativeToolRouter?.registry.toolDescriptions(for: nativeToolNames) ?? []
+            let gatewayToolNames = openClawBridge?.availableToolNames ?? []
+            fullPrompt = await Self.buildSystemPrompt(locationContext: locationContext, includeTools: includeTools, includeOpenClaw: includeOpenClaw, hasImage: imageData != nil, nativeToolNames: nativeToolNames, nativeToolDescriptions: nativeToolDescriptions, gatewayToolNames: gatewayToolNames, memoryContext: memoryContext, agentContext: agentContext, playbookContext: playbookContext, nowPlayingContext: nowPlayingContext, shortcutsContext: shortcutsContext, promptSections: promptSections, turn: text)
+        }
 
         var toolsLabel = ""
         if hasNativeTools { toolsLabel += " [NativeTools]" }
@@ -2050,21 +2075,14 @@ class LLMService: ObservableObject {
             return try await sendCloud(text, systemPrompt: fullPrompt, config: cloudConfig, includeTools: hasNativeTools)
         }
 
-        // On-device agent: build a LEAN prompt — `includeTools: false` omits the ~100 native-tool
-        // descriptions (~8k tokens) that OOM-crash a 2B model on a phone. `sendLocal` appends its
-        // own reduced ~12-tool block, so the model still has usable tools. This is the difference
-        // between an ~8k-token prompt (Jetsam kill) and a few hundred tokens.
+        // On-device agent: build a LEAN prompt (shared with the active-model path) — omits the
+        // ~100 native-tool descriptions (~8k tokens) that OOM-crash a 2B model on a phone.
+        // `sendLocal` appends its own reduced ~12-tool block, so the model still has usable tools.
         guard let localService = localLLMService else {
             throw LLMError.missingAPIKey("Local LLM service not initialized")
         }
-        let leanPrompt = await Self.buildSystemPrompt(
-            locationContext: locationContext,
-            includeTools: false,
-            includeOpenClaw: false,
-            hasImage: false,
-            memoryContext: memoryContext,
-            turn: text
-        )
+        let leanPrompt = await Self.leanOnDevicePrompt(
+            locationContext: locationContext, memoryContext: memoryContext, hasImage: false, turn: text)
         if !localService.isModelLoaded || localService.loadedModelId != agentModelId {
             try await localService.loadModel(agentModelId)
         }
