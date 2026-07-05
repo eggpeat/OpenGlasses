@@ -254,7 +254,8 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate {
 
     /// Rebuild the conversations tab with current data from the main actor.
     func refreshConversationsTab() {
-        Task { @MainActor in
+        Task { @MainActor [weak self] in
+            guard let self else { return }
             guard let store = AppStateProvider.shared?.conversationStore else { return }
             let threads = store.threads.sorted { $0.updatedAt > $1.updatedAt }.prefix(11)
 
@@ -301,7 +302,8 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate {
 
     /// Rebuild the playbooks tab with current data from the main actor.
     func refreshPlaybooksTab() {
-        Task { @MainActor in
+        Task { @MainActor [weak self] in
+            guard let self else { return }
             guard let store = AppStateProvider.shared?.playbookStore else { return }
             let playbooks = store.playbooks
             let activeId = store.activeSession?.playbookId

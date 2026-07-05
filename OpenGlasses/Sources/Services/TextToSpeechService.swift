@@ -765,8 +765,8 @@ class TextToSpeechService: NSObject, ObservableObject, AVSpeechSynthesizerDelega
 
             // Soft ambient breath every 2 seconds
             thinkingPlayer?.play()
-            thinkingTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { _ in
-                Task { @MainActor [weak self] in
+            thinkingTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+                Task { @MainActor in
                     self?.thinkingPlayer?.currentTime = 0
                     self?.thinkingPlayer?.play()
                 }

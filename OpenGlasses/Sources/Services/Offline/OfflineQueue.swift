@@ -52,7 +52,7 @@ final class OfflineQueue {
         bindText(stmt, 2, op.kind.rawValue)
         bindText(stmt, 3, op.sessionId)
         op.payload.withUnsafeBytes { raw in
-            sqlite3_bind_blob(stmt, 4, raw.baseAddress, Int32(op.payload.count), Self.transient)
+            _ = sqlite3_bind_blob(stmt, 4, raw.baseAddress, Int32(op.payload.count), Self.transient)
         }
         sqlite3_bind_double(stmt, 5, op.createdAt.timeIntervalSince1970)
         sqlite3_bind_int(stmt, 6, Int32(op.attempts))

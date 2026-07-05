@@ -264,8 +264,11 @@ class GeminiLiveSessionManager: ObservableObject {
                 guard let self else { return }
                 Task { @MainActor in
                     for call in toolCall.functionCalls {
-                        self.toolCallRouter?.handleToolCall(call) { [weak self] response in
-                            self?.geminiService.sendToolResponse(response)
+                        // `self` is already strongly held by the enclosing handler (guard let self
+                        // above) for the duration of this response, so a redundant inner [weak self]
+                        // only tripped the ownership-mismatch warning.
+                        self.toolCallRouter?.handleToolCall(call) { response in
+                            self.geminiService.sendToolResponse(response)
                         }
                     }
                 }
