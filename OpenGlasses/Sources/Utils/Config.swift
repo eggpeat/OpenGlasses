@@ -2728,9 +2728,12 @@ struct Config {
     static func setAgentModelDownloaded(_ value: Bool) { agentModelDownloaded = value }
 
     /// Whether fast-tier queries may run on the *on-device* MLX agent model.
-    /// Default off: the bundled gemma-4 MLX path can fatally crash during inference
-    /// ("SmallVector out of range"), and that crash is uncatchable, so we don't route
-    /// to it unless the user explicitly opts in. Cloud agent models are unaffected.
+    ///
+    /// Historically default-off because the gemma-4 agent model fatally crashed during
+    /// inference: it was mis-routed through `VLMModelFactory` (see
+    /// `LocalLLMService.visionModelIds`) into the uncatchable `MLXVLM.Gemma4` trap. That
+    /// routing is fixed — the model now loads as text — but the default stays off pending
+    /// on-device confirmation that the text path generates cleanly. Cloud agents are unaffected.
     @UserDefaultsBacked("localAgentEnabled", default: false) static var localAgentEnabled: Bool
 
     static func setLocalAgentEnabled(_ value: Bool) { localAgentEnabled = value }

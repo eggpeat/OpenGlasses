@@ -93,11 +93,16 @@ final class LocalLLMService: ObservableObject {
         ),
     ]
 
-    /// Known vision model IDs that need VLM inference.
+    /// Known vision model IDs that must load through `VLMModelFactory`.
+    ///
+    /// The on-device agent model `gemma-4-e2b-it-4bit` is DELIBERATELY not here: it is a
+    /// text/agentic model that mlx-swift-lm registers in `LLMModelFactory` (the text factory).
+    /// Routing it through the vision factory resolves `model_type: "gemma4"` to `MLXVLM.Gemma4`,
+    /// whose forward pass fatally traps in an uncatchable MLX assertion — the talk-button /
+    /// Field-Assist crash. Loading it as text uses the library's supported Gemma-4 text model.
     static let visionModelIds: Set<String> = [
         "mlx-community/SmolVLM2-2.2B-Instruct-mlx",
         "mlx-community/SmolVLM2-500M-Video-Instruct-mlx",
-        "mlx-community/gemma-4-e2b-it-4bit",
     ]
 
     /// Whether the currently loaded model supports vision.
