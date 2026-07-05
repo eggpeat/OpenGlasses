@@ -60,19 +60,20 @@ class GlassesConnectionService: ObservableObject {
         do {
             try await Wearables.shared.startRegistration()
 
-            // Poll registration state — can take up to ~10s on fresh install
+            // Poll registration state. `startRegistration()` returns before the user approves the
+            // app in the Meta AI companion app, and that approval has been seen to take ~25s — so
+            // wait that long (RegistrationFlow policy) and, throughout, show an actionable "approve
+            // in Meta AI" status instead of giving up early with a cryptic internal state number.
             var stateAfter = Wearables.shared.registrationState
-            let deadline = ContinuousClock.now + .seconds(10)
-            while stateAfter.rawValue < 3, ContinuousClock.now < deadline {
-                connectionStatus = "Registering… (state \(stateAfter.rawValue))"
+            let deadline = ContinuousClock.now + .seconds(RegistrationFlow.approvalDeadlineSeconds)
+            while !RegistrationFlow.isRegistered(stateRaw: stateAfter.rawValue), ContinuousClock.now < deadline {
+                connectionStatus = RegistrationFlow.status(stateRaw: stateAfter.rawValue)
                 try? await Task.sleep(nanoseconds: 500_000_000)
                 stateAfter = Wearables.shared.registrationState
             }
 
             print("✅ startRegistration() succeeded, state: \(stateAfter)")
-            connectionStatus = stateAfter.rawValue >= 3
-                ? "Waiting for device..."
-                : "Complete authorization in Meta AI app"
+            connectionStatus = RegistrationFlow.status(stateRaw: stateAfter.rawValue)
         } catch {
             print("❌ startRegistration() failed: \(error)")
             connectionStatus = "Connection failed: \(error.localizedDescription)"
