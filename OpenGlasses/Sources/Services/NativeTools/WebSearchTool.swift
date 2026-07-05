@@ -1,10 +1,11 @@
 import Foundation
 
-/// Searches the web. Uses Perplexity AI when an API key is configured (grounded, cited answers).
-/// Falls back to DuckDuckGo Instant Answer API (no API key needed) otherwise.
+/// Searches the web. Prefers Perplexity AI, then Tavily, when an API key is configured
+/// (grounded, cited answers). Falls back to DuckDuckGo Instant Answer API (no API key
+/// needed) otherwise.
 struct WebSearchTool: NativeTool {
     let name = "web_search"
-    let description = "Search the web for information. Uses Perplexity AI (with citations) when configured, otherwise DuckDuckGo. Returns a brief summary."
+    let description = "Search the web for information. Uses Perplexity AI or Tavily (with citations) when configured, otherwise DuckDuckGo. Returns a brief summary."
     let parametersSchema: [String: Any] = [
         "type": "object",
         "properties": [
@@ -23,8 +24,15 @@ struct WebSearchTool: NativeTool {
 
         // Try Perplexity first if configured
         if Config.isPerplexityConfigured {
-            let result = await searchPerplexity(query: query)
-            if let result = result {
+            if let result = await searchPerplexity(query: query) {
+                return result
+            }
+            // Fall through on failure
+        }
+
+        // Then Tavily if configured
+        if Config.isTavilyConfigured {
+            if let result = await searchTavily(query: query) {
                 return result
             }
             // Fall through to DuckDuckGo on failure
@@ -85,6 +93,67 @@ struct WebSearchTool: NativeTool {
 
         } catch {
             print("🔍 Perplexity error: \(error.localizedDescription), falling back to DuckDuckGo")
+            return nil
+        }
+    }
+
+    // MARK: - Tavily Search
+
+    private func searchTavily(query: String) async -> String? {
+        guard let url = URL(string: "https://api.tavily.com/search") else { return nil }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(Config.tavilyAPIKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 15
+
+        let body: [String: Any] = [
+            "query": query,
+            "search_depth": "basic",
+            "include_answer": true,
+            "max_results": 5
+        ]
+
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 15
+        let session = URLSession(configuration: config)
+
+        do {
+            let (data, response) = try await session.data(for: request)
+
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+                print("🔍 Tavily failed (HTTP \((response as? HTTPURLResponse)?.statusCode ?? 0)), falling back to DuckDuckGo")
+                return nil // Fall back to DuckDuckGo
+            }
+
+            guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                return nil
+            }
+
+            let results = json["results"] as? [[String: Any]] ?? []
+
+            // Prefer Tavily's synthesized answer; otherwise stitch the top result snippets.
+            var summary = (json["answer"] as? String) ?? ""
+            if summary.isEmpty {
+                let snippets = results.prefix(3).compactMap { $0["content"] as? String }
+                summary = snippets.joined(separator: " ")
+            }
+            guard !summary.isEmpty else { return nil }
+
+            var result = summary
+            let urls = results.prefix(3).compactMap { $0["url"] as? String }
+            if !urls.isEmpty {
+                let sourceList = urls.enumerated().map { "[\($0.offset + 1)] \($0.element)" }
+                result += "\n\nSources: \(sourceList.joined(separator: ", "))"
+            }
+
+            return "Search result for \"\(query)\" (via Tavily): \(result)"
+
+        } catch {
+            print("🔍 Tavily error: \(error.localizedDescription), falling back to DuckDuckGo")
             return nil
         }
     }
