@@ -7,7 +7,31 @@ interruption/route recovery, BT-input selection + speaker fallback). **15 new te
 6 route), 20 audio tests total; Debug + Release green. No new SPM dependency. Live recovery on real
 interruptions/route flips is device-pending (can't be exercised on the simulator). `stopCapture()`
 kept **synchronous** (the teardown barrier runs on the lifecycle queue) so the two session managers'
-call sites are untouched. Cross-subsystem lease coordinator remains deferred to its own plan.
+call sites are untouched. Cross-subsystem lease coordinator shipped as **Plan AS**.
+
+**Doc corrections (2026-07-10 review):**
+- **File names are stale throughout this doc:** BG P4 (`5e5bc15`) merged the twin audio managers into
+  one `Sources/Services/Audio/RealtimeAudioEngine.swift` — all of AP's shipped machinery (policies,
+  permanent engine, generation counter, lifecycle queue) lives there now; read every
+  `GeminiLiveAudioManager`/`OpenAIRealtimeAudioManager` reference below as `RealtimeAudioEngine`.
+- **Two open questions were resolved in code:** `stopCapture()` stayed synchronous (build-order step
+  5's "awaited barrier" didn't happen — the status paragraph is the truth); and the fallback message
+  was resolved as **log-only** (`RealtimeAudioEngine.swift:506-508` — no HUD/TTS surfacing exists, so
+  the "using phone audio" user-facing promise below is *not* implemented; either close it or make
+  surfacing a small named follow-up).
+- **Unflagged ownership hole in this plan's own recovery path (belongs to no other plan):**
+  `resumeAfterInterruptionOnQueue` calls `AVAudioSession.sharedInstance().setActive(true)` directly
+  (`RealtimeAudioEngine.swift:414-416`) with **no `currentOwner` check** — if another owner acquired
+  the session during the interruption (mode switch during the call, wake word reclaimed), the resume
+  reactivates over them. Contrast `WakeWordService.handleAudioInterruption`, which guards
+  (`WakeWordService.swift:297-301`). This is the exact bug class Plan AS exists to prevent, and Plan
+  BJ explicitly scopes realtime activation out. **Fix here (ledger check before reactivating) before
+  any device validation.** (The route-reset path is fine — it re-enters via `setupAudioSession`,
+  which re-acquires through the coordinator.)
+- **Device validation re-scoped:** fold AP's live interruption/route recovery check into Plan BJ's
+  on-glasses smoke test (BJ's list already includes phone-call interruption recovery + BT route
+  change) — one device session, not two. Plan BJ also notes this engine's deliberate main-thread
+  activation hop as the agreed post-BJ follow-up.
 
 P1 (#114) stopped the two realtime audio managers from **crashing** on a bad `AVAudioFormat` and gave
 them a graceful `setActive` fallback. It did **not** make them **recover**. Today a phone call, a

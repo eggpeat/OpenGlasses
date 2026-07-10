@@ -78,10 +78,45 @@ enums should converge rather than duplicate.
 - **Nothing remote is ever silent.** Every remote-initiated *capture* command announces itself
   (TTS or tone) before acting; every remote command of any class is logged to an inspectable
   audit trail (reuse the existing tool-call log surface).
-- Agent Mode off ⇒ the executor is unreachable, not merely denying.
+- Agent Mode off ⇒ every command is policy-denied before the executor is consulted. (Corrected
+  2026-07-10: the shipped behavior — the right one — keeps the socket up and returns structured
+  denials with Agent Mode off (`RemoteInvokeService.swift:73-83`); the executor is never
+  *consulted*, but the parse+policy pipeline is reachable and replying. The earlier "executor is
+  unreachable" wording overstated it.)
 - Per-class toggles live in the gateway settings UI with capture OFF by default.
 - Deny replies carry structured reasons so the server-side agent can explain itself instead of
   retrying.
+
+### Risks flagged by the 2026-07-10 review (fold into the live-edge PR)
+- **Pre-auth frames are processed.** `handleRequestFrame` (`OpenClawEventClient.swift:188-198`)
+  handles any `type:"req"` frame with no check that the connect handshake completed. Combined
+  with cleartext `ws://` in LAN mode (`:144`), an on-path LAN attacker can inject frames — with
+  Agent Mode on and default toggles (`observe`/`output` ON), that's silent transcript reads and
+  arbitrary speech. Fix: drop `req` frames until authenticated; add an integration test that a
+  `req` arriving before the connect `res` is ignored. Note the ws:// LAN caveat in the threat
+  model (it currently assumes "compromised gateway agent" only, not LAN MITM).
+- **`getTranscript` is misclassed.** It's *observe* (default ON) yet returns the last 20 ambient
+  captions (`OpenGlassesApp.swift:3017-3022`) silently — recorded conversation content is
+  capture-adjacent by this doc's own wiretap framing. Give it its own toggle or promote it to
+  the capture class.
+- **`speak` lacks source attribution.** The executor speaks remote text verbatim
+  (`RemoteCommandExecutor.swift:99-101`) — indistinguishable from the local assistant. Align
+  with BL P2 / BK P2c narration ("Message from the gateway: …").
+- **Scope statement:** deny-by-default covers `type:"req"` frames only; inbound *event* text
+  (`heartbeat`/`cron` → `onNotification` → TTS/LLM, `OpenClawEventClient.swift:271-346`) is
+  unscreened. BK P0 gates the delegate loop; the event *text* deserves BL P2's hygiene
+  treatment (length cap, sanitization, `PromptInjectionPolicy` wrap).
+
+### Shared consent seam (Plan BL P4) — pre-BL refactor
+BL P4 routes MCP-peer See/Act/Agent calls through this plan's `RemoteCommandPolicy`/
+`RemoteCommandExecutor`, but the shipped seam is **peer-blind**: `decide(command:…)` takes no
+origin (`RemoteCommandPolicy.swift:99-105`), `RemoteInvokeAuditEntry` records only
+action+disposition, and rate state is one shared bucket set — a chatty MCP peer would starve the
+gateway's budget, and BL P4's "every call attributed to the peer's API key" is unimplementable.
+Small refactor before BL P4: thread an `origin` through `decide()` and the audit entry, and key
+rate state per origin. (Peer identity for inbound MCP callers is BL P4; the gateway-socket
+identity is Plan AR.) **This refactor is scheduled as Plan BN P2**; the shared confirm surface it
+pairs with is BN P1.
 
 ### Same-theme hardening (fold into this PR — small, adjacent)
 - **Token hygiene:** the gateway token is interpolated into the WS URL

@@ -3,10 +3,22 @@
 **Status:** 🚧 Core shipped ([#116](https://github.com/straff2002/OpenGlasses/pull/116)). The
 deterministic core (setup-code parse/encode, auth-mode selection, response → pairing-state
 mapping, per-device identity) is built and tested (23 tests); `GatewayConfig` device fields, the
-handshake credential fix (active gateway, not the global token), pairing-response capture, and
-the `GatewaySettingsView` pairing UI are in. **Deferred — backend prerequisite:** the live
-approval round-trip needs the gateway to implement the bootstrap → approval → device-token
-handshake; until it does, this degrades cleanly to today's shared-token flow.
+handshake credential fix (active gateway, not the global token), and pairing-response capture
+are in. **Status corrected 2026-07-10:** the "live pairing UI" is *partially* in —
+`onPairingStatusChange` fires (`OpenClawEventClient.swift:9,45,71,253`) but has **zero
+consumers**, `startPairing(setupCode:)` has **zero callers**, and the setup code's decoded
+`url` field is discarded (the user still types the host manually,
+`GatewaySettingsView.swift:367,376`). Settings shows "Paired" only from the persisted
+`deviceToken` plus a static message — there is no Connecting → Waiting-for-approval → Paired
+row yet. **Deferred — backend prerequisite, re-scoped:** the live approval round-trip needs
+the gateway to implement the bootstrap → approval → device-token handshake; that PR must also
+finish the client half already stubbed — wire `startPairing`/`onPairingStatusChange` into the
+settings UI (or delete the dead callback), use `payload.url` for one-scan gateway creation,
+and **only accept pairing tokens while a bootstrap attempt is in flight** (today an
+unsolicited `device.paired` event persists a token at any time, `OpenClawEventClient.swift:264-270`,
+and any `type:"res"` frame is treated as a connect response — over LAN `ws://` a MITM could
+plant pairing state). Until the backend lands, this degrades cleanly to today's shared-token
+flow.
 
 Today a user connects to an OpenClaw gateway by pasting a **single shared gateway token**
 (`GatewayConfig.token`, a `SecureField` in `GatewaySettingsView`). Every device that connects

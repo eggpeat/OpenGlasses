@@ -12,7 +12,31 @@
 - **Transport parsing/selection** — `MCPTransportKind`/`MCPAuthKind` added to `MCPServerConfig` (backward-compatible decode — old saved servers keep loading). `MCPTransport` protocol with `HTTPTransport` extracted byte-identical from `mcpRequest` and a factory; `MCPClient.mcpRequest` now selects per server. Pure `SSEEventParser` (wire framing + chunk reassembly + JSON-RPC `id` correlation) shipped as the foundation for the deferred live stream.
 - **Tests:** 37 headless (`MCPCatalogTests` 17, `MCPTransportTests` 9 incl. a `URLProtocol` request-shape stub, `SSEEventParserTests` 11). Full suite 631 green, Debug + Release.
 
-**Deferred (risky live-network bits, not in this PR):** the `SSETransport` streaming **initialize handshake** against a real server (the parser ships and is tested; selecting an SSE server currently throws `notYetSupported` cleanly rather than silently no-op'ing), and the `MCPOAuth` device-code/PKCE flow + Keychain token refresh (OAuth catalogue entries install today by pasting a token into the prefilled editor). Both are pure live-network work that needs a real server/IdP to exercise — to be picked up as the Plan V fast-follow.
+**Deferred — re-scoped 2026-07-10:**
+- The `SSETransport` streaming **initialize handshake** — **no longer blocked on "a real server."**
+  Plan BL makes this load-bearing (its P2 alert channel is an outbound SSE subscription reusing
+  `SSEEventParser`, with `Last-Event-ID` replay pinned in the peer contract) and supplies
+  `MockOpsPeer`, a headless peer double to build the handshake against. Schedule with or before BL
+  PR2, which depends on it; live validation is then a one-off. (Selecting an SSE server still
+  throws `notYetSupported` cleanly today.)
+- **New, smallest/highest-leverage item: a catalog-expressible custom auth-header kind.**
+  `makeServerConfig` prefills only `Authorization: Bearer` (`MCPCatalog.swift:111-114`) and
+  `MCPAuthKind` has no header-key case — but the transport already applies arbitrary
+  `server.headers` and the manual editor already has an editable header-name field, so a user can
+  hand-add an `X-API-Key` peer today; the catalog just can't express it. Add
+  `{"kind": "header", "header": "X-API-Key"}` (new `MCPAuthKind` case + `makeServerConfig` branch +
+  install-screen field) — prerequisite for Plan BL P1's one-tap peer install.
+- The `MCPOAuth` device-code/PKCE flow + Keychain token refresh — **keep deferred, deprioritized
+  below the header item**: nothing on the current roadmap needs it (BL uses `X-API-Key`; every
+  catalog OAuth entry has the paste-token fallback).
+
+**Trust-model clarifications (2026-07-10):** the poisoning screen runs at **manual discovery time
+only** — `discoverAllTools`'s sole caller is the "Discover Tools" button (`MCPServersView.swift:156-163`),
+verdicts live in memory, and after relaunch MCP tools are simply *absent* until the user re-taps
+discover (quietly breaking "tap Notion, done"). A launch-time re-discovery would re-run the scan and
+close both gaps; per-call protection is solely the Plan R egress screen in `NativeToolRouter`. And
+"vetted" attaches to the catalog *template*, not the user-filled endpoint (`{host}` entries) —
+`.redact` + the scanner still apply, but the trust language shouldn't be read as endpoint vetting.
 
 ---
 

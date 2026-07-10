@@ -23,7 +23,13 @@
 
 **Phase 3 shipped** (`feat/codex-claude-harness-adapters`) — the **Codex-cloud + Claude Code (remote) adapters**: `CustomAgentHarness` is generalized to carry its `kind` (so dispatched runs are tagged correctly), and pure `AgentHarnessPreset.codexCloud`/`.claudeRemote` pre-fill a `CustomHarnessConfig` with each backend's auth scheme (`Authorization: Bearer` / `x-api-key`), field names, and response paths. Keychain-backed `Config.codexAgentToken`/`claudeRemoteToken` (+ optional base-URL overrides); both wired into `makeAgentRegistry` and exposed in `AgentHarnessSettingsView` (the default-backend picker now enumerates all kinds). 8 tests (`AgentHarnessPresetTests`); the generalization keeps `AgentCustomHarnessTests`/`AgentSessionTests` green (43 total in this run).
 
-**Still deferred (per the build order):** the gateway-side `agent.*` methods + the rich live event stream (Phase 1's live half — needs a running gateway that exposes them; the adapter is ready and `normalize` maps the schema); live **endpoint verification** of the Codex/Claude REST contracts (the adapters + presets are built and tested; the exact paths are confirmed against the real services on the live edge); and live token-streaming + the HUD confirm view (Phase 4).
+**Still deferred (per the build order):** the gateway-side `agent.*` methods + the rich live event stream (Phase 1's live half — needs a running gateway that exposes them; the adapter is ready and `normalize` maps the schema); live **endpoint verification** of the Codex/Claude REST contracts — **re-scoped 2026-07-10:** the preset URLs are guesses (`https://api.anthropic.com/v1/code`, `AgentHarnessPreset.swift:35`, is not a real public API); treat `claudeRemote` as *contract unknown — the realistic path is a self-hosted Agent SDK bridge via the Custom harness*, and verify Codex-cloud before advertising that preset; and live token-streaming + the HUD confirm view (Phase 4 — the confirm view is now spec'd as the **shared consent affordance** for N's `awaitingInput`, BH's capture confirm, and Plan BL P4's capture-inside-agent-turn, not an N-only view).
+
+**Riders found in the 2026-07-10 review (fix in the next PR touching this area):**
+- **`switch_harness` can't reach the Phase 3 harnesses.** `AgentControlTool.parametersSchema` still enumerates `["openclaw", "custom"]` (`AgentControlTool.swift:38`) and the lookup does `AgentHarnessKind(rawValue: raw.lowercased())` (`:84-85`) — but the Phase 3 raw values are camelCase (`codexCloud`, `claudeRemote`), so `"codexcloud"` never matches. Voice-switching to Codex/Claude is impossible; only the Settings picker reaches them. Fix: case-insensitive kind lookup + updated schema enum.
+- **Service-layer gating (BK P0 rider):** `OpenClawBridge.agentRequest` (`OpenClawBridge.swift:441-447`) and `AgentSessionService.dispatch` (`AgentSessionService.swift:61`) have no `agentModeEnabled` guard — the only gate in the chain is tool-layer. Latent today (only callers are gated); guarded as part of BK P0.
+- **Custom/preset harness hygiene:** `CustomHarnessConfig.isConfigured` accepts `http://` (token goes cleartext — require https or warn), and the `{id}` template substitutes a **server-controlled** run id into the URL unencoded (`CustomHarnessConfig.swift:52,68`) — percent-encode it.
+- **`confirm` is self-approvable.** `code_agent {action:"confirm"}` (`AgentControlTool.swift:75-77`) approves a pending irreversible action with no user-distinct check — a prompt-injected turn can confirm its own push. Route `confirm` through `ToolConfirmationCoordinator` (as BH capture does) or require it to originate from a wake-word turn. **Scheduled as Plan BN P1** (which also delivers the shared HUD confirm this plan's Phase 4 wanted); the `switch_harness` + hygiene riders above are Plan BM P5.
 
 ---
 
@@ -48,9 +54,10 @@ Sources/Services/AgentHarness/
 ├── AgentSummarizer.swift      // AgentRunResult → one spoken line (harness-agnostic)
 └── Adapters/
     ├── OpenClawAgentHarness.swift   // REAL — reuses OpenClawBridge + OpenClawEventClient
-    ├── CustomAgentHarness.swift     // Generic URL + token + field mapping
-    ├── CodexCloudHarness.swift      // Stub until cloud trigger verified (Phase 0)
-    └── ClaudeRemoteHarness.swift    // Stub until routines/web trigger verified (Phase 0)
+    ├── CustomAgentHarness.swift     // Generic URL + token + field mapping (carries its kind)
+    ├── CustomHarnessConfig.swift    // Pure request building + JSONPath response mapping
+    └── AgentHarnessPreset.swift     // Phase 3 shipped as pure presets over CustomAgentHarness
+                                     // (.codexCloud / .claudeRemote) — no per-service stub files
 ```
 
 ### Core model (`AgentModels.swift`)
@@ -157,8 +164,9 @@ The payoff is the **normalized `AgentEvent`**: one `AgentSummarizer` produces th
 
 Autonomous code changes from a voice command can push, open PRs, run destructive commands. Default posture:
 
-- **Spoken confirmation before irreversible actions** — push, PR, `rm`/`git reset`/migrations. The agent proposes, the summary asks ("I'm about to push to main — say 'confirm' to proceed"), execution waits on `awaitingInput`.
-- This is exactly the **validation-on-notification** idea worth pairing with a display: on a HUD, show the diff/action and a confirm affordance instead of audio-only. The `awaitingInput` status is the seam for it.
+- **Spoken confirmation before irreversible actions** — push, PR, `rm`/`git reset`/migrations. The agent proposes, the summary asks ("I'm about to push to main — say 'confirm' to proceed"), execution waits on `awaitingInput`. **Honest scoping: this is honored, not enforced, client-side** — the gate only exists if the harness emits `awaiting_input`; a harness that never does simply narrates `.pushed` after the fact. Nothing on the phone can block a remote push.
+- This is exactly the **validation-on-notification** idea worth pairing with a display: on a HUD, show the diff/action and a confirm affordance instead of audio-only. The `awaitingInput` status is the seam for it — and the view is shared with BH capture consent and Plan BL P4 (one confirm surface, three plans).
+- The confirmation itself must be user-distinct: see the `confirm` self-approval rider above.
 - Surface the active harness + project prominently so the user always knows *where* the agent is acting.
 
 ---
@@ -210,6 +218,7 @@ Autonomous code changes from a voice command can push, open PRs, run destructive
 - **`MeetingSummaryTool` / `ConversationSummaryTool`** (existing) — summarizer prior art.
 - **`MCPClient` / `MCPServersView`** (existing) — pattern for the Custom URL adapter + settings UI; `MCPGlassesServer` enables agent→glasses callback.
 - Relation to **[Plan E](E-mcp-server-mode.md)**: Plan E exposes OpenGlasses *as* an MCP server (tool surface); Plan N makes OpenGlasses a *controller* of remote agents. Complementary, not overlapping.
+- Relation to **[Plan BL](BL-ops-platform-agent-bridge.md)**: BL P1's `A2AClient`/`OpsTaskTool` is structurally a fifth harness — A2A `tasks.send`/`tasks.get` is exactly the `AgentHarness` start/poll shape. When BL P1 lands, prefer an `A2AAgentHarness` adapter (or at minimum keep the dispatch/poll/narrate stacks cross-referenced) over growing two parallel ones; BL P4 shares the HUD confirm surface (Phase 4).
 
 ---
 

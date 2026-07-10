@@ -1,18 +1,65 @@
 # Plan BA — Android Port (full roadmap to platform parity)
 
 **Strategic fit:** OpenGlasses today is an iOS-only app for Ray-Ban Meta / Oakley Meta glasses. Meta now
-ships an **official Android Device Access Toolkit** (same vendor, same device coverage, Display support
-from v0.7) — so the one thing that would normally make a smart-glasses port impossible (proprietary
-device access) is solved by a first-party SDK we already depend on the iOS twin of. Android is the larger
-global handset base and the larger Ray-Ban Meta owner base outside the US. This plan is the route from
-"iOS app" to "second first-class native app at feature parity."
+ships an **official Android Device Access Toolkit** — so the one thing that would normally make a
+smart-glasses port impossible (proprietary device access) is solved for the *camera/session* half by a
+first-party SDK we already depend on the iOS twin of. **Honest header (corrected 2026-07-10): the
+Android DAT is v0.3.0 with NO Display module** — "Display from v0.7" was the *iOS* SDK line; the HUD
+half of the product is an open risk gating Phase 4, not a solved problem (see the contingency below).
+Android is the larger global handset base and the larger Ray-Ban Meta owner base outside the US. This
+plan is the route from "iOS app" to "second first-class native app at feature parity."
 
-**Effort:** Large — this is a platform reimplementation, not a feature. Estimate **3–6 engineer-months to
-full parity**, but it front-loads value: a usable cloud-only MVP (Phases 0–3) is **~3–5 weeks**.
+**Effort (corrected 2026-07-10 — the original headline contradicted its own phase table):** Large — a
+platform reimplementation. The phases sum to **~21–30 weeks serial ≈ 5–7 engineer-months to full
+parity** (the earlier "3–6" low end is unsupported); the cloud-only MVP (Phases 0–3) sums to
+**7–10 weeks**, not 3–5, unless >1 engineer is staffed (state it if so). 6 months is the credible
+floor: the iOS app reached its current 517-file / 85k-line shape in ~6 months of 536 commits with the
+design cost already paid — and the port's target moves at ~200 commits/month.
 
-**Status:** 📝 Drafted — not scheduled. This is a *parent roadmap*; each phase below is its own milestone
-(and likely its own repo/PR stream), not a single PR. House style still holds **within** each phase:
-deterministic, headless-testable core first; live/device/backend edge deferred.
+**Status:** 📝 Drafted — not scheduled; **revised 2026-07-10 after a code-verified review.** This is a
+*parent roadmap*; each phase below is its own milestone (and likely its own repo/PR stream), not a
+single PR. House style still holds **within** each phase: deterministic, headless-testable core first;
+live/device/backend edge deferred.
+
+## Revision 2026-07-10 — drift control, parity cut, and contracts (binding on all phases)
+
+1. **Parity ledger + freeze tag.** "iOS as the executable spec" is already stale 9 days after
+   drafting (477 → 517 files; handshake v4 + Ed25519 device identity (#182), Simple Mode (#189),
+   Tavily (#187), locale-aware speech, and Plans BJ/BK/BL all postdate it). The port pins **parity =
+   iOS as of a named git tag**, maintains a **parity ledger keyed to the plan-letter index in
+   docs/plans/README.md** (one row per plan: in-v1 / post-v1 / never), and every new iOS plan must
+   declare its row on merge. The port targets the **post-BG flow-engine spine** (#157–#178), not the
+   legacy architecture BG replaced.
+2. **Parity-cut omissions to classify now** (in no phase today): Plan T offline queue + Plan U
+   capture flows (**must move into the Phase 6 gate — the "B2B revenue live" exit is false without
+   them**); the MCP client/server stack (Plans E/R/V — 23 source files, absent from every phase);
+   the gateway protocol surface Android must speak compatibly (AR pairing, BH remote-invoke
+   command/policy shapes, handshake v4); Plan BL's A2A+MCP contracts; memory/brain (AY recall,
+   BrainStore ingest); and W presence throttle, AA first-aid, AE study mode, AF local server, AN
+   projects, AQ diarization (incl. the HIPAA behavior matrix — compliance is not just Play Billing),
+   AV visual memory, AW evolution loop, BI re-ask. Each gets an explicit in/out row, not silence.
+3. **Shared-contract corpus (repo question answered).** Separate repo, but contracts get a canonical
+   home + **golden-fixture corpus consumed by BOTH test suites**: vault JSON (Plan Q exports as
+   fixtures), capture-flow JSON (U), gateway wire protocol (v4 + pairing + remote-invoke frames),
+   A2A/MCP peer contracts (BL — copy its "contract only" documentation pattern), LLM wire-format
+   goldens, pricing tables, license format. iOS's 177 headless test files are the spec's teeth —
+   golden fixtures are the cheapest drift defense and work regardless of repo layout.
+4. **No-Display contingency for Phase 4.** If DAT-Android ships no Display module on this timeline,
+   the HUD backend alternative is the Plan AH EVEN G2 path (open BLE, no permission gate) — decide
+   at the Phase 0 spike, don't discover it at Phase 4.
+5. **Cross-platform entitlement is a Phase 6 requirement, not an afterthought.** No account system
+   exists; StoreKit purchases are device-local. For B2B per-seat (mixed fleets are the *normal*
+   case): the Field Assist Curve25519 offline license path (already format-portable) is the likely
+   answer — state the policy (one license covers both platforms) and the Medical Compliance story
+   (re-purchase vs receipt backend). Vault/brain/conversation **data portability** between a user's
+   own installs rides Plan Q vault export + AN project bundles — name export/import compatibility as
+   a parity requirement.
+6. **Phase 1 feasibility riders:** always-on wake word on Android 14+ (foreground-service-type
+   `microphone` background-start restrictions, Doze, OEM task-killers) is Phase-1 work, not the
+   Phase-8 table row; **Play review is a launch gate** (always-listening mic + camera + face
+   recognition hits sensitive-permissions declarations, Data Safety, biometric policy) — schedule it
+   at Phase 0/1, not the Phase 9 listing checkbox; per-OEM BLE/SCO matrix budgeted, not one
+   implementation; Phase 8 includes BD-class realtime resilience from day one.
 
 ---
 
@@ -200,8 +247,10 @@ The product's spine, no glasses-optional features yet.
 - **Wear OS** companion (replaces the watchOS app/widgets), App Widgets / Glance home surfaces, Live-
   Activity-equivalent foreground notifications, Android Auto (replaces CarPlay — first-class per project),
   App Actions / Assistant shortcuts (replaces AppIntents/Siri catalog Z).
-- Localization (the iOS app ships ~40 locales — reuse the string catalogs), accessibility pass, Play Store
-  listing + release pipeline (replaces Xcode Cloud), share-target (replaces Share Extension).
+- Localization (the iOS catalog ships **10 languages** — de, en, es, es-MX, fr, ja, pl, uk, zh-Hans,
+  zh-Hant; the "~40 locales" claim was wrong — reuse the string catalogs), accessibility pass, Play
+  Store listing + release pipeline (replaces Xcode Cloud; the *review/policy* work moved to Phase 0/1
+  per the revision riders), share-target (replaces Share Extension).
 - **Exit:** **full parity.**
 
 ---
@@ -258,12 +307,14 @@ Phases 4–8 are largely parallelisable once Phase 3 lands. Phase 6 is the one t
 
 ## Effort summary
 
-| Milestone | Phases | Rough effort | Outcome |
+| Milestone | Phases | Rough effort (corrected 2026-07-10) | Outcome |
 |---|---|---|---|
-| **Cloud-only MVP** | 0–3 | ~3–5 weeks | An Android user can talk to their glasses and use core tools |
-| **Glasses-complete** | +4, 5 | +4–6 weeks | Camera, HUD, and vision verticals work |
-| **Revenue-complete** | +6, 8 | +4–6 weeks | IAP/B2B + realtime/expert modes live |
+| **Cloud-only MVP** | 0–3 | ~7–10 weeks (sum of the phases; "3–5" assumed unstated parallel staffing) | An Android user can talk to their glasses and use core tools |
+| **Glasses-complete** | +4, 5 | +4–6 weeks (Phase 4 gated on the Display contingency) | Camera, HUD, and vision verticals work |
+| **Revenue-complete** | +6, 8 | +4–6 weeks (**Phase 6 gate now includes T offline queue + U capture flows + entitlement policy**) | IAP/B2B + realtime/expert modes live |
 | **Full parity** | +7, 9 | +6–8 weeks | On-device tier, Wear OS, Android Auto, widgets, localization |
 
-The first row is the one that matters: a ~month of work puts a real, usable OpenGlasses on Android, and
-the bridge spike (Phase 0) tells us within a week whether anything downstream is at risk.
+Serial total ≈ **21–30 weeks (5–7 engineer-months)** against a moving target — the parity ledger +
+freeze tag in the revision section is what makes "parity" a fixed claim. The bridge spike (Phase 0)
+still tells us within a week whether anything downstream is at risk, and now also decides the
+no-Display contingency.

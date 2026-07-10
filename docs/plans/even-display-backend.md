@@ -1,145 +1,231 @@
 # Plan AH — EVEN Realities G2 Display Backend (second HUD target)
 
-**Status:** Drafted, not scheduled. Written so it *could* be implemented if we decide to
-offer EVEN compatibility. Speculative until there's a device in hand — the protocol is
-community reverse-engineered, so treat every byte-level claim as "validate against capture
-logs / hardware first."
+**Status:** Drafted, not scheduled; **revised 2026-07-10 after a code-verified review** (protocol
+widened, BLE section added, renderer contract pinned, input story corrected). Speculative until
+there's a device in hand — the protocol is a community reverse-engineered reconstruction, so treat
+every byte-level claim as "validate against capture logs / hardware first."
 
 ## Why this might matter
 
 The Ray-Ban Display path is gated behind Meta's DAT dev-mode permission flow (see
-`reference_dat_glasses_gotchas` memory) — the single thing blocking real on-glasses
-testing. EVEN Realities G2 has **no equivalent gate**: its display speaks an open,
-reverse-engineered BLE protocol (`i-soxi/even-g2-protocol`) and there's an official JS
-`@evenrealities/even_hub_sdk`. Working community apps (`BondIT-ApS/glass-ai`,
-`ukaoma/cos-glasses-server`) already render to it. So EVEN is a way to put our HUD on
-*real shipping hardware today*.
+`reference_dat_glasses_gotchas` memory) — the single thing blocking real on-glasses testing. EVEN
+Realities G2 has **no equivalent gate**: its display speaks an open BLE protocol that has been
+reconstructed by the community (with capture logs), and the vendor ships an official JS SDK that
+can serve as a reference oracle. Working community apps already render to it. So EVEN is a way to
+put our HUD on *real shipping hardware today*.
 
-The architectural bet: our HUD is already abstracted behind the **SDK-free `HUDScreen`
-model** (`HUDScreen` / `HUDLine` / `HUDItem`), which today is rendered two ways — to
-`MWDATDisplay` FlexBox on-glasses and to `HUDPreviewView` on-phone. Adding a third
-renderer (EVEN) is "another backend behind the same DSL," not a rearchitect. This plan
-also *proves* the DSL is genuinely backend-agnostic.
+The architectural bet: our HUD model (`HUDScreen`/`HUDLine`/`HUDItem`) is SDK-free plain data
+(`HUDScreen.swift:1` imports Foundation only), and the render queue / interactive gate /
+flash-then-restore logic in `GlassesDisplayService` is backend-neutral. **Honest framing
+(corrected):** today there is exactly *one* `HUDScreen`→visual mapping and it goes through
+MWDATDisplay types (`makeScreenView`, `GlassesDisplayService.swift:366-408`); `HUDPreviewView` is
+not a second backend — it renders the *Meta FlexBox tree* (`HUDPreviewView.swift:26` imports
+MWDATDisplay). EVEN would be the **first true second renderer** — this plan *creates* the proof of
+backend-agnosticism, it doesn't stand on one.
 
 ## Hard scope limit (state up front)
 
-**EVEN G2 has no camera.** It is a display + mic + temple-gesture device. So EVEN support
-lights up only the HUD/voice/text half of OpenGlasses:
+**EVEN G2 has no camera.** It is a display + mic + temple-gesture device. So EVEN support lights up
+only the HUD/text half of OpenGlasses:
 
-- ✅ Works: AI-response HUD, ambient text, notifications, the Now/Next task cards and the
-  launcher (`HUDRouter`/`HUDLauncher`), voice in (G2 mic streams 16 kHz PCM), TTS out.
-- ❌ Unavailable on EVEN: camera vision tools, RTMP, face recognition, privacy filter,
-  ambient captions sourced from the glasses camera, memory-rewind video — anything that
-  needs `CameraService` frames.
+- ✅ Works: AI-response HUD, ambient text, notifications, the Now/Next task cards and the launcher
+  (`HUDRouter`/`HUDLauncher`), **and the Teleprompter** (`TeleprompterScreen` renders through the
+  same DSL — a strong EVEN use case).
+- ❌ Unavailable on EVEN: camera vision tools, RTMP, face recognition, privacy filter, ambient
+  captions sourced from the glasses camera, memory-rewind video — anything needing `CameraService`
+  frames.
+- **Audio: display-only in v1 (claim cut).** The G2 mic streams PCM over the custom BLE protocol —
+  the entire voice pipeline (WakeWord/Transcription/realtime) consumes the iOS audio-session mic,
+  so G2-mic ingestion is a whole new audio path, and whether the G2 even has a speaker for TTS is
+  unverified. In v1, voice in/out stays on the phone/earbuds; G2 audio is a separate future plan if
+  ever.
 
-The UI must degrade gracefully: with an EVEN device active, camera-dependent tools should
-report "not available on this device" rather than fall back to the iPhone camera silently.
+The UI must degrade gracefully: with an EVEN device active, camera-dependent tools report "not
+available on this device" rather than fall back to the iPhone camera silently — **subject to the
+hybrid decision below** (in hybrid mode the camera guard must NOT fire).
 
-## Architecture — the seam
+## Architecture — the seam (widened 2026-07-10)
 
-Introduce a backend protocol that `GlassesDisplayService` delegates its actual sends to,
-keeping the render queue, interactive gate, and producers exactly as they are:
+The original 4-method protocol was too narrow to survive contact with the build order. The Meta
+path owns four more responsibilities that the backend must carry from day one:
 
 ```swift
 protocol GlassesDisplayBackend: AnyObject {
-    var isAvailable: Bool { get }            // device present + connected
+    // Capability — replaces the deviceSupportsDisplay() gate
+    // (GlassesDisplayService.swift:196/224 hard-guard on it today; the gate moves here).
+    var isAvailable: Bool { get }
+
+    // Lifecycle + error surface. ensureDisplay()'s 10s start-poll, shutdown(), and
+    // handleRenderError's teardown-and-rebuild (:421-468, :216-219, :482-494) are
+    // Meta-session-specific; a flaky RE'd BLE link makes reconnect semantics the HARD part.
+    func start() async throws
+    func shutdown() async
+    var onTransportError: ((Error) -> Void)? { get set }
+
+    // Content-level ambient frame — showText(String) alone drops title+icon;
+    // showNotification/showNavigation (:175-183) need this shape to render on EVEN.
+    func show(title: String?, body: String, icon: HUDIcon?) async throws
     func send(_ screen: HUDScreen) async throws
-    func showText(_ text: String) async throws
     func clear() async throws
+
+    // Input events back to the service — on Meta, band selections arrive as SDK
+    // Button.onClick closures baked into the FlexBox (:401-406). A one-directional
+    // send() makes interactive screens fire-and-forget on any other backend.
+    var onItemSelected: ((String) -> Void)? { get set }
 }
 ```
 
-- `MetaDisplayBackend` — wraps the current `MWDATDisplay` path (`HUDScreen` → FlexBox via
-  the existing `makeScreenView` → `Display.send`). Pure refactor; no behaviour change.
-- `EvenDisplayBackend` — `HUDScreen` → monochrome 576×288 text layout → even-g2-protocol
-  packets over CoreBluetooth.
+- `MetaDisplayBackend` — wraps the current `MWDATDisplay` path. Pure refactor; no behaviour change;
+  all existing HUD tests stay green (the `testRenderSink`/`testCapabilityOverride` seams capture
+  above the backend, `GlassesDisplayService.swift:270-283` — verified).
+- `EvenDisplayBackend` — `HUDScreen` → monochrome 576×288 frame → protocol packets over
+  CoreBluetooth.
 
-`GlassesDisplayService` picks the active backend from a setting (`Config.displayBackend`:
-`.metaRayBan` default / `.evenG2`). The existing `testRenderSink` / `testCapabilityOverride`
-seams stay — they capture at the `HUDScreen`/frame level above the backend, so all current
-HUD tests keep working unchanged.
+**Extraction riders (found in review — currently private, the plan needs them public/shared):**
+- `condense` + `maxLength`/`maxTitleLength` are `private` inside `GlassesDisplayService`
+  (`:125-127, :499-512`) — extract before "reuse the 120/40-char condensing" is real.
+- `HUDIcon` lives inside the SDK-importing `GlassesDisplayService` (`HUDScreen.swift:28,43` type
+  their fields with it) — move it next to the DSL so the DSL file's owner stops being an
+  MWDAT-importing class.
 
-## EVEN G2 protocol (from `i-soxi/even-g2-protocol`, **verify before trusting**)
+`GlassesDisplayService` picks the active backend from `Config.displayBackend` (`.metaRayBan`
+default / `.evenG2`) — **see the hybrid question below before hardening this either/or shape.**
+
+## Input on EVEN — Phase 1 is mostly voice, and one real gap
+
+**What already works with zero new code** (the original draft missed this): task cards accept
+"done/next/skip/back" by voice (`HUDVoiceCommand`, `HUDRouter.handleVoiceCommand`, wired pre-LLM
+at `OpenGlassesApp.swift:2328-2333`), and the launcher opens on "menu" and navigates by spoken
+item labels (`HUDLauncher.handleVoiceSelection`). So EVEN Phase 1 is genuinely usable hands-free.
+
+**The gap:** decision-step task cards render one button per branch (`choice:<id>`,
+`HUDRouter.swift:190-196`) and there is **no voice path to select a branch** — `HUDVoiceCommand`
+parses only complete/skip/back, and label selection fires only while the launcher menu is open.
+On Meta the band covers it; on EVEN, decision workflows dead-end. Phase 1 must either add
+branch-label voice selection (small: extend the voice grammar with the visible choice labels) or
+carry an explicit "linear workflows only until Phase 2" scope note — and define how a stuck
+interactive card is dismissed if voice fails.
+
+**Phase 2:** temple-gesture events arrive on the notify characteristic; map to the same
+`onItemSelected` channel the protocol now carries. Format TBD from capture logs.
+
+## Bluetooth — first owned BLE stack in the app (new section)
+
+There is **no first-party CoreBluetooth code anywhere in Sources today** — all glasses BLE lives
+inside the DAT SDK. `EvenBLETransport` is greenfield: scanning, connect/reconnect, state
+restoration, backgrounding are all new surface, not incremental. "No new SPM dependency" is true
+and misleading — budget accordingly.
+
+- **Pairing/settings UX (was missing from Files):** left/right lenses are *separate peripherals*
+  (advertising `Even G2_*`) — a two-device pairing flow with a defined single-lens degraded state.
+  New Settings surface: scan, select, persist both peripheral identifiers.
+- **Info.plist:** `NSBluetoothAlwaysUsageDescription`/`NSBluetoothPeripheralUsageDescription`
+  exist (`Info.plist:120-123`) but their strings say "Ray-Ban Meta smart glasses" — reword to
+  cover both device families.
+- **Background posture (decide):** `bluetooth-central` UIBackgroundModes +
+  `CBCentralManagerOptionRestoreIdentifierKey` state restoration, or foreground-only v1 (simpler,
+  consistent with the app's other lifecycle constraints). Name the choice in the PR.
+- **Hybrid concurrent-radio decision (the big one):** the either/or `Config.displayBackend`
+  forecloses the plausible best configuration — **Ray-Ban (non-Display) for camera/audio + EVEN G2
+  for HUD**, DAT session and CoreBluetooth running concurrently. In that hybrid the "camera tools
+  report unavailable on EVEN" guard is actively wrong. Decide: v1 either/or with hybrid as a named
+  follow-up, or model the config as `cameraDevice`/`displayDevice` from the start (cheap now,
+  annoying migration later).
+
+## EVEN G2 protocol (community reconstruction — **verify before trusting**)
 
 BLE (base UUID `00002760-08c2-11e1-9073-0e8ac72eXXXX`):
 - Discover by advertising name `Even G2_*` (left/right are separate peripherals — pair both).
 - Write commands: char `…5401` (handle `0x0842`), write-without-response.
 - Notify responses/events: char `…5402` (handle `0x0844`), enable CCCD.
 - Display rendering: char `…6402` (handle `0x0864`), 204-byte rendering packets.
-- MTU 512; conn interval 7.5–30 ms; custom app-level auth handshake (not BLE pairing) —
-  the repo logs a 7-packet handshake (`captures/auth-sequence.log`).
+- MTU 512; conn interval 7.5–30 ms; custom app-level auth handshake (not BLE pairing) — a
+  7-packet handshake appears in the community capture logs.
 
 Packet framing:
 `[AA] [type] [seq] [len] [pktTotal] [pktSerial] [svcHi] [svcLo] [payload…] [crcLo] [crcHi]`
 - `type`: `0x21` command / `0x12` response.
 - `len` = payload length + 2 (CRC included).
 - `pktTotal`/`pktSerial` for >MTU fragmentation (seq ID constant across a fragmented message).
-- CRC-16/CCITT, init `0xFFFF`, poly `0x1021`, computed over **payload only** (skip the
-  8-byte header), emitted **little-endian**.
+- CRC-16/CCITT, init `0xFFFF`, poly `0x1021`, computed over **payload only** (skip the 8-byte
+  header), emitted **little-endian**.
+
+## Renderer contract (pinned 2026-07-10 — was under-specified)
+
+The rendering payload format for `…6402` isn't fully documented, and that ambiguity was hiding the
+renderer's *output type*. Pin it as a typed intermediate so steps 1–4 stay headless regardless of
+which the wire wants:
+
+- **`EvenFrame`** — the renderer's output: either `lines: [String]` (text/command wire) or a
+  1-bit `[UInt8]` bitmap (framebuffer wire). Build the renderer against `EvenFrame`; only the
+  packetizer cares which variant the device speaks. If bitmap: pick a fixed monospace glyph set +
+  char-cell metrics up front (576 px ÷ advance = the *real* char budget — "wrap at 576px" and
+  "120-char condensing" are not the same number), and name **golden-image fixtures**, not just
+  string snapshots.
+- **Mono mappings (decide, then test):** `HUDEmphasis` .primary/.secondary/.meta → e.g.
+  normal / indent / prefix on 1-bit; `HUDButtonStyle` → numbered list entries (and the number
+  grammar joins the voice-selection story above); the 10 semantic `HUDIcon`s → glyph substitutes
+  (`[!]`, `→`, `•`) or dropped — enumerate all ten.
+- **L/R frame policy (unanswered in draft):** same frame mirrored to both lenses, or split
+  content? Affects transport and renderer; decide before the packetizer.
 
 ## Files
 
 New (`OpenGlasses/Sources/Services/Display/Even/`):
 - `EvenPacket.swift` — pure codec: header build/parse, CRC-16/CCITT, fragmentation. No I/O.
-- `EvenScreenRenderer.swift` — pure `HUDScreen` → 576×288 monochrome line layout (reuse the
-  existing 120-char body / 40-char title condensing; map `HUDItem`s to a numbered/selectable
-  list since there's no rich button styling).
-- `EvenBLETransport.swift` — CoreBluetooth: scan `Even G2_*`, connect L/R, auth handshake,
-  write to `…5401`/`…6402`, observe `…5402`.
-- `EvenDisplayBackend.swift` — ties renderer + transport to `GlassesDisplayBackend`.
+- `EvenFrame.swift` + `EvenScreenRenderer.swift` — pure `HUDScreen`/content → `EvenFrame`
+  (mappings above; extracted `condense` reused).
+- `EvenBLETransport.swift` — CoreBluetooth: scan, connect L+R, auth handshake, write, observe.
+- `EvenDisplayBackend.swift` — renderer + transport behind `GlassesDisplayBackend`.
 
 Modified:
-- `GlassesDisplayService.swift` — extract `GlassesDisplayBackend`; route sends through the
-  active backend; add backend selection.
-- `Config.swift` — `displayBackend` setting (default `.metaRayBan`).
-- Camera-dependent tools — guard on active backend; report unavailable on EVEN.
+- `GlassesDisplayService.swift` — extract the widened `GlassesDisplayBackend`; move the capability
+  gate; route sends + selection events through the active backend.
+- `HUDScreen.swift` / icon extraction; condense extraction.
+- `Config.swift` — backend/device configuration (per the hybrid decision).
+- Settings — EVEN pairing surface. `Info.plist` — reworded BLE strings.
+- Camera-dependent tools — guard per the hybrid decision.
 
 ## Build order (deterministic core first, risky BLE last — per plan-delivery-rhythm)
 
-1. `EvenPacket` codec + CRC, with **golden-vector tests** derived from the repo's
-   `captures/*.log` (these give known-good byte sequences without hardware).
-2. `EvenScreenRenderer` + snapshot/string tests (HUDScreen → expected 576×288 line layout).
-3. `GlassesDisplayBackend` extraction + `MetaDisplayBackend` (refactor; all existing HUD
-   tests must stay green).
-4. `EvenDisplayBackend` wired to a **mock transport** (records packets) — full headless
-   validation of the render→packetize path with no BLE.
-5. `EvenBLETransport` (CoreBluetooth) behind the `displayBackend` flag — the only part that
-   needs a device. Ships dark until validated on hardware.
+1. `EvenPacket` codec + CRC, with **golden-vector tests** derived from community capture logs.
+   **Licensing rider:** those logs come from an external project — confirm the license permits
+   copying byte sequences into our test tree (ToS ≠ license); otherwise regenerate fixtures from
+   the spec text by hand.
+2. `EvenFrame` + `EvenScreenRenderer` + fixture tests (string or golden-image per the contract).
+3. Backend extraction + `MetaDisplayBackend` (pure refactor; all existing HUD tests stay green).
+4. `EvenDisplayBackend` over a **mock transport** (records packets) — full headless validation of
+   render→packetize, including the notification/nav content path and a selection event round-trip.
+5. `EvenBLETransport` (CoreBluetooth) behind the flag — the only device-gated part. Ships dark.
 
 ## Tests
-- CRC-16/CCITT vectors (fixed inputs → known checksums).
-- Packet framing + fragmentation round-trips; >512-byte payload splits into N packets with
-  constant seq + correct pktTotal/pktSerial.
-- `HUDScreen` → renderer layout: title truncation, line wrap at 576px width, item list
-  numbering, clear.
-- Backend selection: `GlassesDisplayService` routes to the chosen backend; EVEN inactive →
-  Meta path unchanged (regression guard for the refactor).
-- Mock-transport capture: a task-card `HUDScreen` produces the expected packet stream.
+- CRC vectors; framing + fragmentation round-trips (>512-byte payload → N packets, constant seq).
+- `HUDScreen`/content → `EvenFrame`: title truncation, wrap at the real char budget, item
+  numbering, emphasis/icon mono mappings, clear.
+- Backend selection + regression: EVEN inactive → Meta path unchanged; capability gate routes
+  through the backend; `show(title:body:icon:)` carries the ambient frame.
+- Mock-transport capture: a task-card screen produces the expected packet stream; a synthetic
+  selection event reaches `screenSelectionHandler`.
+- Voice: decision-branch selection grammar (if chosen) resolves `choice:<id>` labels.
 
 ## Open questions / decisions needed
-- **Hardware.** None on hand; steps 1–4 are fully testable headless, step 5 is not. Same
-  "tests are the gate" posture as the Meta display work.
-- **Protocol fragility.** Reverse-engineered and partial (teleprompter/calendar work,
-  notifications partial). Text-rendering payload format for `…6402` isn't fully documented —
-  needs capture-log analysis or hardware sniffing. May need the official `even_hub_sdk`
-  (JS) as a reference oracle.
-- **Legal/ToS.** Shipping support for a reverse-engineered BLE protocol — confirm we're
-  comfortable. The official SDK is JS-only (not usable from Swift), so a Swift
-  reimplementation of the wire protocol is the only native path.
-- **Gating.** A device-backend setting, not `agentModeEnabled` — it's not an
-  autonomous/gateway feature.
-- **Input mapping (Phase 2).** Temple-gesture events arrive on `…5402`; map to the same
-  `HUDRouter` selection callbacks the Neural Band drives. Format TBD from capture logs.
+- **Hardware.** None on hand; steps 1–4 are fully headless, step 5 is not. "Tests are the gate."
+- **Protocol fragility.** Community-reconstructed and partial; the vendor's official JS SDK is the
+  reference oracle where the reconstruction is thin.
+- **Legal/ToS + fixture licensing.** Shipping a reverse-engineered BLE protocol — confirm comfort;
+  and see the build-order licensing rider.
+- **Hybrid vs either/or** (Bluetooth section) — the highest-leverage open decision.
+- **Gating.** A device-backend setting, not `agentModeEnabled` — not an autonomous/gateway feature.
 
 ## Dependencies / prereqs
-- CoreBluetooth (system framework) — **no new SPM dependency**.
-- `i-soxi/even-g2-protocol` as the reference spec + capture logs (not a code dependency).
-- The `HUDScreen` DSL and `GlassesDisplayService` render queue already exist (Display
-  Phases 1–4).
+- CoreBluetooth (system framework) — no new SPM dependency, but the app's first owned BLE stack.
+- The community protocol reconstruction + capture logs as reference material (not a code
+  dependency); the vendor's official JS SDK as an oracle.
+- The `HUDScreen` DSL and `GlassesDisplayService` render queue already exist (Display Phases 1–4).
 
 ## Why this matters
-A second, ungated display backend means we can demo and ship the HUD on real hardware
-without waiting on Meta's permission flow — and it forces the HUD layer to stay cleanly
-backend-agnostic, which is good hygiene regardless of whether EVEN ever ships. Cost is
-bounded and front-loaded into deterministic, testable code; the only hardware-gated piece
-(BLE transport) is isolated behind a flag at the very end.
+A second, ungated display backend means we can demo and ship the HUD on real hardware without
+waiting on Meta's permission flow — and it forces the HUD layer to become genuinely
+backend-agnostic, which is good hygiene regardless of whether EVEN ever ships. Cost is bounded and
+front-loaded into deterministic, testable code; the only hardware-gated piece (BLE transport) is
+isolated behind a flag at the very end.

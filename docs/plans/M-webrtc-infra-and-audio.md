@@ -73,17 +73,33 @@ transitions). Keep the transition logic in a small, testable coordinator rather 
 
 ---
 
-## Build order
+> **Deployment demoted (2026-07-10).** The meeting-link transport (zero-infra, recommended for
+> remote) made deploying M1/TURN **on-demand, not next**: do it only for a customer with a
+> compliance/self-host requirement. M1 (`docs/webrtc/signaling-server.js`) and M2
+> (`docs/webrtc/expert-client.html`) stand as reference implementations until then.
+
+## Build order (on-demand — triggered by a self-host customer, not by default)
 
 1. **M1** signaling relay + deploy; point a test build's `expertSignalingURL` at it.
+   **Gate: room-token auth first — see the risk note below.**
 2. **M2** expert client; verify glasses→browser video over LAN (STUN only).
 3. Add TURN; verify cross-network (cellular) via the relay.
 4. **M3** audio-session coordination + wake-word/TTS gating; device test for echo / session wedging.
 5. Two-way audio end-to-end; flip on for a pilot.
 
+## Risk note — signaling protocol has no auth (flagged 2026-07-10, fix BEFORE any deploy)
+
+The relay has no room auth, rate limiting, or peer cap. Room ids are 8 UUID hex chars
+(`"openglasses-\(UUID().uuidString.prefix(8))"` in `WebRTCPeerTransport.start`), and `relay()`
+forwards to *every other peer* (`signaling-server.js:40-47`) — a third joiner silently receives the
+offer/candidates. Join-URL token auth was an open question; it is now a **precondition of
+deployment**, and adding the token field to `SignalingMessage` is cheap *now* while a later
+protocol change is breaking across app/server/client. (Verified clean otherwise: no hardcoded
+secrets — TURN credential is Keychain-stored, STUN default is the disclosed public Google server;
+the client accepts `ws://` if typed — the server header comment already says TLS in production.)
+
 ## Open questions
 
-- Auth on the signaling room (token in the join URL) so a leaked URL can't snoop a session?
 - Record the call into `SessionExport` (consent + storage)?
 - Reconnect/renegotiation on network change (cellular↔wifi handoff)?
 

@@ -16,12 +16,38 @@ bundle+overlay merge); `CaptureValue` / `CaptureRecord` / `Provenance`; the dete
 both LLMService and GeminiLive. On finish the `CaptureRecord` is enqueued to the offline queue (Plan T). 11 tests; full
 suite 594 green; Debug + Release verified.
 **Shipped since:** the **2 hero flows** — `refrigeration/flows/asset_inspection_v1.json` and
-`it_network/flows/it_site_survey_v1.json` (schema + runner exercised end-to-end in tests).
-**Still deferred:** routing the camera bindings to their tools (`barcode_or_voice`→scan_code,
-`photo`→CapturePhotoTool, `ocr_text`→EquipmentLookupTool — runner already accepts resolved values;
-**device-pending**); wiring the named-region precondition source (the runner/service `insideRegion`
-seam exists, just unset — needs a region registry); the no-code `CaptureFlowAuthorView`; folding the
-record into `SessionExporter` audit JSON.
+`it_network/flows/it_site_survey_v1.json` (schema + runner exercised end-to-end in tests); the
+**`CaptureFlowAuthorView` no-code editor** (`b516255`, 2026-06-30 — `CaptureFlowBuilder` pure
+validate + JSON round-trip, 6 tests; compose → export via share sheet); and **Plan AD's
+instrument-reading auto-fill** (`5099640` — `CaptureFlowRunner.answer(reading:)` +
+`CaptureFlowService.fillCurrentStep(with:)` + `VisionAssessTool.swift:52` route a camera reading
+into an active `voice_number` step: convert unit → range-check → store with provenance → advance).
+
+**Still deferred — re-scoped 2026-07-10:** routing the **remaining** camera bindings
+(`barcode_or_voice`→scan_code, `photo`→CapturePhotoTool, `ocr_text`→EquipmentLookupTool —
+`fillCurrentStep` has exactly one caller today). Split: the routing itself is **headless-buildable
+now** following the `VisionAssessTool` pattern (each tool checks for an active step of its type and
+offers the resolved value); only accuracy validation is device-pending. Also: wiring the
+named-region precondition source (the `insideRegion` seam exists, unset — AppState wires only
+`offlineQueue` + `location`; one lookup closure over GeofenceTool's regions; fine at the back of
+the queue since no shipped flow declares a precondition); folding the record into `SessionExporter`
+audit JSON (buildable now, cheap — closes the "audit-ready record" promise, currently true only via
+the sync queue).
+
+**New items from the 2026-07-10 review:**
+- **Schema versioning is now a real migration surface.** `CaptureFlow` has no version field;
+  `BindingType` is a strict enum; `CaptureFlowLibrary.load()` `try?`-decodes and `compactMap`s
+  failures away **silently** (`CaptureFlowLibrary.swift:34-50`). Any v2 binding type — or a typo in
+  a hand-edited overlay — makes the flow silently vanish from the library. Since the author UI now
+  puts user-authored JSON in vault overlays traveling between app versions, add `schema_version` +
+  a lossy-decode-with-rejection-report (the `MCPCatalog.loadStrict` pattern,
+  `MCPCatalog.swift:160-177`) before authored flows proliferate. There is also **no in-app import
+  path** — an authored flow that fails validation just never appears, no feedback.
+- **Type the queue payload.** CaptureRecords enqueue as bare `.logEntry`
+  (`CaptureFlowService.swift:127`) — a networked sink (Plan T → BL's A2A peer) can't distinguish a
+  typed CaptureRecord from any other log entry without payload-sniffing. Add a `captureRecord`
+  OpKind (or payload envelope) now; with it, a finished inspection flows field → queue → ops
+  platform with zero new U-side work once T's `PeerSyncSink` lands.
 
 ---
 

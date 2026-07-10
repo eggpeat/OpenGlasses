@@ -5,7 +5,31 @@
 adopted by the two realtime managers + wake-word baseline (exclusive owners) and live translation +
 TTS (coexisting riders). The coordinator is now the complete source of truth for audio usage
 (`audioActivity`). The only remaining item — trimming `AppState.switchMode`'s hardware-settling
-sleep — needs on-device validation. No new SPM dependency.
+sleep (`OpenGlassesApp.swift:1086`, still the 500 ms `Task.sleep`) — **re-sequenced 2026-07-10:
+after Plan BJ PR1.** BJ's single `sessionIOQueue` totally orders activate/deactivate, which is
+precisely what makes the "wait for the session to release" hack removable deterministically —
+trimming it before BJ means device-tuning a race BJ then restructures. Re-scoped as: after BJ PR1,
+replace the sleep with an awaited coordinator release barrier; device-validate. No new SPM
+dependency.
+
+**Plan BJ cross-reference (2026-07-10 — three claims below are corrected by BJ):**
+1. "Stale teardown is structurally impossible" is decision-time true, execution-time false:
+   `release()` decides `.deactivate` under `stateQueue` but executes `setActive(false)` later on
+   `deactivationQueue` while `acquire` activates inline on the caller's thread — a delayed
+   deactivation can land after a newer owner's activation. BJ Correction 1 (one serial queue +
+   ledger re-check at execution) closes it.
+2. `assumeOwnership` is slated for **retirement** in BJ PR2 once wake word activates via the new
+   no-deactivate/no-fallback `reconfigure` (which preserves this plan's "hand-tuned options must not
+   change" contract by construction). Read the wake-word mechanism below as the pre-BJ design.
+3. The "dedicated deactivation queue" description becomes one shared `sessionIOQueue` under BJ.
+
+**Known non-participants (2026-07-10 inventory — direct session callers the ledger never
+arbitrates):** `WakeWordService` `:307` (interruption-ended reactivation — owner-checked but
+coordinator-bypassing) and `:439` (no-lease deactivation fallback); `LiveTranslationService:95-96`
+(rider whose `beginCoexisting` is bookkeeping only — it still self-activates every restart cycle);
+`TextToSpeechService`'s implicit `AVAudioPlayer.play()` activations. All of those are in BJ PR2's
+wiring list. **One is in no plan:** `RealtimeAudioEngine.resumeAfterInterruptionOnQueue:414-416`
+reactivates with no `currentOwner` check — assigned to Plan AP's doc as a pre-validation fix.
 
 **Update (wake-word increment):** `WakeWordService` now registers as the baseline `.wakeWord` owner
 via a new register-only `AudioSessionCoordinator.assumeOwnership(_:)` — it keeps its hand-tuned

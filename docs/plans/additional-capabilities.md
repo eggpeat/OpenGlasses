@@ -14,9 +14,23 @@ SDK sends to the lens is shipped as [HUDPreviewView.swift](../../OpenGlasses/Sou
 (Plan Y / Display Phase 4) — brand-styled (coral accent, capsule buttons) and driven by
 `GlassesDisplayService.previewFlexBox(for:)`. This is the highest-value item here and it's done. ✅
 
-**Remaining follow-up (small):** add **snapshot tests** over `HUDPreviewView` for the canonical
-screens (task card, launcher menu) so the device-less preview is also a regression gate — the natural
-extension of "no Display hardware → tests are the gate." (~0.5 day.)
+~~**Remaining follow-up (small):** add **snapshot tests** over `HUDPreviewView`~~ ✅ Shipped —
+`HUDPreviewSnapshotTests.swift` exists (struck 2026-07-10; the "Suggested sequence" item below is
+equally stale).
+
+**2026-07-10 review notes:**
+- **Item 3 (shared `DeviceSession`) split:** `DeviceSessionCoordinator` is currently **dormant
+  code** — referenced by nothing outside its own file and tests; `CameraService.swift:153` and
+  `GlassesDisplayService.swift:439` still create sessions independently. The *adoption* (both
+  services acquire/release through the coordinator, each still effectively sole owner) is a
+  headless refactor buildable now with the existing fake-session seam; only *simultaneous
+  camera+HUD* validation needs glasses. Adopt early — dormant ref-counting logic silently drifts
+  from the real session lifecycle (e.g. the display reconnect path) the longer it waits.
+- **Item 6's PIN half is extracted to Plan BM P10 as a real gap, not a product decision:** Simple
+  Mode (shipped `e5cdddc`) has an unauthenticated exit toggle (`SettingsView.swift:603-606`) —
+  anyone holding the phone regains the full Settings surface, decrypted API-key fields included,
+  while conversations already have a biometric lock. Full multi-profile storage stays conditional
+  here.
 
 ---
 

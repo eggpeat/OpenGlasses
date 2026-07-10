@@ -2,6 +2,18 @@
 
 **Status: ✅ Code-complete across three PRs** (model-quality validation is on-device, gated behind a
 default-off flag — the deferred edge).
+
+**2026-07-10 review notes:** (1) The downgrade risk is **vector churn, not data loss** — text is
+always retained and re-embeds derive from it, but `writeBackEmbedding` overwrites stored vectors,
+so toggling the flag (or the OTA asset being evicted, silently failing `NLContextualBackend.ready`
+and falling back) re-embeds the whole store *each direction* with no warning; note it, and consider
+keeping both stamps if flapping proves real. Backend choice is fixed per-`Embedder` instance —
+mid-session asset arrival takes effect on the next instantiation. (2) **Cheapest path to flip the
+default:** a skip-gated A/B test (`XCTSkipUnless(NLContextualBackend.ready)`) asserting
+baseline-vs-contextual `selfTest` numbers — free in CI, decisive on any host with the asset — plus
+a debug Settings "Run embedding benchmark" row for one on-device answer. The 6-doc smoke corpus is
+thin for a default-flip decision; grow to ~20-30 labelled pairs incl. multilingual before trusting
+the number.
 - **PR A ([#130](https://github.com/straff2002/OpenGlasses/pull/130), merged):** version-stamp +
   migration substrate (steps 1–2) — pure `EmbeddingVersion` + `EmbeddingMigrationPolicy` +
   `Embedder.version`; `DocumentStore` stamps chunks, backfills legacy rows, self-heals (lazy re-embed

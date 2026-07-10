@@ -13,8 +13,20 @@ grounded by the existing RAG tool); **inline model / persona switch** from the t
 menu (with history reload on dismiss). **Phase 3 (cloud streaming) built:** real SSE token
 streaming for Anthropic + OpenAI-compatible, gated behind `onToken` (non-chat callers keep the
 buffered path byte-for-byte) — the streaming helpers reconstruct the same `message`/`content`
-shape so the existing tool loop is reused. ⚠️ Compile-verified only; **runtime needs real API
-keys + network** (not exercisable in CI/sim here) — verify on device. Nothing else outstanding.
+shape so the existing tool loop is reused. ⚠️ Compile-verified only.
+
+**Re-scoped 2026-07-10 (review; fixes scheduled as Plan BM P9):** "needs real keys + device" was
+too pessimistic — both SSE helpers hardcode `URLSession.shared` (`LLMService.swift:1556/:1615`);
+with an injected session (the `MockURLProtocol` pattern from `MCPTransportTests.swift:66-91`) the
+verification becomes **headless fixture tests**; only a live-credential smoke stays device-bound.
+The review also found two real defects the "unverified" label was hiding: **mid-stream `error`
+events return partial content as a successful turn** (persisted + appended to history — the
+Anthropic event switch `default: break`s at `:1638-1663`; same shape on the OpenAI path via the
+`choices` guard and premature EOF), and **every tool-loop iteration streams** with an accumulator
+that never resets (`OpenGlassesApp.swift:2826`), so bubbles can concatenate intermediate+final
+text — the doc's "only the final turn streams" claim (and the code comment at `:1251`) are false.
+Chat SSE also has none of the retry/classification voice got from `RealtimeReconnect` (Plan BD) —
+a transient 429 throws straight to `errorMessage`. All folded into BM P9.
 
 **Builds on:** the existing [`ChatInputBar`](../../OpenGlasses/Sources/App/Views/VoiceTab.swift) (text + photo attach, vision-gated), [`ConversationStore`](../../OpenGlasses/Sources/Services/ConversationStore.swift) (threads + messages, active-thread tracking, resume/replay), [`ConversationHistoryView`](../../OpenGlasses/Sources/App/Views/ConversationHistoryView.swift) (`MessageBubble` + thread list), [`MainView`](../../OpenGlasses/Sources/App/Views/MainView.swift) tab bar, and [`LLMService.sendMessage`](../../OpenGlasses/Sources/Services/LLMService.swift).
 

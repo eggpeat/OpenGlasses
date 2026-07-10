@@ -5,8 +5,35 @@ unknown→nil) + `UsageRollup` (per-model/total, nil-aware) + SQLite `UsageStore
 + a `UsageTracker` facade are built and tested; `LLMService` captures the usage block at each cloud
 provider's non-streaming decode (Anthropic/OpenAI-compatible/Gemini), and `InsightsView` gains a
 "Tokens & estimated cost" section over the existing day-window picker. 13 tests green in Release. No new
-SPM dependency. Deferred: streamed-Chat (`onToken`) + realtime-voice token capture (those paths don't
-surface a usage block here); a Settings pricing editor (the `ModelPricing.overrides` seam exists).
+SPM dependency.
+
+**Updated 2026-07-10: the entire deferred list has shipped** — streamed-Chat capture
+(`StreamingUsageAccumulator` in both SSE reconstructors), realtime-voice capture (`RealtimeUsage` +
+`CumulativeUsageMeter`: OpenAI Realtime `response.done`, Gemini Live cumulative `usageMetadata`),
+and the Settings pricing editor (`ModelPricingEditorView` + `Config.modelPricingOverrides`).
+
+**New follow-ups found in the review (buildable now, in no backlog until here):**
+1. **Cache-token under-report — highest impact.** Plan BF added `cache_control` to every Anthropic
+   turn, but capture reads only `input_tokens`/`output_tokens` (`UsageTracker.swift:52-53`,
+   `StreamingUsageAccumulator.swift:19-21`), which *exclude*
+   `cache_creation_input_tokens`/`cache_read_input_tokens` — on the now cache-heavy history, most
+   input tokens are invisible to the tracker. Capture and price the cache fields (they have their
+   own rates).
+2. **Family-prefix overpricing on new dated variants.** Longest-prefix match
+   (`ModelPricing.swift:64-71`) means a future `claude-opus-4-9` misses the explicit `-4-8` row and
+   silently bills at the `claude-opus-4` family rate (3× off) instead of the designed nil-unknown
+   posture. Date-suffix-aware matching or a table-freshness guard.
+3. **Shape-drift = silent zero.** A renamed usage block is a designed no-op and 0/0 records drop —
+   e.g. an OpenAI-compatible server moving to Responses-API naming yields permanent silent
+   under-report. Add an "untracked turns" marker so the honesty principle (already applied to
+   realtime) covers drift.
+4. **Realtime priced at text rates.** Gemini Live records under the Live model id, which
+   prefix-matches *text* pricing; Live audio bills differently. Tokens right, dollars wrong-ish —
+   note it in the pricing table (and the Gemini 2.5-family ids are absent entirely: safe nil, but
+   blank).
+
+**Plan BL note:** peer A2A/MCP calls are not on-device LLM tokens — don't invent pricing; BL P1
+carries the hook instead (call counts + unpriced peer-reported usage). Recorded there.
 
 ## The problem
 OpenGlasses is a **multi-provider, bring-your-own-key** app — Anthropic, Gemini, OpenAI, plus custom

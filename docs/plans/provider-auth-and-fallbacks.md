@@ -1,7 +1,11 @@
-# Plan AI — LLM Provider Auth & Fallbacks (reference)
+# Plan AI — LLM Provider Auth Paths (reference + provider additions)
 
-How OpenGlasses can authenticate to an LLM backend, what each path costs in
-*functionality*, and where OAuth / "use my account" actually works.
+**Status:** 📝 Reference, revised 2026-07-10 after a code-verified review. One buildable item
+(Vertex OAuth provider) survives; the Claude-app Shortcut item is demoted to an appendix; runtime
+failover is **owned by Plan BK P2b**, not this doc (this plan hands it two requirements, below).
+
+How OpenGlasses authenticates to an LLM backend, what each path costs in *functionality*, and
+where OAuth / "use my account" actually works.
 
 ## The governing principle
 
@@ -9,113 +13,136 @@ How OpenGlasses can authenticate to an LLM backend, what each path costs in
 prompt, camera images, tool definitions, and gets back streamed text + structured
 tool calls. That needs a genuine **completions API**.
 
-A consumer **subscription** (ChatGPT Plus, Gemini Advanced / Google One AI, Claude
-Pro/Max) does **not** expose such an API to third‑party apps — it only powers the
-vendor's own app. So "use my flat subscription as OpenGlasses' brain, no per‑token
-cost, full features" is **not possible for any provider**. OAuth + full functionality
-coexist only on the **cloud enterprise endpoints**, which are still billed per token —
-OAuth just replaces the raw API key with an account‑scoped token.
+A consumer **subscription** (ChatGPT Plus, Gemini Advanced / Google One AI) generally does
+**not** expose such an API to third-party apps. Two qualifications learned since the first
+draft: **Anthropic now does** (Sign in with Claude, shipped in-app — below), and the app
+already supports three **subscription-billed coding-plan endpoints** (`.zai`, `.qwen`,
+`.minimax`, `LLMService.swift:27-29,68-70`). "OAuth + full functionality" is therefore real
+where the vendor offers an account-scoped completions endpoint; elsewhere it remains key-based.
 
-## Consumer‑subscription login (no key) — current reality (mid‑2026)
+## ✅ Shipped since first draft: Sign in with Claude (in-app OAuth)
 
-The thing most users actually want — *"press Sign in with Google/ChatGPT, use the AI I
-already pay for, never touch an API key"* — **does not robustly exist for any provider yet:**
+Commit `32c2f9d` (2026-07-03) shipped the path this doc's first draft said didn't exist:
 
-- **OpenAI / ChatGPT — emerging, the one to watch.** OpenAI is building **"Sign in with
-  ChatGPT"** (OAuth 2.0), with a proposed **"user plan"** option so requests run under the
-  *user's own ChatGPT subscription* instead of the developer paying. This is exactly the
-  model we'd want — but it's **preview only** (first surfaced in Codex CLI), not a GA
-  integration a third‑party app can ship against today. Design for it; don't depend on it.
-- **Google / Gemini — no, and the workaround is now banned.** Google AI Pro / Gemini
-  Advanced (the consumer subscription) **includes no API access**. Worse: the trick of
-  proxying a Gemini‑CLI **OAuth token** to use a user's Pro/Ultra quota was **banned in
-  Feb 2026, with mass account suspensions — including paying Ultra subscribers.** Do not
-  build on it. The only no‑key Google path is **Vertex OAuth**, which bills a GCP project
-  per token — *not* your Gemini Advanced subscription.
-- **Anthropic / Claude — no login button.** Only the local `claude -p` CLI bridge (ToS
-  gray area) or the on‑device Claude‑app Shortcut (text‑only). No OAuth‑subscription API.
+- `ClaudeOAuth.swift` — pure PKCE core (authorize URL, code#state parsing, token
+  exchange/refresh, `sk-ant-oat…` detection, expiry-with-leeway). House-style deterministic core.
+- `ClaudeOAuthService.swift` — token exchange, refresh-before-expiry (5-min leeway),
+  Keychain storage, sign-out wipe.
+- `AnthropicAuth.apply` (`ClaudeOAuth.swift:167-186`) — OAuth tokens ride
+  `Authorization: Bearer` + `anthropic-beta: oauth-2025-04-20`; API keys ride `x-api-key`;
+  `resolveCredential` falls back from explicit key to the connected account.
+- Wired into the live send path (`LLMService.swift:1167-1171`) and Settings
+  (`ModelFormView.swift:31-35,347-400`).
 
-**Takeaway:** keep the provider layer ready to slot in "Sign in with ChatGPT" if/when it
-GAs, but today every *full‑functionality* path needs either an API key or a per‑token cloud
-OAuth account. The only "no key, uses my subscription, works now" option is the text‑only
-Claude‑app Shortcut.
+**Consequence:** the no-key/no-Mac Claude path is the ordinary `sendAnthropic` path with **full
+vision + tools**, hands-free. Everything below is written against that reality. (Honesty note:
+the same ToS-gray-area caveat this doc attached to the CLI bridge applies to serving app
+requests on a subscription via in-app OAuth — the sanctioned programmatic path is still a key.)
 
-## Auth-path matrix
+## Auth-path matrix (complete against `LLMProvider`)
 
 | Path | Auth | Vision + native tools | Who bills | In OpenGlasses |
 |---|---|---|---|---|
 | **Anthropic API** | API key | ✅ full | Anthropic (key) | ✅ supported |
-| **Claude via local CLI bridge** | OAuth (Claude Code `claude login` on a Mac/host) | ✅ full | Claude subscription* | ✅ client done (keyless Custom provider); needs the host bridge |
-| **Claude app "Ask Claude"** (Shortcut) | OAuth (on‑device Claude app) | ❌ **text only, no tools** | Claude subscription usage | ➕ fallback (this doc) |
+| **Anthropic — Sign in with Claude** | **OAuth (in-app PKCE)** | ✅ full | Claude subscription* | ✅ **shipped** (`32c2f9d`) |
+| **Claude via local CLI bridge** | OAuth (Claude Code on a Mac/host) | ✅ full | Claude subscription* | ⚠️ model-listing + save work keyless, but **keyless sends throw** (`LLMService.swift:1343-1345` key guard is unconditional) — bug tracked separately; superseded for most users by in-app OAuth anyway |
 | **OpenAI API** | API key | ✅ full | OpenAI (key) | ✅ supported |
+| **Groq / xAI / OpenRouter** | API key | ✅ per model | vendor (key) | ✅ supported (OpenAI-compatible) |
+| **z.ai / Qwen / MiniMax coding plans** | API key (subscription-billed) | ✅ per model | vendor subscription | ✅ supported ("(Subscription)" providers) |
 | **Azure OpenAI** | **Microsoft Entra OAuth** | ✅ full | Azure (account) | ⚠️ via Custom provider; needs token refresh |
-| **Gemini API (AI Studio)** | API key (created via Google sign‑in) | ✅ full | Google (free tier + per‑token) | ✅ supported (Gemini provider) |
-| **Gemini via Vertex AI** | **Google OAuth** (GCP project) | ✅ full | Google Cloud (account) | ⚠️ needs OAuth plumbing |
+| **Gemini API (AI Studio)** | API key (created via Google sign-in) | ✅ full | Google (free tier + per-token) | ✅ supported (key rides the **query string** at 5 call sites + the Gemini Live websocket) |
+| **Gemini via Vertex AI** | **Google OAuth** (GCP project) | ✅ full (streaming would be new — see below) | Google Cloud (account) | 📋 the buildable item |
 | **AWS Bedrock** | AWS SigV4 / IAM | ✅ full | AWS (account) | ⚠️ needs signing |
+| **Local MLX / Apple on-device** | none | text (+ tools, no vision) | free | ✅ supported |
+| **Claude app "Ask Claude" (Shortcut)** | on-device Claude app | ❌ text only, no tools | Claude subscription | ❌ demoted — appendix |
 
-\* Using a Claude *subscription* via the CLI to serve app requests is a ToS gray area
-(subscriptions are for interactive Claude Code use). The sanctioned programmatic path is
-an API key.
+\* Subscription-serving-app-requests is a ToS gray area regardless of transport (CLI or in-app
+OAuth). The sanctioned programmatic path is an API key.
 
 ## "Through my Google account" — the specifics
 
-**Gemini (Google's own model) — yes, two ways, both full‑featured:**
-1. **AI Studio key (easy, already supported).** Sign in to `aistudio.google.com` with the
-   Google account → create an API key → paste into OpenGlasses' Gemini provider. Has a free
-   tier. The credential is a key, not OAuth, but it's "through your Google account" in the
-   sign‑in sense, and it's the lowest‑effort full‑functionality path.
-2. **Vertex AI + OAuth (true OAuth, more work).** A Google Cloud project with Vertex AI
-   enabled; Google Sign‑In requesting the `cloud-platform` scope → exchange for a Bearer
-   token → call Gemini on `aiplatform.googleapis.com` with full vision/tools/streaming.
-   Billed to GCP. Requires new OAuth + token‑refresh code in the app.
+**Gemini — yes, two ways, both full-featured:**
+1. **AI Studio key (easy, already supported).** Sign in to `aistudio.google.com` → create an
+   API key → paste into the Gemini provider. Free tier; lowest-effort full-functionality path.
+2. **Vertex AI + OAuth (the buildable item).** Scoped below.
 
-**OpenAI — no, not "through Google."** OpenAI and Google are different vendors; your Google
-account can't pay for OpenAI usage. The only Google link is **SSO**: you may *log in* to the
-OpenAI platform with "Sign in with Google", but you still create an **OpenAI API key** billed
-to your OpenAI account. There is no OAuth flow to drive the OpenAI API from a ChatGPT Plus
-subscription. (The OpenAI API counterpart to "OAuth + full functionality" is **Azure OpenAI**
-via Microsoft Entra — a Microsoft account, not Google.)
+**OpenAI — no, not "through Google."** Google SSO on the OpenAI platform still ends in an
+OpenAI API key. No OAuth flow drives the OpenAI API from a ChatGPT Plus subscription; "Sign in
+with ChatGPT" remains preview-only — design for it, don't depend on it.
 
-## Documented fallback — "Claude app (Shortcut)" provider
+## Buildable item — Vertex-AI OAuth Gemini provider (one PR)
 
-A **text‑only** path that uses the on‑device Claude app's subscription, no API key, no Mac.
+**Reuse the shipped pattern:** pure core + service edge + Keychain + refresh-with-leeway,
+mirroring `ClaudeOAuth`/`ClaudeOAuthService` — this is now precedent, not new design.
 
-Flow:
-```
-OpenGlasses builds a prompt
-  → opens  shortcuts://x-callback-url/run-shortcut
-             ?name=<AskClaudeShortcut>&input=text&text=<prompt>
-             &x-success=openglasses://claude-result
-  → the (user‑installed) Shortcut runs the Claude app's "Ask Claude" App Intent
-  → returns Claude's text to OpenGlasses' URL handler via x-success
-```
+Google-specific requirements the first draft omitted:
+- A registered **GCP OAuth client ID**; **`ASWebAuthenticationSession`** for the browser flow
+  (Google blocks the paste-a-code trick the Claude flow uses); offline-access consent so a
+  refresh token is issued.
+- **Project ID + region selection UI** — both are path components of
+  `aiplatform.googleapis.com` URLs.
+- **Plumbing cost is real, not "just OAuth":** Gemini key auth is baked into URL query strings
+  at five `LLMService` call sites (`:799, :895, :997, :1090, :1688`) plus the Gemini Live
+  websocket (`Config.swift:1618-1622`). Vertex is either a new provider case with its own send
+  path (Bearer headers) or a refactor of all six sites. **Gemini Live mode is not covered by
+  this item** — scoped out explicitly.
+- **No streaming inheritance:** `sendGemini` doesn't stream today (`:generateContent`, no
+  `onToken`); Vertex streaming would be a new feature, not a free ride. Out of scope for PR1.
+- **Voice-first lifecycle:** the OAuth flow is a Settings-time, phone-in-hand act — fine, say
+  so in the UI. A **mid-session refresh failure** must not dead-air: narrate it (BK P2c
+  pattern) and let the BK P2b cascade move to the next candidate.
 
-What it gives: a chat answer on the user's Claude subscription (counts against usage),
-using the Claude app's default model.
+**Tests (headless, house style):** pure `GoogleOAuth` core — authorize-URL construction,
+token-request/refresh encoding, expiry-with-leeway; URL-builder tests for project/region paths.
+Live browser flow + on-device validation deferred, mirroring Plan V's OAuth deferral precedent.
 
-Hard limits (why it's a fallback, not the brain):
-- **No vision.** "Ask Claude" is text‑only; photo handling is a separate Control, not a
-  pipeable returning action. The glasses‑camera loop can't use this.
-- **No native tools / agent mode** — returns plain text, nothing callable.
-- **No injected persona/memory/history** beyond what's stuffed into the prompt string.
-- **Foreground hop per query** — a third‑party app can't run a Shortcut invisibly, so the
-  Shortcuts app (and likely Claude) flashes up each call. Breaks hands‑free use.
-- **No streaming;** subject to normal subscription usage limits.
+## Handed to Plan BK P2b (fallback-chain owner)
 
-Open items before shipping it:
-- Verify with a one‑Shortcut test whether "Ask Claude" returns headlessly and how the
-  result comes back (x‑callback vs. clipboard).
-- Surface a loud "text‑only, no vision/tools, app‑switch per query" warning in the picker.
-- Reuse the existing Shortcuts/App Intents integration (see `Z-shortcuts-catalog`) and the
-  app's deep‑link handler (already parses `fb-viewapp://` etc.).
+This plan defines no runtime failover — BK P2b's `ModelFallbackChain` owns it. Two requirements
+originate here:
+
+1. **Capability-filter candidates:** `requiresVision` / `requiresTools` / `handsFreeSafe`
+   predicates. Text-only candidates (`.appleOnDevice`, models with `visionEnabled == false`,
+   any foreground-hop path) must be skipped for turns that need what they lack; a
+   foreground-hop provider should **never** be an automatic cascade candidate (breaks
+   hands-free, can't preserve history/tool state).
+2. **Expired/missing OAuth credential is skip-to-next, not chain-terminal.** A refresh failure
+   surfaces as `missingAPIKey` (`LLMService.swift:1169`) — terminal *for that provider*,
+   retryable on the next. BK P2b's current taxonomy classes `missingAPIKey` as fully terminal;
+   with OAuth providers in the mix it must be per-candidate.
 
 ## Recommendation
-- Want **full functionality with the least effort** → **Gemini via AI Studio key** (Google
-  sign‑in), already supported.
-- Want **true OAuth, no raw key, full functionality** → **Gemini via Vertex AI** (Google
-  account) or **Azure OpenAI** (Microsoft) — both real features to build (OAuth + token
-  refresh), both billed per token.
-- Want **Claude on the subscription, full features** → the **local `claude -p` bridge**
-  behind the keyless Custom provider (needs a Mac/host).
-- The **Claude‑app Shortcut** is the no‑key/no‑Mac fallback, but text‑only — document it as
-  such, don't position it as primary.
+
+- **Least effort, full functionality** → Gemini AI Studio key (already supported).
+- **No key, full functionality, hands-free** → **Sign in with Claude** (shipped).
+- **True OAuth on Google** → the Vertex item above (one PR, core-first).
+- The CLI bridge and the Shortcut are both effectively superseded; fix the keyless-Custom send
+  bug on its own merits.
+
+---
+
+## Appendix — Claude-app Shortcut fallback (demoted, not scheduled)
+
+Kept for reference; its raison d'être ("the only no-key/no-Mac option") ended when in-app OAuth
+shipped. Residual audience: a user with the Claude app who refuses in-app sign-in — thin, for a
+path that breaks hands-free per query.
+
+If it is ever revived, the review corrections that must apply:
+- **Reuse the existing callback host** — `shortcuts://x-callback-url/run-shortcut` +
+  `x-success=openglasses://shortcut-result` already exist end-to-end
+  (`CustomToolWrapper.swift:48-85`, `ShortcutCallbackManager.swift`,
+  `OpenGlassesApp.swift:171-177`). Don't invent `openglasses://claude-result`.
+- `ShortcutCallbackManager` holds a **single continuation** with a **30s timeout** — too short
+  for a long Claude answer, and a concurrent custom-tool shortcut would clobber it. Key by
+  request if this ships.
+- **Backgrounded/locked phone is a failure mode, not friction:** `UIApplication.shared.open`
+  of `shortcuts://` from a backgrounded voice session won't foreground reliably, and the
+  round-trip app-switch disrupts the audio session/wake-word listener — in the primary usage
+  posture this path *doesn't work*, not "is degraded."
+- One-line warning to carry: never expose this as an `AppShortcut` phrase with a free-form
+  String parameter (`AskQuestionIntent.swift:11-14` encodes the lesson — it halts
+  `appintentsmetadataprocessor` and wipes ALL intent metadata; only a Release/SDK build
+  catches it).
+- (Correction from the first draft: the inbound deep-link handler parses `openglasses://`
+  hosts only; `fb-viewapp://` appears once as an *outgoing* open — it was never evidence of
+  reusable inbound plumbing.)
