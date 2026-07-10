@@ -10,6 +10,68 @@
 
 ---
 
+## Revision 2026-07-10 (code-verified review) — decisions pinned before build
+
+1. **Runtime choice is an open decision — record it, don't inherit it.** Three candidates:
+   (a) **apple/ml-stable-diffusion** (the draft's pick) — ANE-targeted, best perf/watt, mature
+   palettized SD-1.5 checkpoints (~1 GB 6-bit), but effectively dormant since ~2024; smoke-test
+   Xcode 26 compatibility before committing, and "SDXL-Turbo-class" Core ML conversions are
+   scarce — treat SD-1.5-class as the realistic target. (b) **MLX diffusion** — `mlx-swift-lm` is
+   already a dependency and the MLX examples ship StableDiffusion; one runtime story and reuses the
+   hub download machinery, but GPU-not-ANE (hotter, more Jetsam-prone next to the LLM).
+   (c) **iOS 26 `ImageCreator` (Image Playground API)** — zero download, zero dep, system-managed
+   thermal/memory; stylized-only output, Apple-Intelligence devices only. A v1 on `ImageCreator`
+   with SD as the power-user tier is a legitimate radically-cheaper path — if rejected, say why.
+   Whichever wins, **name the exact model repo**; "SD-1.5 or SDXL-Turbo" spans a 3× size/memory
+   range that drives every constraint below.
+2. **`execute` returns fast.** Awaiting a 10–25 s generation inside a tool call pauses
+   camera/audio streaming for its duration (`ToolCallRouter.swift:30`) and stalls Gemini Live —
+   and `NativeTool` is `@MainActor`, so a synchronous pipeline call freezes the UI. The tool
+   returns "generating, about 15 seconds — it'll appear on your phone" and the results sheet owns
+   success/failure. The confirmation string must not claim "saved to Photos" unless auto-save is
+   real (BK P6 honesty class) — decision: **no auto-save; Save is a sheet button**.
+3. **Cancellation is a feature, not a nice-to-have.** ml-stable-diffusion cancels only by
+   returning `false` from the progress handler — wire it to `Task.isCancelled`, define barge-in
+   ("stop" mid-generate cancels), and define Regenerate as cancel-then-restart. (BK P4 found the
+   MLX text path already ignores cancellation; don't add a second offender.)
+4. **Download machinery: copy Kokoro, not LocalLLMService.** BK P5 found the LLM download flow's
+   Cancel is a UI no-op with caller-owned Tasks; the Kokoro pattern (`KokoroModelStore` pure FS
+   bookkeeping + downloader with injected seams, staging + verify + atomic install, 0-byte-stub
+   rejection) is the correct template. Add disk-space preflight and a Wi-Fi/cellular gate for the
+   ~1 GB fetch.
+5. **Memory + thermal arbitration.** SD peaks >1.5–2 GB even palettized; `LocalLLMService` already
+   documents Jetsam kills with a 2B model loaded. Rule: **one big model at a time** — generation
+   refuses (spoken message) while the local LLM is loaded, `reduceMemory` pipeline config on, and
+   a memory-warning unload hook. Thermal: refuse/warn at `ProcessInfo.thermalState >= .serious`
+   (no thermal check exists anywhere in Sources today; diffusion would be the app's hottest
+   workload).
+6. **Voice-first progress.** After "make me an image," 15–25 s of silence is a regression: start
+   the thinking sound, speak completion ("done — it's on your phone") via TTS, HUD line as the
+   secondary surface. Mid-generation backgrounding discards the run with a spoken note on return
+   (no partial-image analogue to the LLM's partial text).
+7. **History/BrainStore policy.** The generated image does **not** enter `conversationHistory`
+   (avoids base64 blowing the image-aware token estimator and the Anthropic 5 MB inline cap) —
+   only the confirmation text does; "edit the last image" is recorded as out-of-scope v2. Ingest a
+   lightweight fact (`prompt` + saved-asset ref) into `BrainStore.shared.ingest`, matching the
+   MeetingSummary/SocialContext precedent. Save to a **"Generated" album**, not the "Glasses"
+   album `saveToPhotoLibrary` writes today (mislabels provenance).
+8. **Deterministic core + tests (was absent — house style requires it):** `ImageModelStore`
+   presence/validation against a temp dir (mirror `KokoroModelStoreTests`); downloader
+   enumeration/progress/cancel over injected seams; a pure `GenerationRequest` builder (prompt +
+   negative + steps/seed clamping + style presets); the prompt-enhancement builder; the tool
+   gating matrix (disabled / model-absent / backgrounded / already-generating → distinct spoken
+   strings); and the cancellation state machine as a pure reducer. The generate call itself is
+   device-edge ("tests are the gate").
+9. **Corrections to the draft below:** item 8 (hand-editing system prompts) is **superseded by
+   `SystemPromptBuilder`** (BG P1) — registry registration alone is sufficient; and the "pipeline
+   is text-only" framing under-sells the existing `[IMAGE_CAPTURED:<base64>]` in-band channel
+   (CapturePhotoTool et al.) — the side channel is still right for *generated* images (the model
+   doesn't need to see its own output; base64 in history is pure cost), but that's a choice, not a
+   void. Also the HUD gap is in **our DSL wrapper**, not the SDK — MWDATDisplay has an `Image`
+   view type; exposing it is a wrapper decision deferred, not an impossibility.
+
+---
+
 ## What already exists (reuse, do not rebuild)
 
 - **Tool surface:** `NativeTool` = `{name, description, parametersSchema, execute(args:) async throws -> String}`; `NativeToolRegistry.init` injects dependencies (constructor or post-registration property). New tool follows the same pattern.

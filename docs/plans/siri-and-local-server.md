@@ -11,6 +11,26 @@ probes) + an experimental "Scan local network" button in `ModelFormView` + `NSLo
 / `NSBonjourServices` Info.plist keys. The manual preset stays the primary path; live mDNS hit-rate
 (many servers don't advertise Bonjour) is the device-pending edge.
 
+**2026-07-10 review notes:**
+- **Probe auth is keyless by construction — keep it that way.** Scan probes hardcode
+  `apiKey: ""` (`LocalServerScanner.swift:39-40`) and `testConnection` only sets `Authorization`
+  when the key is non-empty; the form's key goes only to the user-typed URL on an explicit Test
+  tap. No bearer-token leakage to arbitrary LAN hosts exists; this line is here so a future edit
+  doesn't introduce it.
+- **Trust-on-discovery is the real unflagged risk.** Any LAN device can advertise `_http._tcp` and
+  answer `GET /v1/models` with a plausible body (`modelCount(in:)` accepts any `data[]`/`models[]`
+  array) — and a discovered server the user adopts then receives **all subsequent conversation
+  content** (and any key typed into the form) over plain HTTP. Cheap mitigation: picker copy
+  ("only connect to machines you recognise") + flag first-seen / non-`.local`-resolving hosts. Add
+  regardless of the mDNS outcome, since the scanner ships behind the experimental button today.
+- **#6's future is mesh-aware, not more Bonjour.** Plan BL makes the Tailscale mesh the default
+  reachability posture; the interesting self-hosted LLM box is increasingly a tailnet peer that
+  **mDNS multicast cannot discover** (it doesn't traverse the tailnet), while the manual path
+  already handles tailnet hostnames. Verdict: validate live mDNS hit-rate once, cheaply, then
+  apply this plan's own escape hatch ("cut this item if the hit-rate is poor"); any second
+  iteration of discovery should be **tailnet-peer probing** (MagicDNS peer names through the same
+  pure `LocalServerDiscovery.candidates` + `testConnection`), riding BL's infrastructure.
+
 Builds on the Siri App-Intents layer and the keyless
 Custom (OpenAI-compatible) provider already on
 `claude/siri-meta-glasses-integration-g0q7xf`:
@@ -45,9 +65,9 @@ medium; #6 (mDNS discovery) is the only piece with real platform risk.
 | 1 | Persona-targeted Siri intent | Siri | S | low | ✅ PR-2 |
 | 2 | Conversational follow-up | Siri | M | low | ✅ PR-2 |
 | 3 | Result snippet UI | Siri | S–M | low | ✅ PR-2 |
-| 4 | Connection-test button | Local server | S | low | PR-3 |
-| 5 | Local-server presets | Local server | S | low | PR-3 |
-| 6 | LAN auto-detect (mDNS) | Local server | M–L | **medium** (platform) | PR-3 |
+| 4 | Connection-test button ✅ | Local server | S | low | PR-3 (shipped) |
+| 5 | Local-server presets ✅ | Local server | S | low | PR-3 (shipped) |
+| 6 | LAN auto-detect (mDNS) — core ✅, live hit-rate pending | Local server | M–L | **medium** (platform) | PR-3 |
 | 7 | Unit tests | Hardening | S | low | ✅ PR-1 (#93) |
 
 ---

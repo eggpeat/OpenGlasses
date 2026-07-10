@@ -6,8 +6,21 @@
 filter; the active project's knowledge base is grounded into both prompt builders via the pure
 `ProjectScope.knowledgeHint` + `ProjectContextService` (only advertised when the project has ≥1 doc);
 and `ProjectDetailView` shows a project's prompt + scoped documents + scoped conversations. 8 tests
-green in Release. No new SPM packages. Deferred: the optional shareable project export/import bundle
-(item 5).
+green in Release. No new SPM packages.
+
+**Updated 2026-07-10:** the shareable export/import bundle (item 5) **shipped** —
+`ProjectBundle`/`ProjectBundleCodec` + `ProjectExporter`; export via share sheet in
+`ProjectDetailView.swift:99-110`, import via file picker in `PersonasView.swift:144-146`.
+
+**The real deferred item is a leak found in review (scheduled as Plan BM P8):** the project
+boundary is violated today — `BrainTool` queries docs and memory with `namespace: nil`
+(`BrainTool.swift:187,180`), which `DocumentStore.fetchChunks` treats as ALL namespaces
+(`DocumentStore.swift:346-352`), so `brain ask` in an unscoped chat quotes every project's
+documents and crosses persona memory namespaces; `TeleprompterTool.swift:77` resolves documents by
+name across all namespaces. `DocumentRAGTool` scopes correctly. The invariant this plan's "global
+fallthrough" open question never stated: **global never sees project docs** — the inverse
+direction is the one violated. Fix: thread the same `activeNamespace` closure into `BrainTool`
+(memory: nil → `["global", activePersonaId]`); decide `TeleprompterTool` policy.
 
 **Builds on:** the [`Persona`](../../OpenGlasses/Sources/Utils/Config.swift) system (Config + [`PersonasView`](../../OpenGlasses/Sources/App/Views/PersonasView.swift) + [`PersonaPickerSheet`](../../OpenGlasses/Sources/App/Views/PersonaPickerSheet.swift)), the [`DocumentStore`](../../OpenGlasses/Sources/Services/RAG/DocumentStore.swift) `namespace` column (Plan [O](O-document-rag.md)), and [`ConversationStore`](../../OpenGlasses/Sources/Services/ConversationStore.swift) threads.
 

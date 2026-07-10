@@ -1,12 +1,19 @@
 # Plan L — Real WebRTC Expert Transport
 
-> **Status: app-side implemented.** The `WebRTC` SwiftPM dependency is added, `WebRTCPeerTransport`
-> creates a real `RTCPeerConnection` (outbound glasses video via a custom capturer + mic audio,
-> inbound expert audio, SDP/ICE over a WebSocket `ExpertSignalingClient`), `isAvailable` is true, and
-> Settings expose signaling/STUN/TURN config. The user picks MJPEG or WebRTC in Field Assist settings.
-> **Still external (not in-app):** a signaling relay server, a TURN server, and the expert-side web
-> client. The live connection path is not unit-tested (needs two peers + servers); compile-correct
-> and wired. Remaining items below are the server/infra + audio-session hardening.
+> **Status: app-side implemented — deployment now OPTIONAL (updated 2026-07-10).** The `WebRTC`
+> SwiftPM dependency is added, `WebRTCPeerTransport` creates a real `RTCPeerConnection` (outbound
+> glasses video via a custom capturer + mic audio, inbound expert audio, SDP/ICE over a WebSocket
+> `ExpertSignalingClient`), `isAvailable` is true, and Settings expose signaling/STUN/TURN config.
+> The user picks between **three** transports (`Config.expertStreamTransport`, default `.mjpeg`):
+> MJPEG (same-LAN), **Meeting link** (`MeetingLinkTransport` — zero-infra, the meeting tool hosts
+> the call; the recommended remote path), and WebRTC (self-hosted). **The meeting-link connector
+> demoted this plan's remaining work:** deploying a signaling relay + TURN is only worth doing for
+> a customer who can't use a meeting tool (compliance/self-host requirement) — no longer the next
+> action, and the managed-vs-self-hosted TURN open question is superseded in urgency. A reference
+> expert client now lives in-repo at `docs/webrtc/expert-client.html` (M2). The live connection
+> path is not unit-tested (needs two peers + servers); compile-correct and wired.
+> **Precondition if a deploy ever happens: room-token auth on the signaling protocol first** — see
+> Plan M's risk note.
 
 **Builds on:** the transport seam shipped in Plan K. `ExpertStreamTransport` already abstracts the stream, `WebRTCPeerTransport` is a conformer with `isAvailable = false`, `ExpertStreamBridge` selects by `Config.expertStreamTransport`, and the Settings picker exists. This plan fills in `WebRTCPeerTransport` for a true peer-to-peer connection — **two-way A/V, low latency** — replacing the one-way MJPEG-to-browser path for the "Human+AI" Field Assist Pro tier.
 
