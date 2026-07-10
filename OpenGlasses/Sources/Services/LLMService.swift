@@ -1148,8 +1148,8 @@ class LLMService: ObservableObject {
     /// the cost tracker (Plan AU). Parsing is pure/synchronous here; only the resulting
     /// integer counts cross to the main actor (the non-Sendable JSON does not). A
     /// missing usage block is a silent no-op — never throws, never blocks the reply.
-    /// Streaming turns (Chat tab `onToken`) don't carry a usage block on this path and
-    /// are not yet captured.
+    /// Streaming turns accumulate their own counts via `StreamingUsageAccumulator` and
+    /// enter through the already-parsed overload below.
     private func recordUsage(provider: LLMProvider, model: String, json: [String: Any]) {
         guard let tokens = UsageTracker.parseTokens(provider: provider, json: json) else { return }
         recordUsage(provider: provider, model: model, tokensIn: tokens.tokensIn, tokensOut: tokens.tokensOut)
@@ -1337,12 +1337,21 @@ class LLMService: ObservableObject {
 
     // MARK: - OpenAI-compatible
 
+    /// Authorization header value for an OpenAI-compatible request, or nil for a keyless
+    /// `.custom` endpoint (self-hosted Ollama/LM Studio/bridge — the save/list paths already
+    /// allow an empty key for `.custom`, so the send path must too).
+    nonisolated static func openAICompatibleAuthorization(provider: LLMProvider, apiKey: String) throws -> String? {
+        guard apiKey.isEmpty else { return "Bearer \(apiKey)" }
+        guard provider == .custom else {
+            throw LLMError.missingAPIKey("\(provider.displayName) API key not configured")
+        }
+        return nil
+    }
+
     private func sendOpenAICompatible(_ text: String, systemPrompt: String, config: ModelConfig, includeTools: Bool, imageData: Data?, onToken: ((String) -> Void)? = nil) async throws -> String {
         let provider = config.llmProvider
         let apiKey = config.apiKey
-        guard !apiKey.isEmpty else {
-            throw LLMError.missingAPIKey("\(provider.displayName) API key not configured")
-        }
+        let authorization = try Self.openAICompatibleAuthorization(provider: provider, apiKey: apiKey)
 
         var baseURL = config.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
         if !baseURL.hasSuffix("/chat/completions") {
@@ -1405,7 +1414,9 @@ class LLMService: ObservableObject {
                 var request = URLRequest(url: url)
                 request.httpMethod = "POST"
                 request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-                request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+                if let authorization {
+                    request.setValue(authorization, forHTTPHeaderField: "Authorization")
+                }
 
                 // OpenRouter requires additional headers for tracking
                 if provider == .openrouter {
