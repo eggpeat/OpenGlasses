@@ -411,6 +411,14 @@ final class RealtimeAudioEngine {
     }
 
     private func resumeAfterInterruptionOnQueue() {
+        // Only reactivate if this engine still owns the shared session — a resume after a phone
+        // call must not stomp whoever acquired it meanwhile (wake word, the other realtime engine).
+        let owner = AudioSessionCoordinator.shared.currentOwner
+        guard AudioInterruptionPolicy.mayResume(engineOwner: config.owner, currentOwner: owner) else {
+            NSLog("%@ Interruption ended — NOT resuming; session owned by %@",
+                  config.logPrefix, owner?.rawValue ?? "nobody")
+            return
+        }
         let session = AVAudioSession.sharedInstance()
         do {
             try session.setActive(true)

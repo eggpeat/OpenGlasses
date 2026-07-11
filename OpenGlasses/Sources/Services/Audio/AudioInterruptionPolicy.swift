@@ -50,6 +50,13 @@ enum AudioInterruptionPolicy {
         }
     }
 
+    /// Whether an engine owning `engineOwner` may reactivate the shared audio session once an
+    /// interruption ends. A resume after a phone call must not stomp whoever acquired the session
+    /// in the meantime — the same ledger check `WakeWordService` applies before reclaiming (BM P5).
+    static func mayResume(engineOwner: AudioSessionOwner, currentOwner: AudioSessionOwner?) -> Bool {
+        currentOwner == engineOwner
+    }
+
     /// Decide how to respond to an `AVAudioSession.routeChangeNotification`.
     ///
     /// A device appearing or disappearing mid-call (the glasses connecting/dropping off the

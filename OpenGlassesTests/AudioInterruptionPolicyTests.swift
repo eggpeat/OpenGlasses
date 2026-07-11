@@ -75,4 +75,16 @@ final class AudioInterruptionPolicyTests: XCTestCase {
             )
         }
     }
+
+    // MARK: - Resume ownership (BM P5)
+
+    func testMayResumeOnlyWhenEngineStillOwnsTheSession() {
+        // A resume after a phone call must not stomp whoever acquired the session meanwhile.
+        XCTAssertTrue(AudioInterruptionPolicy.mayResume(engineOwner: .openAIRealtime, currentOwner: .openAIRealtime))
+        XCTAssertTrue(AudioInterruptionPolicy.mayResume(engineOwner: .geminiLive, currentOwner: .geminiLive))
+        XCTAssertFalse(AudioInterruptionPolicy.mayResume(engineOwner: .openAIRealtime, currentOwner: .wakeWord))
+        XCTAssertFalse(AudioInterruptionPolicy.mayResume(engineOwner: .geminiLive, currentOwner: .openAIRealtime))
+        // A released session (nobody owns it) is also not ours to reactivate.
+        XCTAssertFalse(AudioInterruptionPolicy.mayResume(engineOwner: .openAIRealtime, currentOwner: nil))
+    }
 }
