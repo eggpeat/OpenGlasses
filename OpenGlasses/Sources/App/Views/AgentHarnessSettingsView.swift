@@ -55,7 +55,12 @@ struct AgentHarnessSettingsView: View {
             } header: {
                 Text("Custom endpoint")
             } footer: {
-                Text("Point OpenGlasses at any agent endpoint you already run. {id} is replaced with the run id, e.g. https://host/runs/{id}.")
+                if let issue = config.transportIssue {
+                    Label(issue, systemImage: "lock.slash")
+                        .foregroundStyle(.red)
+                } else {
+                    Text("Point OpenGlasses at any agent endpoint you already run. {id} is replaced with the run id, e.g. https://host/runs/{id}.")
+                }
             }
 
             Section("Authentication") {

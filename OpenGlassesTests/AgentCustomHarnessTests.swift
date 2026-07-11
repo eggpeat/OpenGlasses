@@ -23,6 +23,34 @@ final class AgentCustomHarnessTests: XCTestCase {
         XCTAssertTrue(config().isConfigured)
     }
 
+    func testIsConfiguredRequiresSecureTransport() {
+        // The auth token rides every request — plain http is refused except to loopback (BM P5).
+        XCTAssertFalse(config(start: "http://agent.test/start").isConfigured)
+        XCTAssertNotNil(config(start: "http://agent.test/start").transportIssue)
+        XCTAssertTrue(config(start: "http://localhost:8080/start").isConfigured)
+        XCTAssertTrue(config(start: "http://127.0.0.1/start").isConfigured)
+        XCTAssertNil(config().transportIssue)                 // https is fine
+        XCTAssertNil(CustomHarnessConfig().transportIssue)    // empty isn't a transport issue
+        XCTAssertFalse(config(start: "ftp://agent.test/start").isConfigured)
+    }
+
+    func testRunIDIsPercentEncodedInTemplates() {
+        // The run id comes from the server's own response — path/query metacharacters must not
+        // rewrite the request URL (BM P5).
+        let c = config()
+        XCTAssertEqual(c.statusURL(runID: "../admin")?.absoluteString,
+                       "https://agent.test/runs/..%2Fadmin")
+        XCTAssertEqual(c.statusURL(runID: "r?x=1#f")?.absoluteString,
+                       "https://agent.test/runs/r%3Fx%3D1%23f")
+        XCTAssertEqual(c.statusURL(runID: "run-9.a_b~c")?.absoluteString,
+                       "https://agent.test/runs/run-9.a_b~c")   // plain ids untouched
+
+        var withCancel = config()
+        withCancel.cancelURLTemplate = "https://agent.test/runs/{id}/cancel"
+        XCTAssertEqual(withCancel.cancelRequest(runID: "a/b")?.url?.absoluteString,
+                       "https://agent.test/runs/a%2Fb/cancel")
+    }
+
     func testConfigCodableRoundTrip() throws {
         let original = config()
         let data = try JSONEncoder().encode(original)
@@ -190,6 +218,43 @@ final class AgentCustomHarnessTests: XCTestCase {
         AgentSessionService.shared.setRegistry(AgentHarnessRegistry([StubHarness(kind: .custom, configured: false)]))
         let unconfigured = try await AgentControlTool().execute(args: ["action": "switch_harness", "harness": "custom"])
         XCTAssertTrue(unconfigured.contains("isn't configured"))
+    }
+
+    // MARK: - switch_harness case handling (BM P5)
+
+    func testHarnessKindMatchingIsCaseInsensitive() {
+        XCTAssertEqual(AgentHarnessKind.matching("codexcloud"), .codexCloud)
+        XCTAssertEqual(AgentHarnessKind.matching("CODEXCLOUD"), .codexCloud)
+        XCTAssertEqual(AgentHarnessKind.matching(" clauderemote "), .claudeRemote)
+        XCTAssertEqual(AgentHarnessKind.matching("openclaw"), .openclaw)
+        XCTAssertEqual(AgentHarnessKind.matching("Custom"), .custom)
+        XCTAssertNil(AgentHarnessKind.matching("nope"))
+    }
+
+    func testToolSchemaEnumeratesEveryHarnessKind() {
+        let props = AgentControlTool().parametersSchema["properties"] as? [String: Any]
+        let harness = props?["harness"] as? [String: Any]
+        XCTAssertEqual(Set(harness?["enum"] as? [String] ?? []),
+                       Set(AgentHarnessKind.allCases.map(\.rawValue)))
+    }
+
+    func testToolSwitchHarnessReachesPhase3Harnesses() async throws {
+        // The old lowercased-rawValue lookup could never match codexCloud/claudeRemote, making
+        // voice-switching to the Phase 3 harnesses impossible.
+        let priorMode = Config.agentModeEnabled
+        let priorDefault = Config.defaultAgentHarness
+        defer {
+            Config.setAgentModeEnabled(priorMode)
+            Config.setDefaultAgentHarness(priorDefault)
+        }
+        Config.setAgentModeEnabled(true)
+        AgentSessionService.shared.setRegistry(
+            AgentHarnessRegistry([StubHarness(kind: .codexCloud, configured: true)]))
+
+        let out = try await AgentControlTool().execute(
+            args: ["action": "switch_harness", "harness": "codexcloud"])
+        XCTAssertTrue(out.contains("Switched"), "got: \(out)")
+        XCTAssertEqual(Config.defaultAgentHarness, .codexCloud)
     }
 }
 

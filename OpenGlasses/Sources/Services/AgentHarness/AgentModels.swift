@@ -18,6 +18,13 @@ enum AgentHarnessKind: String, CaseIterable, Codable, Identifiable {
         case .custom:       return "Custom endpoint"
         }
     }
+
+    /// Case-insensitive lookup ("codexcloud" → .codexCloud). The `switch_harness` tool lowercases
+    /// what the LLM passes, which can never equal a camelCase raw value (BM P5).
+    static func matching(_ raw: String) -> AgentHarnessKind? {
+        let folded = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return allCases.first { $0.rawValue.lowercased() == folded }
+    }
 }
 
 /// Lifecycle of a single remote agent run, normalized across harnesses.

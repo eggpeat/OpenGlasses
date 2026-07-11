@@ -25,10 +25,32 @@ struct CustomHarnessConfig: Codable, Equatable {
     var idPath: String = "id"
     var statusPath: String = "status"
 
-    /// Minimum viable config: a parseable start URL.
+    /// Minimum viable config: a parseable, transport-secure start URL. The auth token rides every
+    /// request, so `http://` is refused except to loopback (a local bridge in development) — BM P5.
     var isConfigured: Bool {
         let trimmed = startURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        return !trimmed.isEmpty && URL(string: trimmed) != nil
+        guard !trimmed.isEmpty, let url = URL(string: trimmed) else { return false }
+        return Self.isTransportSecure(url)
+    }
+
+    /// Why the start URL is refused, for the settings UI — or `nil` when it's empty or acceptable.
+    var transportIssue: String? {
+        let trimmed = startURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let url = URL(string: trimmed), !Self.isTransportSecure(url) else { return nil }
+        return "Use https — over http the auth token is sent in cleartext (http is allowed only for localhost)."
+    }
+
+    /// https anywhere; http only to loopback hosts.
+    static func isTransportSecure(_ url: URL) -> Bool {
+        switch url.scheme?.lowercased() {
+        case "https":
+            return true
+        case "http":
+            let host = url.host?.lowercased() ?? ""
+            return host == "localhost" || host == "127.0.0.1" || host == "::1" || host.hasSuffix(".localhost")
+        default:
+            return false
+        }
     }
 }
 
@@ -49,8 +71,7 @@ extension CustomHarnessConfig {
 
     /// The status URL for `runID` from the template, or `nil` if no template is set.
     func statusURL(runID: String) -> URL? {
-        let filled = statusURLTemplate.replacingOccurrences(of: "{id}", with: runID)
-        guard !filled.isEmpty else { return nil }
+        guard let filled = fillTemplate(statusURLTemplate, runID: runID) else { return nil }
         return URL(string: filled)
     }
 
@@ -65,14 +86,25 @@ extension CustomHarnessConfig {
 
     /// Build the cancel (POST) request for `runID`, or `nil` if no cancel template is set.
     func cancelRequest(runID: String) -> URLRequest? {
-        let filled = cancelURLTemplate.replacingOccurrences(of: "{id}", with: runID)
-        guard !filled.isEmpty, let url = URL(string: filled) else { return nil }
+        guard let filled = fillTemplate(cancelURLTemplate, runID: runID),
+              let url = URL(string: filled) else { return nil }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         applyAuth(&request)
         request.timeoutInterval = 15
         return request
     }
+
+    /// `{id}` filled with the **percent-encoded** run id (BM P5). The id comes from the server's
+    /// own response, so path/query metacharacters ("../", "?", "#") must not be able to rewrite
+    /// the request URL. `nil` when the template is empty.
+    private func fillTemplate(_ template: String, runID: String) -> String? {
+        guard !template.isEmpty,
+              let encoded = runID.addingPercentEncoding(withAllowedCharacters: Self.runIDAllowed) else { return nil }
+        return template.replacingOccurrences(of: "{id}", with: encoded)
+    }
+
+    private static let runIDAllowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._~"))
 
     private func applyAuth(_ request: inout URLRequest) {
         guard !authHeader.isEmpty, !authValue.isEmpty else { return }

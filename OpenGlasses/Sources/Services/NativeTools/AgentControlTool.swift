@@ -35,7 +35,7 @@ struct AgentControlTool: NativeTool {
                 ],
                 "harness": [
                     "type": "string",
-                    "enum": ["openclaw", "custom"],
+                    "enum": AgentHarnessKind.allCases.map(\.rawValue),
                     "description": "For action=switch_harness: which configured backend to make the default.",
                 ],
             ],
@@ -81,9 +81,10 @@ struct AgentControlTool: NativeTool {
             return "Okay, I won't proceed."
 
         case "switch_harness", "switch":
-            guard let raw = (args["harness"] as? String)?.lowercased(),
-                  let kind = AgentHarnessKind(rawValue: raw) else {
-                return "Which agent backend? Try OpenClaw or Custom."
+            guard let raw = args["harness"] as? String,
+                  let kind = AgentHarnessKind.matching(raw) else {
+                let options = AgentHarnessKind.allCases.map(\.displayName).joined(separator: ", ")
+                return "Which agent backend? Options: \(options)."
             }
             guard session.registry?.harness(for: kind)?.isConfigured == true else {
                 return "\(kind.displayName) isn't configured. Set it up in Settings first."
