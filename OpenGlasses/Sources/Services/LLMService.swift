@@ -229,6 +229,11 @@ class LLMService: ObservableObject {
                 if !nativeToolDescriptions.isEmpty {
                     toolSection += "\n\n" + SystemPromptBuilder.toolLines(nativeToolDescriptions)
                 }
+                // Plan BM P4: domains the model must route through a tool, never self-answer.
+                let routingRules = SystemPromptBuilder.routingRules(toolNames: nativeToolNames)
+                if !routingRules.isEmpty {
+                    toolSection += "\n\nMANDATORY ROUTING:\n" + routingRules
+                }
 
                 // Inject user-defined custom tool descriptions
                 let customTools = Config.customTools.filter { Config.isToolEnabled($0.name) }

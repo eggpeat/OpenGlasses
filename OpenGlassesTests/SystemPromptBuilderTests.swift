@@ -44,6 +44,27 @@ final class SystemPromptBuilderTests: XCTestCase {
         }
     }
 
+    // MARK: - Mandatory routing rules (BM P4)
+
+    func testHealthCheckRoutingRulePresentWhenToolEnabled() {
+        let rules = SystemPromptBuilder.routingRules(toolNames: ["get_weather", "health_check"])
+        XCTAssertTrue(rules.contains("health_check"))
+        XCTAssertTrue(rules.contains("MUST"))
+        XCTAssertFalse(rules.contains("\n  "), "rule must be flattened to a single bullet line")
+    }
+
+    func testNoRoutingRulesWithoutGatedTools() {
+        XCTAssertEqual(SystemPromptBuilder.routingRules(toolNames: ["get_weather", "calculate"]), "")
+        XCTAssertEqual(SystemPromptBuilder.routingRules(toolNames: []), "")
+    }
+
+    func testRegistryToolSetTriggersHealthRoutingRule() {
+        // The real registry registers health_check, so the generated prompt carries the rule.
+        let registry = NativeToolRegistry(locationService: LocationService())
+        let rules = SystemPromptBuilder.routingRules(toolNames: registry.toolNames)
+        XCTAssertTrue(rules.contains("health_check"))
+    }
+
     func testDescriptionsComeFromTheToolItself() {
         let registry = NativeToolRegistry(locationService: LocationService())
         // Sample a stable, always-registered tool and confirm the generated line matches its own

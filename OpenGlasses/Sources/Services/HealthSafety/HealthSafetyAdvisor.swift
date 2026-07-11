@@ -44,16 +44,21 @@ final class HealthSafetyAdvisor {
             for: query, medicationsText: medsText, conditionsText: conditionsText, allergiesText: allergiesText)
 
         let hits: [InteractionRubric.Hit]
+        let recognized: Bool
         switch query.kind {
         case .canITake:
-            hits = rubric.check(SubstanceCatalog.substance(from: query.matchText), against: context)
+            let substance = SubstanceCatalog.substance(from: query.matchText)
+            hits = rubric.check(substance, against: context)
+            recognized = substance.isClassified
         case .canIEat:
-            hits = rubric.checkFood(SubstanceCatalog.foodTags(in: query.matchText), against: context)
+            let tags = SubstanceCatalog.foodTags(in: query.matchText)
+            hits = rubric.checkFood(tags, against: context)
+            recognized = !tags.isEmpty
         }
 
         let advisory = await llmAdvisory(for: query, context: context, hasAuthoritative: HealthSafetyResponseBuilder.hasAuthoritativeWarning(hits))
         let citations = citationFiles(medsText: medsText, conditionsText: conditionsText, allergiesText: allergiesText)
-        return HealthSafetyResponseBuilder.compose(subject: query.subject, hits: hits, llmAdvisory: advisory, citations: citations)
+        return HealthSafetyResponseBuilder.compose(subject: query.subject, hits: hits, subjectRecognized: recognized, llmAdvisory: advisory, citations: citations)
     }
 
     // MARK: - LLM long tail (grounded, stateless)

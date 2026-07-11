@@ -29,8 +29,10 @@ struct InteractionRubric {
                             severity: .high, basis: "recorded allergy"))
         }
 
-        // NSAID + anticoagulant → major bleeding risk.
-        if substance.classes.contains(.nsaid), userClasses.contains(.anticoagulant) {
+        // NSAID + anticoagulant → major bleeding risk. Fires on the drug class OR the
+        // condition tag ("on blood thinners" in conditions.md with no recognised drug name).
+        if substance.classes.contains(.nsaid),
+           userClasses.contains(.anticoagulant) || context.conditions.contains(.anticoagulated) {
             hits.append(Hit(reason: "You take a blood thinner; an NSAID markedly raises bleeding risk.",
                             severity: .high, basis: "NSAID + anticoagulant → GI/bleeding risk"))
         }
@@ -38,6 +40,12 @@ struct InteractionRubric {
         if substance.classes.contains(.nsaid), context.conditions.contains(.pepticUlcer) {
             hits.append(Hit(reason: "You have a peptic ulcer history; NSAIDs can cause GI bleeding.",
                             severity: .high, basis: "NSAID + peptic ulcer"))
+        }
+        // NSAID + asthma → caution (aspirin-exacerbated respiratory disease: NSAIDs can
+        // trigger severe bronchospasm in a subset of people with asthma).
+        if substance.classes.contains(.nsaid), context.conditions.contains(.asthma) {
+            hits.append(Hit(reason: "You have asthma; NSAIDs can trigger severe breathing problems in some people with asthma.",
+                            severity: .caution, basis: "NSAID + asthma (aspirin-exacerbated respiratory disease)"))
         }
         // NSAID + kidney disease → caution.
         if substance.classes.contains(.nsaid), context.conditions.contains(.kidneyDisease) {
