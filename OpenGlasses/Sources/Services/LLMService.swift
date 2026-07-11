@@ -1151,15 +1151,24 @@ class LLMService: ObservableObject {
     /// Streaming turns accumulate their own counts via `StreamingUsageAccumulator` and
     /// enter through the already-parsed overload below.
     private func recordUsage(provider: LLMProvider, model: String, json: [String: Any]) {
-        guard let tokens = UsageTracker.parseTokens(provider: provider, json: json) else { return }
-        recordUsage(provider: provider, model: model, tokensIn: tokens.tokensIn, tokensOut: tokens.tokensOut)
+        guard let usage = UsageTracker.parseUsage(provider: provider, json: json) else { return }
+        // A usage block that carried none of the expected keys is shape drift, not a
+        // free turn — mark it so it isn't silently lost (Plan BM P3).
+        guard usage.recognized else {
+            Task { @MainActor in UsageTracker.shared.noteUntrackedTurn() }
+            return
+        }
+        recordUsage(provider: provider, model: model, tokensIn: usage.tokensIn, tokensOut: usage.tokensOut,
+                    cacheWriteTokens: usage.cacheWriteTokens, cacheReadTokens: usage.cacheReadTokens)
     }
 
     /// Record already-parsed token counts (the streaming paths accumulate their own).
-    private func recordUsage(provider: LLMProvider, model: String, tokensIn: Int, tokensOut: Int) {
-        guard tokensIn + tokensOut > 0 else { return }
+    private func recordUsage(provider: LLMProvider, model: String, tokensIn: Int, tokensOut: Int,
+                             cacheWriteTokens: Int = 0, cacheReadTokens: Int = 0) {
+        guard tokensIn + tokensOut + cacheWriteTokens + cacheReadTokens > 0 else { return }
         Task { @MainActor in
-            UsageTracker.shared.record(provider: provider, model: model, tokensIn: tokensIn, tokensOut: tokensOut)
+            UsageTracker.shared.record(provider: provider, model: model, tokensIn: tokensIn, tokensOut: tokensOut,
+                                       cacheWriteTokens: cacheWriteTokens, cacheReadTokens: cacheReadTokens)
         }
     }
 
@@ -1608,7 +1617,8 @@ class LLMService: ObservableObject {
             }
         }
 
-        recordUsage(provider: provider, model: model, tokensIn: usage.tokensIn, tokensOut: usage.tokensOut)
+        recordUsage(provider: provider, model: model, tokensIn: usage.tokensIn, tokensOut: usage.tokensOut,
+                    cacheWriteTokens: usage.cacheWriteTokens, cacheReadTokens: usage.cacheReadTokens)
 
         var message: [String: Any] = ["role": "assistant", "content": fullContent]
         if !toolAcc.isEmpty {
@@ -1681,7 +1691,8 @@ class LLMService: ObservableObject {
             blocks[idx] = b
         }
 
-        recordUsage(provider: .anthropic, model: model, tokensIn: usage.tokensIn, tokensOut: usage.tokensOut)
+        recordUsage(provider: .anthropic, model: model, tokensIn: usage.tokensIn, tokensOut: usage.tokensOut,
+                    cacheWriteTokens: usage.cacheWriteTokens, cacheReadTokens: usage.cacheReadTokens)
 
         let content = blocks.sorted { $0.key < $1.key }.map { $0.value }
         return (content, stopReason)

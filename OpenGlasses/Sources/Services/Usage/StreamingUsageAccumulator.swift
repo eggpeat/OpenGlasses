@@ -9,8 +9,12 @@ import Foundation
 struct StreamingUsageAccumulator {
     private(set) var tokensIn = 0
     private(set) var tokensOut = 0
+    /// Anthropic prompt-cache counts, reported once on `message_start` (OpenAI-compatible
+    /// servers put cached reads in the final chunk's `prompt_tokens_details`).
+    private(set) var cacheWriteTokens = 0
+    private(set) var cacheReadTokens = 0
 
-    var hasUsage: Bool { tokensIn + tokensOut > 0 }
+    var hasUsage: Bool { tokensIn + tokensOut + cacheWriteTokens + cacheReadTokens > 0 }
 
     /// Feed one decoded Anthropic stream event.
     mutating func consumeAnthropic(_ event: [String: Any]) {
@@ -19,6 +23,8 @@ struct StreamingUsageAccumulator {
             if let usage = (event["message"] as? [String: Any])?["usage"] as? [String: Any] {
                 tokensIn = max(tokensIn, Self.int(usage["input_tokens"]))
                 tokensOut = max(tokensOut, Self.int(usage["output_tokens"]))
+                cacheWriteTokens = max(cacheWriteTokens, Self.int(usage["cache_creation_input_tokens"]))
+                cacheReadTokens = max(cacheReadTokens, Self.int(usage["cache_read_input_tokens"]))
             }
         case "message_delta":
             // Output is cumulative across deltas — keep the largest seen.
@@ -36,6 +42,9 @@ struct StreamingUsageAccumulator {
         guard let usage = chunk["usage"] as? [String: Any] else { return }
         tokensIn = max(tokensIn, Self.int(usage["prompt_tokens"]))
         tokensOut = max(tokensOut, Self.int(usage["completion_tokens"]))
+        if let details = usage["prompt_tokens_details"] as? [String: Any] {
+            cacheReadTokens = max(cacheReadTokens, Self.int(details["cached_tokens"]))
+        }
     }
 
     private static func int(_ value: Any?) -> Int {

@@ -6,6 +6,11 @@ import Foundation
 /// matched by longest model-id prefix so dated variants (`claude-opus-4-8`,
 /// `gpt-4o-2024-…`) resolve to their family. An unknown/unpriced model yields `nil`
 /// — the tracker reports tokens and omits the dollar figure rather than guessing.
+///
+/// NOTE — realtime voice: the OpenAI/Gemini realtime models bill audio input/output at
+/// **audio token rates**, which these text rates don't capture. For a realtime session
+/// the token *counts* are right but the dollar estimate is a text-rate approximation
+/// (an undercount) — treat realtime cost as indicative, not exact.
 enum ModelPricing {
 
     struct Rate: Equatable, Codable {
@@ -59,23 +64,50 @@ enum ModelPricing {
     /// taking precedence on key collision. Injectable for tests.
     static var overrides: [String: Rate] = [:]
 
+    /// Anthropic prompt-cache multipliers over the base **input** rate (5-minute TTL):
+    /// a cache *write* costs ≈1.25× input, a cache *read* ≈0.1×. Named (not inlined)
+    /// so the cost math isn't magic, and calibrated to Anthropic — the dominant cache
+    /// consumer post-BF `cache_control`. Other providers' read discounts differ; a read
+    /// billed at 0.1× is a safe floor (never overstates cost).
+    static let cacheWriteMultiplier = 1.25
+    static let cacheReadMultiplier = 0.10
+
     /// The rate for a model, or `nil` if neither overrides nor defaults price it.
-    /// Matches by longest lowercased-prefix so dated model ids resolve to a family.
+    /// Exact id wins; otherwise the longest key that is a prefix followed by a **dated
+    /// snapshot** suffix (`-20260101`, `-2024-08-06`, `@…`) resolves to its family. A
+    /// bare version bump like `claude-opus-4-9` is deliberately NOT absorbed by the
+    /// `claude-opus-4` family — it yields `nil` (report tokens, omit dollars) rather
+    /// than silently billing a future model at an older family's rate.
     static func rate(for model: String) -> Rate? {
         let id = model.lowercased()
         let table = defaults.merging(overrides) { _, override in override }
+        if let exact = table[id] { return exact }
         let match = table.keys
-            .filter { id.hasPrefix($0) }
+            .filter { id.hasPrefix($0) && isSnapshotSuffix(String(id.dropFirst($0.count))) }
             .max(by: { $0.count < $1.count })
         return match.flatMap { table[$0] }
     }
 
+    /// A remainder is a dated-snapshot suffix — a `-`/`@`/`:` boundary carrying a date
+    /// (≥6 digits, e.g. `20260101` or `2024-08-06`). Short version tails (`-9`, `-002`)
+    /// are not snapshots, so an unknown family-version bump stays unpriced.
+    private static func isSnapshotSuffix(_ remainder: String) -> Bool {
+        guard let first = remainder.first, first == "-" || first == "@" || first == ":" else { return false }
+        return remainder.filter(\.isNumber).count >= 6
+    }
+
     /// Estimated USD cost for a call, or `nil` if the model is unpriced. Zero tokens
     /// at a known rate is `0` (priced, just free), distinct from `nil` (unpriced).
-    static func estimate(model: String, tokensIn: Int, tokensOut: Int) -> Double? {
+    /// Cache-creation and cache-read tokens are Anthropic's separate input-side counts
+    /// (excluded from `tokensIn`), priced off the input rate via the multipliers above.
+    static func estimate(model: String, tokensIn: Int, tokensOut: Int,
+                         cacheWriteTokens: Int = 0, cacheReadTokens: Int = 0) -> Double? {
         guard let rate = rate(for: model) else { return nil }
+        let perToken = rate.inputPer1M / 1_000_000
         let input = Double(max(0, tokensIn)) / 1_000_000 * rate.inputPer1M
         let output = Double(max(0, tokensOut)) / 1_000_000 * rate.outputPer1M
-        return input + output
+        let cacheWrite = Double(max(0, cacheWriteTokens)) * perToken * cacheWriteMultiplier
+        let cacheRead = Double(max(0, cacheReadTokens)) * perToken * cacheReadMultiplier
+        return input + output + cacheWrite + cacheRead
     }
 }

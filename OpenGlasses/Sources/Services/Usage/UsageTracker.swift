@@ -21,43 +21,88 @@ final class UsageTracker: ObservableObject {
         self.store = store ?? UsageStore()
     }
 
+    /// Turns where a usage block was present but in an unrecognized shape (e.g. a
+    /// provider renamed its fields), so token counts came back 0 and the turn's cost
+    /// went untracked. A rising count is the signal to update the parser (Plan BM P3).
+    @Published private(set) var untrackedTurns = 0
+
     /// Start a new usage session (e.g. when the conversation is cleared).
     func startNewSession() { sessionId = UUID().uuidString }
 
-    /// Price and persist one API call's usage. No-op when both token counts are 0.
-    func record(provider: LLMProvider, model: String, tokensIn: Int, tokensOut: Int, at: Date = Date()) {
-        guard tokensIn + tokensOut > 0 else { return }
-        let cost = ModelPricing.estimate(model: model, tokensIn: tokensIn, tokensOut: tokensOut)
+    /// Price and persist one API call's usage, including Anthropic prompt-cache tokens.
+    /// No-op when every count is 0.
+    func record(provider: LLMProvider, model: String, tokensIn: Int, tokensOut: Int,
+                cacheWriteTokens: Int = 0, cacheReadTokens: Int = 0, at: Date = Date()) {
+        guard tokensIn + tokensOut + cacheWriteTokens + cacheReadTokens > 0 else { return }
+        let cost = ModelPricing.estimate(model: model, tokensIn: tokensIn, tokensOut: tokensOut,
+                                          cacheWriteTokens: cacheWriteTokens, cacheReadTokens: cacheReadTokens)
         store.insert(UsageRecord(sessionId: sessionId,
                                  provider: provider.rawValue,
                                  model: model,
                                  tokensIn: tokensIn,
                                  tokensOut: tokensOut,
+                                 cacheWriteTokens: cacheWriteTokens,
+                                 cacheReadTokens: cacheReadTokens,
                                  costUSD: cost,
                                  at: at))
     }
+
+    /// Record a usage block whose shape wasn't recognized — nothing to price, but we
+    /// count it so silent drift is visible rather than invisible.
+    func noteUntrackedTurn() { untrackedTurns += 1 }
 
     /// Rolled-up tokens + estimated cost over the last `days`.
     func rollup(days: Int, now: Date = Date()) -> UsageRollup.Result {
         store.rollup(days: days, now: now)
     }
 
-    /// Extract `(tokensIn, tokensOut)` from a provider's response JSON, or `nil` when
-    /// no usage block is present. Pure and `nonisolated` so `LLMService` can call it
-    /// on its own async context (the non-Sendable JSON never crosses an actor hop —
-    /// only the resulting ints do).
-    nonisolated static func parseTokens(provider: LLMProvider, json: [String: Any]) -> (tokensIn: Int, tokensOut: Int)? {
+    /// Parsed token usage for one call. `recognized` is false when a usage block was
+    /// present but carried none of the expected token keys (shape drift).
+    struct ParsedUsage: Equatable {
+        let tokensIn: Int
+        let tokensOut: Int
+        let cacheWriteTokens: Int
+        let cacheReadTokens: Int
+        let recognized: Bool
+    }
+
+    /// Extract token + cache usage from a provider's response JSON, or `nil` when no
+    /// usage block is present at all. Pure and `nonisolated` so `LLMService` can call
+    /// it on its own async context (the non-Sendable JSON never crosses an actor hop).
+    nonisolated static func parseUsage(provider: LLMProvider, json: [String: Any]) -> ParsedUsage? {
         switch provider {
         case .anthropic:
             guard let u = json["usage"] as? [String: Any] else { return nil }
-            return (intValue(u["input_tokens"]), intValue(u["output_tokens"]))
+            let recognized = u["input_tokens"] != nil || u["output_tokens"] != nil
+                || u["cache_creation_input_tokens"] != nil || u["cache_read_input_tokens"] != nil
+            return ParsedUsage(tokensIn: intValue(u["input_tokens"]),
+                               tokensOut: intValue(u["output_tokens"]),
+                               cacheWriteTokens: intValue(u["cache_creation_input_tokens"]),
+                               cacheReadTokens: intValue(u["cache_read_input_tokens"]),
+                               recognized: recognized)
         case .gemini:
             guard let u = json["usageMetadata"] as? [String: Any] else { return nil }
-            return (intValue(u["promptTokenCount"]), intValue(u["candidatesTokenCount"]))
+            let recognized = u["promptTokenCount"] != nil || u["candidatesTokenCount"] != nil
+            return ParsedUsage(tokensIn: intValue(u["promptTokenCount"]),
+                               tokensOut: intValue(u["candidatesTokenCount"]),
+                               cacheWriteTokens: 0,
+                               cacheReadTokens: intValue(u["cachedContentTokenCount"]),
+                               recognized: recognized)
         case .openai, .groq, .zai, .qwen, .minimax, .xai, .openrouter, .custom, .local, .appleOnDevice:
             guard let u = json["usage"] as? [String: Any] else { return nil }
-            return (intValue(u["prompt_tokens"]), intValue(u["completion_tokens"]))
+            let recognized = u["prompt_tokens"] != nil || u["completion_tokens"] != nil
+            let cachedRead = (u["prompt_tokens_details"] as? [String: Any]).map { intValue($0["cached_tokens"]) } ?? 0
+            return ParsedUsage(tokensIn: intValue(u["prompt_tokens"]),
+                               tokensOut: intValue(u["completion_tokens"]),
+                               cacheWriteTokens: 0,
+                               cacheReadTokens: cachedRead,
+                               recognized: recognized)
         }
+    }
+
+    /// Back-compat convenience: just the `(tokensIn, tokensOut)` pair.
+    nonisolated static func parseTokens(provider: LLMProvider, json: [String: Any]) -> (tokensIn: Int, tokensOut: Int)? {
+        parseUsage(provider: provider, json: json).map { ($0.tokensIn, $0.tokensOut) }
     }
 
     private nonisolated static func intValue(_ value: Any?) -> Int {

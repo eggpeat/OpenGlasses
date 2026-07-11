@@ -9,6 +9,10 @@ struct UsageRecord: Equatable {
     let model: String
     let tokensIn: Int
     let tokensOut: Int
+    /// Anthropic prompt-cache counts (separate from `tokensIn`): tokens written to and
+    /// read from the cache. 0 on providers/turns without caching. Priced into `costUSD`.
+    let cacheWriteTokens: Int
+    let cacheReadTokens: Int
     /// Estimated USD, or `nil` when the model is unpriced (tokens still recorded).
     let costUSD: Double?
     let at: Date
@@ -19,6 +23,8 @@ struct UsageRecord: Equatable {
          model: String,
          tokensIn: Int,
          tokensOut: Int,
+         cacheWriteTokens: Int = 0,
+         cacheReadTokens: Int = 0,
          costUSD: Double?,
          at: Date) {
         self.id = id
@@ -27,6 +33,8 @@ struct UsageRecord: Equatable {
         self.model = model
         self.tokensIn = tokensIn
         self.tokensOut = tokensOut
+        self.cacheWriteTokens = cacheWriteTokens
+        self.cacheReadTokens = cacheReadTokens
         self.costUSD = costUSD
         self.at = at
     }

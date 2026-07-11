@@ -24,6 +24,17 @@ final class StreamingUsageAccumulatorTests: XCTestCase {
         XCTAssertEqual(acc.tokensOut, 20)
     }
 
+    func testAnthropicCacheTokensCapturedFromMessageStart() {
+        var acc = StreamingUsageAccumulator()
+        acc.consumeAnthropic(["type": "message_start",
+                              "message": ["usage": ["input_tokens": 42, "output_tokens": 1,
+                                                    "cache_creation_input_tokens": 100,
+                                                    "cache_read_input_tokens": 200]]])
+        XCTAssertEqual(acc.cacheWriteTokens, 100)
+        XCTAssertEqual(acc.cacheReadTokens, 200)
+        XCTAssertTrue(acc.hasUsage)
+    }
+
     func testAnthropicNoUsageEvents() {
         var acc = StreamingUsageAccumulator()
         acc.consumeAnthropic(["type": "content_block_start", "index": 0])
@@ -43,6 +54,13 @@ final class StreamingUsageAccumulatorTests: XCTestCase {
         acc.consumeOpenAI(["choices": [], "usage": ["prompt_tokens": 12, "completion_tokens": 8]])
         XCTAssertEqual(acc.tokensIn, 12)
         XCTAssertEqual(acc.tokensOut, 8)
+    }
+
+    func testOpenAICachedReadFromPromptTokenDetails() {
+        var acc = StreamingUsageAccumulator()
+        acc.consumeOpenAI(["choices": [], "usage": ["prompt_tokens": 12, "completion_tokens": 8,
+                                                    "prompt_tokens_details": ["cached_tokens": 4]]])
+        XCTAssertEqual(acc.cacheReadTokens, 4)
     }
 
     func testOpenAINoUsageWhenServerOmitsIt() {

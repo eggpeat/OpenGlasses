@@ -39,6 +39,80 @@ final class UsageTrackerTests: XCTestCase {
         XCTAssertEqual(ModelPricing.rate(for: "gpt-4o"), ModelPricing.Rate(99, 99))
     }
 
+    // MARK: - Plan BM P3: cache tokens, freshness guard, drift
+
+    func testCacheTokensAreIncludedInCost() throws {
+        // claude-sonnet-4 input = $3/1M. Cache write ≈1.25× input, read ≈0.1× input.
+        let cost = ModelPricing.estimate(model: "claude-sonnet-4", tokensIn: 0, tokensOut: 0,
+                                          cacheWriteTokens: 1_000_000, cacheReadTokens: 1_000_000)
+        XCTAssertEqual(try XCTUnwrap(cost), 3.0 * 1.25 + 3.0 * 0.10, accuracy: 1e-9)
+    }
+
+    func testUnknownVersionBumpIsUnpricedNotFamilyRate() {
+        // A future bare version bump must NOT inherit the older family's 3× rate.
+        XCTAssertNil(ModelPricing.rate(for: "claude-opus-4-9"))
+        XCTAssertNil(ModelPricing.estimate(model: "claude-opus-4-9", tokensIn: 1000, tokensOut: 1000))
+        // A genuine dated snapshot of a known model still resolves to its rate.
+        XCTAssertEqual(ModelPricing.rate(for: "claude-opus-4-8-20260101"), ModelPricing.Rate(5, 25))
+    }
+
+    func testParseUsageCapturesAnthropicCacheTokens() throws {
+        let json: [String: Any] = ["usage": ["input_tokens": 10, "output_tokens": 20,
+                                             "cache_creation_input_tokens": 100, "cache_read_input_tokens": 200]]
+        let u = try XCTUnwrap(UsageTracker.parseUsage(provider: .anthropic, json: json))
+        XCTAssertEqual(u.tokensIn, 10)
+        XCTAssertEqual(u.cacheWriteTokens, 100)
+        XCTAssertEqual(u.cacheReadTokens, 200)
+        XCTAssertTrue(u.recognized)
+    }
+
+    func testParseUsageCapturesOpenAICachedRead() throws {
+        let json: [String: Any] = ["usage": ["prompt_tokens": 5, "completion_tokens": 7,
+                                             "prompt_tokens_details": ["cached_tokens": 3]]]
+        let u = try XCTUnwrap(UsageTracker.parseUsage(provider: .openai, json: json))
+        XCTAssertEqual(u.cacheReadTokens, 3)
+        XCTAssertTrue(u.recognized)
+    }
+
+    func testParseUsageFlagsShapeDrift() throws {
+        // A usage block whose fields were renamed → recognized == false (drift), not nil.
+        let drift = try XCTUnwrap(UsageTracker.parseUsage(provider: .openai, json: ["usage": ["prompt_toks": 5]]))
+        XCTAssertFalse(drift.recognized)
+        XCTAssertEqual(drift.tokensIn, 0)
+        // No usage block at all → nil (nothing to track, not drift).
+        XCTAssertNil(UsageTracker.parseUsage(provider: .openai, json: ["choices": []]))
+    }
+
+    @MainActor
+    func testDriftCounterIncrements() {
+        let path = FileManager.default.temporaryDirectory
+            .appendingPathComponent("usage-drift-\(UUID().uuidString).sqlite")
+        defer { try? FileManager.default.removeItem(at: path) }
+        let tracker = UsageTracker(store: UsageStore(path: path))
+        XCTAssertEqual(tracker.untrackedTurns, 0)
+        tracker.noteUntrackedTurn()
+        tracker.noteUntrackedTurn()
+        XCTAssertEqual(tracker.untrackedTurns, 2)
+    }
+
+    @MainActor
+    func testRecordPersistsCacheTokensAndCacheInclusiveCost() throws {
+        let path = FileManager.default.temporaryDirectory
+            .appendingPathComponent("usage-cache-\(UUID().uuidString).sqlite")
+        defer { try? FileManager.default.removeItem(at: path) }
+        let now = Date(timeIntervalSinceReferenceDate: 70_000)
+        let store = UsageStore(path: path)
+        let tracker = UsageTracker(store: store)
+
+        tracker.record(provider: .anthropic, model: "claude-sonnet-4", tokensIn: 0, tokensOut: 0,
+                       cacheWriteTokens: 1_000_000, cacheReadTokens: 1_000_000, at: now)
+
+        let row = try XCTUnwrap(store.records(since: now.addingTimeInterval(-1)).first)
+        XCTAssertEqual(row.cacheWriteTokens, 1_000_000)
+        XCTAssertEqual(row.cacheReadTokens, 1_000_000)
+        XCTAssertEqual(try XCTUnwrap(row.costUSD), 3.0 * 1.25 + 3.0 * 0.10, accuracy: 1e-9)
+    }
+
     // MARK: - UsageRollup
 
     private func rec(_ model: String, _ tIn: Int, _ tOut: Int, _ cost: Double?, at: Date) -> UsageRecord {
