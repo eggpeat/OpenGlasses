@@ -109,13 +109,21 @@ struct MCPCatalogInstallView: View {
 
             if entry.auth.kind != .none {
                 Section {
-                    SecretInputField(placeholder: "Token", text: $token)
+                    SecretInputField(placeholder: entry.auth.kind == .header ? "API key" : "Token", text: $token)
                 } header: {
-                    Text(entry.auth.kind == .oauth ? "Access token (paste)" : "Bearer token")
+                    switch entry.auth.kind {
+                    case .oauth:  Text("Access token (paste)")
+                    case .header: Text("\(entry.auth.header) value")
+                    default:      Text("Bearer token")
+                    }
                 } footer: {
-                    Text(entry.auth.hint.isEmpty
-                         ? "Pasted as an Authorization: Bearer header."
-                         : entry.auth.hint)
+                    if !entry.auth.hint.isEmpty {
+                        Text(entry.auth.hint)
+                    } else if entry.auth.kind == .header {
+                        Text("Sent as the \(entry.auth.header) header.")
+                    } else {
+                        Text("Pasted as an Authorization: Bearer header.")
+                    }
                 }
             }
 

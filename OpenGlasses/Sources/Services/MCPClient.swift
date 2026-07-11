@@ -18,7 +18,21 @@ final class MCPClient: ObservableObject {
     /// critical safety check works even without this).
     var nativeToolNames: () -> Set<String> = { [] }
 
+    /// Test seam: when set, every JSON-RPC round-trip goes through this transport instead of the
+    /// factory-selected one, so discovery is testable without the network.
+    var transportOverride: MCPTransport?
+
     // MARK: - Tool Discovery
+
+    /// Re-discover tools for installed servers at launch (BM P6). Discovered tools live only in
+    /// memory, so without this they vanish on relaunch until the user re-taps "Discover Tools" —
+    /// quietly breaking the catalogue's promise and leaving the Plan R definition screen
+    /// point-in-time. Discovery re-runs `ToolDefinitionScanner` per tool, so a definition that
+    /// changed since the last launch is re-screened too. No-op with no enabled servers.
+    func rediscoverAtLaunch() async {
+        guard servers.contains(where: \.enabled) else { return }
+        await discoverAllTools()
+    }
 
     /// Discover all tools from all configured MCP servers.
     func discoverAllTools() async {
@@ -165,7 +179,7 @@ final class MCPClient: ObservableObject {
     /// framing stay in exactly one place. HTTP behaviour is unchanged from before the extraction;
     /// SSE selection is wired but its live streaming is deferred (Plan V) — it throws cleanly.
     private func mcpRequest(server: MCPServerConfig, payload: [String: Any]) async throws -> Data {
-        let transport = MCPTransportFactory.transport(for: server.transport)
+        let transport = transportOverride ?? MCPTransportFactory.transport(for: server.transport)
         do {
             return try await transport.request(payload, server: server)
         } catch {
