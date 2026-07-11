@@ -21,17 +21,21 @@ struct MCPCatalogField: Decodable, Identifiable, Equatable {
     }
 }
 
-/// How a catalogue entry authenticates, with a human hint for the install screen.
+/// How a catalogue entry authenticates, with a human hint for the install screen. For
+/// `kind: "header"`, `header` names the custom header the token is sent under
+/// (`{"kind":"header","header":"X-API-Key"}`) — BM P6.
 struct MCPCatalogAuth: Decodable, Equatable {
     let kind: MCPAuthKind
     var hint: String = ""
+    var header: String = ""
 
-    private enum CodingKeys: String, CodingKey { case kind, hint }
+    private enum CodingKeys: String, CodingKey { case kind, hint, header }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         kind = try c.decode(MCPAuthKind.self, forKey: .kind)
         hint = try c.decodeIfPresent(String.self, forKey: .hint) ?? ""
+        header = try c.decodeIfPresent(String.self, forKey: .header) ?? ""
     }
 }
 
@@ -103,14 +107,22 @@ extension MCPCatalogEntry {
     /// to **`.redact`** (never `.allow`): a vetted, convenient install still funnels through the
     /// Plan R outbound screen, and — being an ordinary config — its tools are scanned by
     /// `ToolDefinitionScanner` at discovery. For `bearer`, `token` is prefilled as an `Authorization`
-    /// header; `oauth`/`none` leave `headers` empty (OAuth automation is deferred — the user pastes a
-    /// token in the editor). Returns `nil` if the URL can't be resolved from `values`.
+    /// header; for `header`, `token` is sent verbatim under the entry's custom header name (BM P6);
+    /// `oauth`/`none` leave `headers` empty (OAuth automation is deferred — the user pastes a token
+    /// in the editor). Returns `nil` if the URL can't be resolved from `values`.
     func makeServerConfig(values: [String: String] = [:], token: String? = nil) -> MCPServerConfig? {
         guard let url = resolvedURL(from: values) else { return nil }
 
         var headers: [String: String] = [:]
-        if auth.kind == .bearer, let token = token?.trimmingCharacters(in: .whitespacesAndNewlines), !token.isEmpty {
-            headers["Authorization"] = token.lowercased().hasPrefix("bearer ") ? token : "Bearer \(token)"
+        let trimmedToken = token?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        switch auth.kind {
+        case .bearer where !trimmedToken.isEmpty:
+            headers["Authorization"] = trimmedToken.lowercased().hasPrefix("bearer ") ? trimmedToken : "Bearer \(trimmedToken)"
+        case .header where !trimmedToken.isEmpty:
+            let name = auth.header.trimmingCharacters(in: .whitespaces)
+            if !name.isEmpty { headers[name] = trimmedToken }
+        default:
+            break
         }
 
         return MCPServerConfig(
@@ -131,6 +143,9 @@ extension MCPCatalogEntry {
         if id.trimmingCharacters(in: .whitespaces).isEmpty { return "missing id" }
         if label.trimmingCharacters(in: .whitespaces).isEmpty { return "missing label" }
         if urlTemplate.trimmingCharacters(in: .whitespaces).isEmpty { return "missing url_template" }
+        if auth.kind == .header, auth.header.trimmingCharacters(in: .whitespaces).isEmpty {
+            return "auth kind 'header' requires a header name"
+        }
 
         // Every placeholder the URL references must have a matching field, or install can never
         // complete it.

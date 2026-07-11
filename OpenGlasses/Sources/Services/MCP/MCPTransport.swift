@@ -23,12 +23,14 @@ enum MCPTransportKind: String, Codable, CaseIterable, Identifiable {
     var isLive: Bool { self == .http }
 }
 
-/// How a server authenticates. `bearer` reuses the static-header path that ships today; `oauth` is
-/// reserved for the deferred device-code / PKCE flow (Plan V) — a one-tap OAuth install currently
-/// prefills the editor so the user can paste a token they obtained out-of-band. `none` is an
-/// unauthenticated server.
+/// How a server authenticates. `bearer` reuses the static-header path that ships today; `header`
+/// is the same static-header path under a custom header name (e.g. `X-API-Key`) for servers that
+/// don't speak `Authorization: Bearer` (BM P6 — the transport always applied arbitrary headers,
+/// only the catalogue couldn't express it); `oauth` is reserved for the deferred device-code /
+/// PKCE flow (Plan V) — a one-tap OAuth install currently prefills the editor so the user can
+/// paste a token they obtained out-of-band. `none` is an unauthenticated server.
 enum MCPAuthKind: String, Codable, CaseIterable, Identifiable {
-    case none, bearer, oauth
+    case none, bearer, oauth, header
 
     var id: String { rawValue }
 
@@ -37,6 +39,7 @@ enum MCPAuthKind: String, Codable, CaseIterable, Identifiable {
         case .none:   return "None"
         case .bearer: return "Bearer token"
         case .oauth:  return "OAuth"
+        case .header: return "API-key header"
         }
     }
 

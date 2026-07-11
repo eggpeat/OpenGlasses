@@ -756,6 +756,12 @@ class AppState: ObservableObject, AppStateProtocol {
         mcpClient.nativeToolNames = { [weak nativeToolRegistry] in
             Set(nativeToolRegistry?.allTools.map(\.name) ?? [])
         }
+        // Launch-time re-discovery (BM P6): discovered MCP tools live only in memory, so without
+        // this they vanish on every relaunch until the user re-taps "Discover Tools". Re-running
+        // discovery also re-runs the Plan R tool-poisoning scan on current definitions.
+        Task { [weak mcpClient] in
+            await mcpClient?.rediscoverAtLaunch()
+        }
         // Plan-then-execute HUD trace (Plan S): show the plan header + per-step progress on the lens
         // while a multi-step agent task runs. The final summary is spoken via the normal TTS path.
         llmService.onAgentNarrate = { [weak self] line in

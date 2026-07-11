@@ -230,4 +230,97 @@ final class MCPCatalogTests: XCTestCase {
             XCTAssertEqual(entry.makeServerConfig(values: values, token: "t")?.policy, .redact)
         }
     }
+
+    // MARK: - Custom auth-header kind (BM P6)
+
+    private let headerEntryJSON = Data("""
+    { "version": 1, "servers": [
+        { "id": "keyed", "label": "Keyed", "transport": "http",
+          "url_template": "https://api.example.com/mcp",
+          "auth": { "kind": "header", "header": "X-API-Key", "hint": "Your API key" } }
+    ]}
+    """.utf8)
+
+    func testHeaderAuthKindInstallRoundTripsCustomHeader() throws {
+        let catalog = try MCPCatalog.load(from: headerEntryJSON)
+        let keyed = try XCTUnwrap(catalog.entries.first)
+        XCTAssertEqual(keyed.auth.kind, .header)
+        XCTAssertEqual(keyed.auth.header, "X-API-Key")
+
+        let config = try XCTUnwrap(keyed.makeServerConfig(token: "  sk-abc123  "))
+        XCTAssertEqual(config.headers, ["X-API-Key": "sk-abc123"])   // verbatim — no Bearer prefix
+        XCTAssertEqual(config.authKind, .header)
+        XCTAssertEqual(config.policy, .redact)                       // safe default preserved
+
+        // And the installed config survives the persistence round-trip intact.
+        let back = try JSONDecoder().decode(MCPServerConfig.self, from: JSONEncoder().encode(config))
+        XCTAssertEqual(back.headers["X-API-Key"], "sk-abc123")
+        XCTAssertEqual(back.authKind, .header)
+    }
+
+    func testHeaderAuthKindEmptyTokenLeavesHeadersEmpty() throws {
+        let keyed = try XCTUnwrap(try MCPCatalog.load(from: headerEntryJSON).entries.first)
+        XCTAssertTrue(try XCTUnwrap(keyed.makeServerConfig(token: "   ")).headers.isEmpty)
+        XCTAssertTrue(try XCTUnwrap(keyed.makeServerConfig(token: nil)).headers.isEmpty)
+    }
+
+    func testHeaderAuthKindWithoutHeaderNameIsRejected() throws {
+        let json = Data("""
+        { "version": 1, "servers": [
+            { "id": "nameless", "label": "Nameless", "transport": "http",
+              "url_template": "https://api.example.com/mcp", "auth": { "kind": "header" } }
+        ]}
+        """.utf8)
+        let (catalog, rejected) = try MCPCatalog.loadStrict(from: json)
+        XCTAssertTrue(catalog.entries.isEmpty)
+        XCTAssertTrue(rejected.first?.contains("header name") ?? false, "got: \(rejected)")
+    }
+
+    // MARK: - Launch-time re-discovery (BM P6)
+
+    private static let toolsListJSON = Data("""
+    { "jsonrpc": "2.0", "id": 1, "result": { "tools": [
+        { "name": "get_status", "description": "Read the device status.",
+          "inputSchema": { "type": "object" } },
+        { "name": "send_message", "description": "Send a friendly message.",
+          "inputSchema": { "type": "object" } }
+    ]}}
+    """.utf8)
+
+    func testRelaunchRediscoveryRepopulatesToolsAndRescans() async throws {
+        // Fresh client models a relaunch: nothing discovered in memory, servers persisted.
+        let ha = try entry("ha")
+        let config = try XCTUnwrap(ha.makeServerConfig(values: ["host": "h"], token: "t"))
+        let client = MCPClient()
+        client.transportOverride = StubMCPTransport(body: Self.toolsListJSON)
+        client.servers = [config]
+        client.discoveredTools = []
+
+        await client.rediscoverAtLaunch()
+
+        XCTAssertEqual(client.discoveredTools.count, 2, "relaunch must repopulate discovered tools")
+        // The Plan R scanner re-ran: the high-impact shadow is blocked, the benign tool offered.
+        XCTAssertEqual(client.discoveredTools.filter { $0.trust.isOffered }.map(\.name), ["get_status"])
+        let poisoned = try XCTUnwrap(client.discoveredTools.first { $0.name == "send_message" })
+        XCTAssertFalse(poisoned.trust.isOffered)
+    }
+
+    func testRediscoveryAtLaunchSkipsDisabledServers() async throws {
+        let ha = try entry("ha")
+        var config = try XCTUnwrap(ha.makeServerConfig(values: ["host": "h"], token: "t"))
+        config.enabled = false
+        let client = MCPClient()
+        client.transportOverride = StubMCPTransport(body: Self.toolsListJSON)
+        client.servers = [config]
+        client.discoveredTools = []
+
+        await client.rediscoverAtLaunch()
+        XCTAssertTrue(client.discoveredTools.isEmpty)
+    }
+}
+
+/// Canned-response transport for discovery tests — no network.
+private struct StubMCPTransport: MCPTransport {
+    let body: Data
+    func request(_ payload: [String: Any], server: MCPServerConfig) async throws -> Data { body }
 }
