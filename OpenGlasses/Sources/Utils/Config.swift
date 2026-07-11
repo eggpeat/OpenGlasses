@@ -1423,6 +1423,10 @@ struct Config {
     /// Pure UI gating: nothing about routing or behavior changes. Default off.
     @UserDefaultsBacked("simpleModeEnabled", default: false) static var simpleModeEnabled: Bool
 
+    /// Require device-owner auth (Face ID / passcode) to open Settings at all (BM P10). Exiting
+    /// Simple Mode always asks regardless of this flag. Default off.
+    @UserDefaultsBacked("settingsOwnerGateEnabled", default: false) static var settingsOwnerGateEnabled: Bool
+
     // MARK: - Uncertainty Web Search (Plan BI)
 
     /// Local backends (MLX, Apple Foundation) can't tool-call `web_search`; when on, a hedged or

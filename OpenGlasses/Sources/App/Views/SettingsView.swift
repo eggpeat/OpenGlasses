@@ -8,6 +8,12 @@ struct SettingsView: View {
 
     // Model configs editing
     @State private var simpleModeEnabled = Config.simpleModeEnabled
+
+    // Owner gate (BM P10): Simple-Mode exit always asks; Settings entry asks when the flag is on.
+    @State private var settingsOwnerGateEnabled = Config.settingsOwnerGateEnabled
+    @State private var settingsLocked = Config.settingsOwnerGateEnabled
+    @State private var exitGate = OwnerGateMachine()
+    @State private var entryGate = OwnerGateMachine()
     @State private var modelConfigs: [ModelConfig] = Config.savedModels
     @State private var editingModel: ModelConfig? = nil
     @State private var showAddModel = false
@@ -598,14 +604,25 @@ struct SettingsView: View {
 
             }
 
-            // MARK: Simple Mode (always visible so the owner can leave it)
+            // MARK: Simple Mode (always visible so the owner can leave it — behind the owner gate)
             Section {
-                Toggle(isOn: $simpleModeEnabled) {
+                Toggle(isOn: Binding(
+                    get: { simpleModeEnabled },
+                    set: { requestSimpleModeChange(to: $0) }
+                )) {
                     Label("Simple Mode", systemImage: "dial.low")
                 }
-                .onChange(of: simpleModeEnabled) { _, v in Config.simpleModeEnabled = v }
+                Toggle(isOn: $settingsOwnerGateEnabled) {
+                    Label("Lock Settings", systemImage: "faceid")
+                }
+                .onChange(of: settingsOwnerGateEnabled) { _, v in Config.settingsOwnerGateEnabled = v }
+                if exitGate.lastFailed {
+                    Label("Couldn't verify it's you — Simple Mode stays on.", systemImage: "exclamationmark.triangle")
+                        .font(.footnote)
+                        .foregroundStyle(.red)
+                }
             } footer: {
-                Text("Hides model, persona, behavior, tool, integration, and advanced settings — for handing the device to someone who just needs it to work. Everything keeps running exactly as configured.")
+                Text("Simple Mode hides model, persona, behavior, tool, integration, and advanced settings — for handing the device to someone who just needs it to work. Leaving it asks for Face ID or your passcode. Lock Settings asks every time Settings opens.")
             }
 
             // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -666,6 +683,68 @@ struct SettingsView: View {
         }
         .onDisappear {
             saveSettings()
+        }
+        // Owner gate on Settings entry (BM P10, opt-in): an opaque cover — never a blur that
+        // leaks decrypted key fields — until device-owner auth grants entry.
+        .overlay {
+            if settingsLocked { settingsLockCover }
+        }
+        .onAppear {
+            if settingsLocked { authenticateSettingsEntry() }
+        }
+    }
+
+    // MARK: - Owner gate (BM P10)
+
+    private var settingsLockCover: some View {
+        ZStack {
+            Color(.systemGroupedBackground).ignoresSafeArea()
+            VStack(spacing: 16) {
+                Image(systemName: "lock.fill")
+                    .font(.system(size: 44))
+                    .foregroundStyle(.secondary)
+                Text("Settings are locked")
+                    .font(.headline)
+                if entryGate.lastFailed {
+                    Text("Authentication failed. Try again.")
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+                Button {
+                    authenticateSettingsEntry()
+                } label: {
+                    Label("Unlock", systemImage: "faceid")
+                }
+                .buttonStyle(.borderedProminent)
+            }
+        }
+    }
+
+    private func authenticateSettingsEntry() {
+        guard entryGate.begin() else { return }
+        OwnerGateAuth.authenticate(reason: "Unlock OpenGlasses Settings") { granted in
+            entryGate.finish(success: granted)
+            if entryGate.consume() {
+                withAnimation(.easeOut(duration: 0.2)) { settingsLocked = false }
+            }
+        }
+    }
+
+    /// Simple-Mode toggle path: turning it ON is immediate; turning it OFF (re-exposing the owner
+    /// surface, incl. decrypted API-key fields) needs a fresh device-owner grant every time.
+    private func requestSimpleModeChange(to newValue: Bool) {
+        guard OwnerGatePolicy.requiresGate(togglingSimpleModeTo: newValue, currentlyEnabled: simpleModeEnabled) else {
+            simpleModeEnabled = newValue
+            Config.simpleModeEnabled = newValue
+            return
+        }
+        guard exitGate.begin() else { return }
+        OwnerGateAuth.authenticate(reason: "Verify it's you to leave Simple Mode") { granted in
+            exitGate.finish(success: granted)
+            if exitGate.consume() {
+                simpleModeEnabled = false
+                Config.simpleModeEnabled = false
+            }
         }
     }
 
