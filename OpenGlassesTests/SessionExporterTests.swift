@@ -36,6 +36,11 @@ final class SessionExporterTests: XCTestCase {
         service.logAssistantMessage("E5 is a compressor motor lock on Daikin units.", citations: ["error_codes.md"])
         _ = try service.startProcedure(id: "low_pressure_diagnostic")
         _ = try service.advanceProcedure(choice: nil)
+        var record = CaptureRecord(flowId: "asset_inspection_v1", sessionId: session.id, assetId: "Unit 47B")
+        record.set("gauge_psi", value: .number(118, unit: "psig"), provenance: Provenance(method: "voice_number"))
+        record.set("severity", value: .option("major"), provenance: Provenance(method: "enum"))
+        record.finishedAt = Date()
+        service.logCaptureRecord(record)
         service.recordEscalation(reason: "Readings don't match the manual flowchart")
         _ = try service.endSession(outcome: .escalated)
         // Relocate the produced session dir to the fixed sessionDir path used by the tests.
@@ -63,6 +68,28 @@ final class SessionExporterTests: XCTestCase {
 
         let proc = try XCTUnwrap(export.proceduresRun.first { $0.procedureId == "low_pressure_diagnostic" })
         XCTAssertGreaterThanOrEqual(proc.stepsCompleted, 2) // entry + one advance
+    }
+
+    func testExportIncludesCaptureRecord() throws {
+        // BM P2: a finished capture flow folds into the consolidated export.
+        _ = try makePopulatedSession()
+        let export = try XCTUnwrap(SessionExporter.buildExport(sessionDir: sessionDir))
+
+        let capture = try XCTUnwrap(export.captures.first)
+        XCTAssertEqual(capture.flowId, "asset_inspection_v1")
+        XCTAssertEqual(capture.assetId, "Unit 47B")
+        XCTAssertEqual(capture.fields.count, 2)
+        let gauge = try XCTUnwrap(capture.fields.first { $0.field == "gauge_psi" })
+        XCTAssertEqual(gauge.value, "118 psig")
+        XCTAssertEqual(gauge.method, "voice_number")
+
+        // And it survives the JSON write → decode round-trip.
+        _ = try SessionExporter.export(sessionDir: sessionDir, formats: [.json])
+        let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
+        let reloaded = try decoder.decode(
+            SessionExport.self,
+            from: Data(contentsOf: sessionDir.appendingPathComponent("audit_export.json")))
+        XCTAssertEqual(reloaded.captures, export.captures)
     }
 
     func testExportWritesJSONAndPDFFiles() throws {

@@ -203,6 +203,12 @@ final class FieldSessionService: ObservableObject {
         logger?.appendAssistantMessage(text, citations: citations)
     }
 
+    /// Append a finished capture-flow record to the audit log so `SessionExporter` folds it into
+    /// the consolidated export (no-op if no session).
+    func logCaptureRecord(_ record: CaptureRecord) {
+        logger?.append(record.auditEvent)
+    }
+
     /// Append a HECA safety-assessment event to the active session's audit log (no-op if no session).
     func logSafetyAssessment(summary: String, score: Double?) {
         logger?.append(SessionLogger.Event(

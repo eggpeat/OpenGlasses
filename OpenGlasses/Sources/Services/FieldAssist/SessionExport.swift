@@ -19,6 +19,7 @@ struct SessionExport: Codable, Equatable {
     let transcript: [TranscriptEntry]
     let photos: [PhotoRef]
     let proceduresRun: [ProcedureRun]
+    let captures: [CaptureRun]
     let citations: [Citation]
     let escalations: [EscalationEntry]
 
@@ -45,6 +46,26 @@ struct SessionExport: Codable, Equatable {
         let outcome: String?   // nil if the procedure was left in progress
     }
 
+    /// A finished capture-flow record (Plan U) reconstructed from its `capture_record` audit event.
+    struct CaptureRun: Codable, Equatable {
+        let timestamp: Date
+        let flowId: String
+        let assetId: String?
+        let fields: [Field]
+
+        struct Field: Codable, Equatable {
+            let field: String
+            let value: String    // human-readable rendering (`CaptureValue.display`)
+            let method: String   // provenance — "voice" | "voice_number" | "enum" | "photo" | "barcode" | "ocr"
+        }
+
+        enum CodingKeys: String, CodingKey {
+            case timestamp, fields
+            case flowId = "flow_id"
+            case assetId = "asset_id"
+        }
+    }
+
     struct Citation: Codable, Equatable {
         let timestamp: Date
         let source: String
@@ -67,6 +88,6 @@ struct SessionExport: Codable, Equatable {
         case billableMinutes = "billable_minutes"
         case location, transcript, photos
         case proceduresRun = "procedures_run"
-        case citations, escalations
+        case captures, citations, escalations
     }
 }

@@ -2,10 +2,11 @@ import Foundation
 
 /// What a queued operation does when it eventually reaches the network (Plan T).
 enum OpKind: String, Codable {
-    case logEntry      // a structured step/observation — durable locally, sync-only
-    case photoUpload   // a captured photo on disk → upload when online
-    case llmGrounding  // a question asked offline → answer when back online
-    case auditExport   // generate / upload the session audit export
+    case logEntry       // a structured step/observation — durable locally, sync-only
+    case photoUpload    // a captured photo on disk → upload when online
+    case llmGrounding   // a question asked offline → answer when back online
+    case auditExport    // generate / upload the session audit export
+    case captureRecord  // a finished capture-flow record (Plan U) — typed so a networked sink can route it
 }
 
 /// Where an operation is in its lifecycle.

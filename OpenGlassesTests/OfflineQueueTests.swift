@@ -85,6 +85,26 @@ final class OfflineQueueTests: XCTestCase {
         XCTAssertEqual(reopened.pending().first?.id, id)
     }
 
+    func testCaptureRecordKindSurvivesRestart() throws {
+        // BM P2: finished capture flows enqueue as the typed .captureRecord kind (not bare
+        // .logEntry) and the kind round-trips through the SQLite store across a restart.
+        let path = tempPath()
+        var record = CaptureRecord(flowId: "asset_inspection_v1", sessionId: "s", assetId: "47B",
+                                   startedAt: Date(timeIntervalSince1970: 1))
+        record.set("gauge", value: .number(118, unit: "psig"),
+                   provenance: Provenance(method: "voice_number", at: Date(timeIntervalSince1970: 2)))
+        do {
+            let q = OfflineQueue(path: path)
+            q.enqueue(QueuedOp(kind: .captureRecord, sessionId: "s",
+                               payload: try JSONEncoder().encode(record)))
+        }   // released → db closed
+        let reopened = OfflineQueue(path: path)
+        let back = try XCTUnwrap(reopened.pending().first)
+        XCTAssertEqual(back.kind, .captureRecord)
+        let decoded = try JSONDecoder().decode(CaptureRecord.self, from: back.payload)
+        XCTAssertEqual(decoded, record)
+    }
+
     func testPurgeDoneTombstones() {
         let q = OfflineQueue(path: tempPath())
         let a = op("s", at: 100), b = op("s", at: 200)

@@ -79,23 +79,32 @@ struct FlowPrecondition: Codable, Equatable {
 /// A declarative, typed capture template loaded from `vault/flows/*.json` (Plan U) — the field
 /// analogue of an action-form. One flow can run across asset types it `appliesTo`.
 struct CaptureFlow: Codable, Identifiable, Equatable {
+    /// Newest flow-JSON schema this build understands. Files declaring a higher `schema_version`
+    /// are rejected at load with a report instead of silently vanishing (BM P2); files without
+    /// the field are treated as version 1.
+    static let currentSchemaVersion = 1
+
     let id: String
     let title: String
     let appliesTo: [String]
     let steps: [FlowStep]
     let preconditions: [FlowPrecondition]
+    let schemaVersion: Int
 
     enum CodingKeys: String, CodingKey {
         case id, title, steps, preconditions
         case appliesTo = "applies_to"
+        case schemaVersion = "schema_version"
     }
 
-    init(id: String, title: String, appliesTo: [String] = [], steps: [FlowStep], preconditions: [FlowPrecondition] = []) {
+    init(id: String, title: String, appliesTo: [String] = [], steps: [FlowStep],
+         preconditions: [FlowPrecondition] = [], schemaVersion: Int = CaptureFlow.currentSchemaVersion) {
         self.id = id
         self.title = title
         self.appliesTo = appliesTo
         self.steps = steps
         self.preconditions = preconditions
+        self.schemaVersion = schemaVersion
     }
 
     init(from decoder: Decoder) throws {
@@ -105,6 +114,7 @@ struct CaptureFlow: Codable, Identifiable, Equatable {
         appliesTo = try c.decodeIfPresent([String].self, forKey: .appliesTo) ?? []
         steps = try c.decode([FlowStep].self, forKey: .steps)
         preconditions = try c.decodeIfPresent([FlowPrecondition].self, forKey: .preconditions) ?? []
+        schemaVersion = try c.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? 1
     }
 
     /// Field names this flow captures — used by `FieldResolver` for cross-pack binding.

@@ -39,6 +39,10 @@ final class CaptureFlowService: ObservableObject {
 
     func availableFlows() -> [String] { library()?.summaries() ?? [] }
 
+    /// "filename: reason" for flow files that failed to load (BM P2) — surfaced on `list` so a
+    /// hand-edited overlay with a typo or a too-new schema never just vanishes.
+    func flowLoadIssues() -> [String] { library()?.rejected ?? [] }
+
     func start(flowId: String, assetId: String?) throws -> String {
         guard FieldSessionService.shared.activeSession != nil, let lib = library() else {
             throw CaptureFlowError.noSession
@@ -123,7 +127,10 @@ final class CaptureFlowService: ObservableObject {
     }
 
     private func persist(_ record: CaptureRecord) {
-        guard let data = try? JSONEncoder().encode(record) else { return }
-        offlineQueue?.enqueue(QueuedOp(kind: .logEntry, sessionId: record.sessionId, payload: data))
+        if let data = try? JSONEncoder().encode(record) {
+            offlineQueue?.enqueue(QueuedOp(kind: .captureRecord, sessionId: record.sessionId, payload: data))
+        }
+        // Also into the session's append-only audit log, so the export folds it in (BM P2).
+        FieldSessionService.shared.logCaptureRecord(record)
     }
 }
