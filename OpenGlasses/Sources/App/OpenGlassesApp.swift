@@ -2849,6 +2849,12 @@ class AppState: ObservableObject, AppStateProtocol {
                         onToken: { [weak self] chunk in
                             guard let self, let id = streamThreadId else { return }
                             if self.streamingTurn?.threadId == id { self.streamingTurn?.text += chunk }
+                        },
+                        onStreamReset: { [weak self] in
+                            // A new tool-loop iteration is starting (BM P9): drop the previous
+                            // iteration's text so the bubble never shows intermediate+final concatenated.
+                            guard let self, let id = streamThreadId else { return }
+                            if self.streamingTurn?.threadId == id { self.streamingTurn?.text = "" }
                         }
                     )
                 },
