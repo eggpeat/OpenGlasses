@@ -172,21 +172,23 @@ final class ProjectScopingTests: XCTestCase {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let memory = SemanticMemoryStore(directory: dir)
         memory.activePersonaId = "projA"
-        _ = memory.remember("launch plan", value: "quokka launch codenamed thunderbird")
+        // Assert on "quokka" — a token in the stored VALUE only, never in the query, so the
+        // empty-result message (which echoes the query) can't produce a false positive.
+        _ = memory.remember("launch plan", value: "the launch is codenamed quokka")
         memory.activePersonaId = nil
 
         var globalBrain = BrainTool()
         globalBrain.memoryStore = memory
         globalBrain.activeNamespace = { "global" }
-        let globalAnswer = try await globalBrain.execute(args: ["action": "query", "question": "thunderbird launch"])
-        XCTAssertFalse(globalAnswer.contains("thunderbird"),
+        let globalAnswer = try await globalBrain.execute(args: ["action": "query", "question": "launch"])
+        XCTAssertFalse(globalAnswer.contains("quokka"),
                        "a global brain ask must not see projA's remembered fact")
 
         var projectBrain = BrainTool()
         projectBrain.memoryStore = memory
         projectBrain.activeNamespace = { "projA" }
-        let projectAnswer = try await projectBrain.execute(args: ["action": "query", "question": "thunderbird launch"])
-        XCTAssertTrue(projectAnswer.contains("thunderbird"),
+        let projectAnswer = try await projectBrain.execute(args: ["action": "query", "question": "launch"])
+        XCTAssertTrue(projectAnswer.contains("quokka"),
                       "inside projA the same fact is visible")
     }
 
@@ -198,20 +200,22 @@ final class ProjectScopingTests: XCTestCase {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let memory = SemanticMemoryStore(directory: dir)
         memory.activePersonaId = "projA"
-        _ = memory.remember("mascot", value: "the projA mascot is a narwhal")
+        // "quokka" lives only in the stored value, not the query — so the no-results message
+        // (which echoes the query) can't trip the absence assertion.
+        _ = memory.remember("mascot", value: "the flagship mascot is a quokka")
         memory.activePersonaId = nil
 
         var globalSearch = MemorySearchTool()
         globalSearch.memoryStore = memory
         globalSearch.activeNamespace = { "global" }
-        let globalResult = try await globalSearch.execute(args: ["query": "narwhal mascot"])
-        XCTAssertFalse(globalResult.contains("narwhal"),
+        let globalResult = try await globalSearch.execute(args: ["query": "mascot"])
+        XCTAssertFalse(globalResult.contains("quokka"),
                        "memory_search in a global chat must not surface projA's memory")
 
         var projectSearch = MemorySearchTool()
         projectSearch.memoryStore = memory
         projectSearch.activeNamespace = { "projA" }
-        let projectResult = try await projectSearch.execute(args: ["query": "narwhal mascot"])
-        XCTAssertTrue(projectResult.contains("narwhal"), "inside projA the memory is searchable")
+        let projectResult = try await projectSearch.execute(args: ["query": "mascot"])
+        XCTAssertTrue(projectResult.contains("quokka"), "inside projA the memory is searchable")
     }
 }

@@ -104,6 +104,18 @@ class AmbientCaptionService: ObservableObject {
         print("🎙️ Ambient captions resumed (presence)")
     }
 
+    /// Re-pick the transcription backend after a mode/config change (e.g. HIPAA toggled). If a
+    /// session is live, tear it down and restart on the now-correct path: under HIPAA the cloud
+    /// diarizer is gone and the on-device `SFSpeechRecognizer` takes over, so any Deepgram socket
+    /// closes deterministically instead of waiting for the next audio buffer. No-op when inactive
+    /// or presence-suspended (the suspend path already picks the right backend on resume).
+    func reconfigureForModeChange() {
+        guard isActive, !presenceSuspended else { return }
+        stopRecognitionSession()
+        startRecognitionSession()
+        print("🎙️ Ambient captions reconfigured (mode change)")
+    }
+
     func clearHistory() {
         captionHistory.removeAll()
     }

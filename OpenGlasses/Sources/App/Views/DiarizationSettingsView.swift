@@ -51,7 +51,15 @@ struct DiarizationSettingsView: View {
             } header: {
                 Text("Deepgram")
             } footer: {
-                Text("Stored in the Keychain. Raw audio is sent to Deepgram for transcription — only enable this if that's acceptable.")
+                Text("""
+                Raw audio is streamed to Deepgram's cloud for transcription — including the voices \
+                of anyone nearby, not just you. Many places (two-party-consent jurisdictions) \
+                require everyone's consent before their speech is recorded, and Deepgram may retain \
+                or use audio under its own terms. Unlike the on-device visual bystander filter, \
+                there is no audio equivalent — nearby speech is sent as captured. The key is stored \
+                in the Keychain; only enable this where recording bystanders is lawful and \
+                acceptable.
+                """)
             }
 
             Section {

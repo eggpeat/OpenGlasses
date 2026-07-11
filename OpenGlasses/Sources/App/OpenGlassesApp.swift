@@ -695,6 +695,11 @@ class AppState: ObservableObject, AppStateProtocol {
         // Wire Tier 1 services
         ambientCaptions.wakeWordService = wakeWordService
         ambientCaptions.glassesDisplay = glassesDisplay
+        // Toggling HIPAA mid-session must tear down any live cloud diarization at once (Plan BM
+        // P0): reconfigure ambient captions onto the on-device path the moment the flag flips.
+        hipaaService.onModeChanged = { [weak ambientCaptions] in
+            ambientCaptions?.reconfigureForModeChange()
+        }
         // Teleprompter (Phase 2): shared audio engine for live recognition + the in-lens HUD.
         teleprompterService.wakeWordService = wakeWordService
         teleprompterService.glassesDisplay = glassesDisplay
