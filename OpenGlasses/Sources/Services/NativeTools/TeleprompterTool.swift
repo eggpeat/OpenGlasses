@@ -8,6 +8,16 @@ struct TeleprompterTool: NativeTool {
     let service: TeleprompterService
     /// Optional source for starting from a saved knowledge-base document (Document-RAG adapter).
     var documentStore: DocumentStore?
+    /// Resolves the active project's namespace (Plan AN). Defaults to "global" when unset or no
+    /// project is active. Document lookup is scoped through this so one chat can never read another
+    /// project's document by name.
+    var activeNamespace: (() -> String)?
+
+    /// Namespaces a document lookup may read: the active project plus shared "global".
+    private func scopedNamespaces() -> [String] {
+        let ns = activeNamespace?() ?? "global"
+        return ns == "global" ? ["global"] : ["global", ns]
+    }
 
     let name = "teleprompter"
     let description = """
@@ -74,7 +84,8 @@ struct TeleprompterTool: NativeTool {
             }
             if let documentName, !documentName.isEmpty {
                 guard let store = documentStore else { return "Documents aren't available right now." }
-                guard let doc = store.document(named: documentName), let raw = store.fullText(documentId: doc.id) else {
+                guard let doc = store.document(named: documentName, namespaces: scopedNamespaces()),
+                      let raw = store.fullText(documentId: doc.id) else {
                     return "I couldn't find a saved document named \"\(documentName)\"."
                 }
                 let parsed = TeleprompterScript.parse(title: doc.name,

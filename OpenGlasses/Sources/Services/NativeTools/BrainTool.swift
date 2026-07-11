@@ -41,8 +41,22 @@ struct BrainTool: NativeTool {
 
     var memoryStore: SemanticMemoryStore?
     var documentStore: DocumentStore?
+    /// Resolves the active project's namespace (Plan AN). Defaults to "global" when unset or no
+    /// project is active. Retrieval is scoped through this so an unscoped/global chat never sees a
+    /// project's documents or another persona's memory (the inverse of projects-see-global).
+    var activeNamespace: (() -> String)?
 
     private static let maxResultChars = 2200
+
+    /// The active project's namespace for this call.
+    private func currentNamespace() -> String { activeNamespace?() ?? "global" }
+
+    /// Namespaces a scoped query may read: shared "global" plus the active project (projects see
+    /// global; global never sees a project). Deduped when already global.
+    private func scopedNamespaces() -> [String] {
+        let ns = currentNamespace()
+        return ns == "global" ? ["global"] : ["global", ns]
+    }
 
     func execute(args: [String: Any]) async throws -> String {
         let action = (args["action"] as? String ?? "query").lowercased()
@@ -148,7 +162,7 @@ struct BrainTool: NativeTool {
         case "status", "stats":
             let stats = brain.stats
             let memoryCount = memoryStore != nil ? "available" : "disabled"
-            let docCount = documentStore?.list().count ?? 0
+            let docCount = documentStore?.documentCount(namespace: currentNamespace()) ?? 0
             return "Brain: \(stats.entities) entities, \(stats.edges) relationships, \(stats.encounters) encounters, \(stats.openNeeds) open follow-ups. " +
                    "Semantic memory \(memoryCount); \(docCount) documents; \(SocialContextStore.shared.allPeople().count) people with notes."
 
@@ -176,15 +190,17 @@ struct BrainTool: NativeTool {
             sections.append("RELATIONSHIPS & ENCOUNTERS:\n" + graphLines.joined(separator: "\n"))
         }
 
-        // Semantic memory (embedding search over remembered facts).
-        let memoryHits = memoryStore?.semanticSearch(query: question, limit: 4) ?? []
+        // Semantic memory (embedding search over remembered facts). Scoped to global + the active
+        // project so an unscoped chat never surfaces another persona's remembered facts.
+        let memoryHits = memoryStore?.semanticSearch(query: question, limit: 4, namespaces: scopedNamespaces()) ?? []
         if memoryHits.isEmpty { gaps.append("remembered facts") } else {
             let lines = memoryHits.map { "- \($0.keyName): \($0.value) [memory, \(shortDate($0.createdAt))]" }
             sections.append("REMEMBERED FACTS:\n" + lines.joined(separator: "\n"))
         }
 
-        // Documents (embedding search over ingested document chunks).
-        let passages = documentStore?.query(question, limit: 3) ?? []
+        // Documents (embedding search over ingested document chunks). Scoped to the active project
+        // namespace like DocumentRAGTool, so a global chat never retrieves a project's documents.
+        let passages = documentStore?.query(question, limit: 3, namespace: currentNamespace()) ?? []
         if passages.isEmpty { gaps.append("documents") } else {
             let lines = passages.map { passage -> String in
                 let locator = passage.page.map { ", p.\($0)" } ?? ""
@@ -271,7 +287,7 @@ struct BrainTool: NativeTool {
             sections.append("OPEN FOLLOW-UPS:\n" + openNeeds.map { "- \($0.text)" }.joined(separator: "\n"))
         }
 
-        let memoryHits = memoryStore?.semanticSearch(query: person, limit: 3) ?? []
+        let memoryHits = memoryStore?.semanticSearch(query: person, limit: 3, namespaces: scopedNamespaces()) ?? []
         if !memoryHits.isEmpty {
             sections.append("FROM MEMORY:\n" + memoryHits.map { "- \($0.keyName): \($0.value)" }.joined(separator: "\n"))
         }
