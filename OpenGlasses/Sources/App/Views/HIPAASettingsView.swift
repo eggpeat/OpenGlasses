@@ -460,8 +460,7 @@ struct HIPAASettingsView: View {
         .navigationTitle("Medical Compliance")
         .alert("Enable Medical Compliance?", isPresented: $showConfirmEnable) {
             Button("Enable") {
-                Config.hipaaMode = true
-                hipaaService.log(action: "COMPLIANCE_ENABLED", detail: "Medical compliance mode enabled")
+                hipaaService.setMode(true)
             }
             Button("Cancel", role: .cancel) {
                 complianceEnabled = false
@@ -471,8 +470,7 @@ struct HIPAASettingsView: View {
         }
         .alert("Disable Medical Compliance?", isPresented: $showConfirmDisable) {
             Button("Disable", role: .destructive) {
-                hipaaService.log(action: "COMPLIANCE_DISABLED", detail: "Medical compliance mode disabled")
-                Config.hipaaMode = false
+                hipaaService.setMode(false)
             }
             Button("Cancel", role: .cancel) {
                 complianceEnabled = true

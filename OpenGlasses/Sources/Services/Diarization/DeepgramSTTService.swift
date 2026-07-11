@@ -19,6 +19,13 @@ final class DeepgramSTTService: ObservableObject, DiarizationProvider {
     var onSegment: ((DiarizedSegment) -> Void)?
     @Published private(set) var state: ConnectionState = .idle
 
+    /// Runtime gate for cloud egress. Defaults to the live `Config.isDiarizationConfigured`
+    /// (opt-in + key + **not** HIPAA); injectable so tests can drive the invariant without the
+    /// Keychain. Checked on `start()` *and* every `sendAudio` so a mid-session HIPAA flip (or a
+    /// revoked opt-in) stops audio leaving the device immediately — the start-time gate alone
+    /// would let a live stream keep flowing.
+    var isConfigured: () -> Bool = { Config.isDiarizationConfigured }
+
     private var wantsConnection = false
     private var webSocketTask: URLSessionWebSocketTask?
     private var session: URLSession?
@@ -28,8 +35,8 @@ final class DeepgramSTTService: ObservableObject, DiarizationProvider {
     /// Arm the provider. The socket opens on the first `sendAudio` so it can use the buffer's
     /// real sample rate.
     func start() {
-        guard !Config.deepgramAPIKey.isEmpty else {
-            state = .error("Deepgram not configured")
+        guard isConfigured() else {
+            state = .error("Diarization not available")
             return
         }
         wantsConnection = true
@@ -47,6 +54,13 @@ final class DeepgramSTTService: ObservableObject, DiarizationProvider {
     }
 
     func sendAudio(_ buffer: AVAudioPCMBuffer) {
+        // Runtime invariant: the moment diarization stops being configured (HIPAA flipped on, or
+        // opt-in revoked) mid-session, stop egressing audio and tear the socket down. The next
+        // captured buffer closes the stream even if nothing else told us to stop.
+        guard isConfigured() else {
+            if wantsConnection || webSocketTask != nil { stop() }
+            return
+        }
         if wantsConnection, webSocketTask == nil {
             connect(sampleRate: Int(buffer.format.sampleRate.rounded()))
         }
