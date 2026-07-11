@@ -199,4 +199,85 @@ final class HealthSafetyTests: XCTestCase {
         let hits = InteractionRubric().check(SubstanceCatalog.substance(from: "vitamin d"), against: context(meds: [.statin]))
         XCTAssertTrue(hits.isEmpty)
     }
+
+    // MARK: - Rubric false negatives (BM P4)
+
+    func testConditionOnlyAnticoagulationPlusNSAIDIsHigh() {
+        // "On blood thinners" in conditions.md with no recognised drug name must still
+        // fire the flagship NSAID/anticoagulant rule.
+        let hits = InteractionRubric().check(
+            SubstanceCatalog.substance(from: "ibuprofen"),
+            against: context(meds: [], conditions: [.anticoagulated]))
+        XCTAssertTrue(hits.contains { $0.severity == .high && $0.basis.contains("anticoagulant") })
+    }
+
+    func testConditionOnlyAnticoagulationGroundsFromVaultText() {
+        // End-to-end through grounding: the condition text alone produces the high hit.
+        let g = VaultGrounding()
+        let ctx = g.relevantEntries(
+            for: HealthSafetyQuery(kind: .canITake, subject: "ibuprofen"),
+            medicationsText: "", conditionsText: "- On blood thinners since 2023", allergiesText: "")
+        XCTAssertTrue(ctx.conditions.contains(.anticoagulated))
+        let hits = InteractionRubric().check(SubstanceCatalog.substance(from: "ibuprofen"), against: ctx)
+        XCTAssertTrue(hits.contains { $0.severity == .high })
+    }
+
+    func testAnticoagulantMedAndConditionYieldSingleBleedingHit() {
+        // Both the drug class and the condition tag present → one hit, not two.
+        let hits = InteractionRubric().check(
+            SubstanceCatalog.substance(from: "naproxen"),
+            against: context(meds: [.anticoagulant], conditions: [.anticoagulated]))
+        XCTAssertEqual(hits.filter { $0.basis.contains("anticoagulant") }.count, 1)
+    }
+
+    func testNSAIDPlusAsthmaIsCaution() {
+        let hits = InteractionRubric().check(
+            SubstanceCatalog.substance(from: "aspirin"),
+            against: context(meds: [], conditions: [.asthma]))
+        XCTAssertTrue(hits.contains { $0.severity == .caution && $0.basis.contains("asthma") })
+    }
+
+    func testNonNSAIDWithAsthmaHasNoHit() {
+        let hits = InteractionRubric().check(
+            SubstanceCatalog.substance(from: "sertraline"),
+            against: context(meds: [], conditions: [.asthma]))
+        XCTAssertTrue(hits.isEmpty)
+    }
+
+    // MARK: - Unrecognised substances must not get an absence claim (BM P4)
+
+    func testUnrecognizedSubstanceIsNotClassified() {
+        XCTAssertFalse(SubstanceCatalog.substance(from: "Zorbifen XR").isClassified)
+        XCTAssertTrue(SubstanceCatalog.substance(from: "ibuprofen").isClassified)
+    }
+
+    func testUnrecognizedSubjectGetsHonestUncertaintyNotAbsenceClaim() {
+        let out = HealthSafetyResponseBuilder.compose(
+            subject: "Zorbifen XR", hits: [], subjectRecognized: false,
+            llmAdvisory: nil, citations: ["medications"])
+        XCTAssertTrue(out.contains("don't recognise"))
+        XCTAssertFalse(out.contains("No high-severity interactions"))
+        XCTAssertTrue(out.contains(HealthSafetyResponseBuilder.disclaimer))
+    }
+
+    func testUnrecognizedSubjectWithAllergyHitStillWarns() {
+        // An allergy match fires on the raw name even for an unclassified substance —
+        // the warning must win over the "don't recognise" path.
+        let hit = InteractionRubric().check(
+            SubstanceCatalog.substance(from: "penicillin"),
+            against: context(meds: [], allergies: ["penicillin"]))
+        let out = HealthSafetyResponseBuilder.compose(
+            subject: "penicillin", hits: hit, subjectRecognized: false,
+            llmAdvisory: nil, citations: [])
+        XCTAssertTrue(out.contains("Not recommended"))
+        XCTAssertFalse(out.contains("don't recognise"))
+    }
+
+    func testRecognizedSubjectWithNoHitsKeepsAbsenceClaim() {
+        let out = HealthSafetyResponseBuilder.compose(
+            subject: "atorvastatin", hits: [], subjectRecognized: true,
+            llmAdvisory: nil, citations: ["medications"])
+        XCTAssertTrue(out.contains("No high-severity interactions"))
+        XCTAssertFalse(out.contains("don't recognise"))
+    }
 }

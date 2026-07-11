@@ -18,6 +18,22 @@ enum SystemPromptBuilder {
             .joined(separator: "\n")
     }
 
+    /// Mandatory-routing rules for tools whose domain must never be answered from the model's
+    /// own weights (Plan BM P4). Returns an empty string when none of the gated tools are
+    /// enabled, so the block only appears alongside the tool it mandates.
+    static func routingRules(toolNames: [String]) -> String {
+        var rules: [String] = []
+        if toolNames.contains("health_check") {
+            rules.append("""
+            - Health safety is NOT answerable from your own knowledge: for ANY question about whether a \
+            medication, supplement, or food is safe for the user ("can I take…", "can I eat…", drug or \
+            food interactions), you MUST call health_check and base your answer on its result — it checks \
+            the user's own medications, conditions, and allergies, which you cannot see.
+            """)
+        }
+        return rules.map(flatten).joined(separator: "\n")
+    }
+
     /// Collapse a multi-line tool description into one line so it reads as a single bullet.
     private static func flatten(_ description: String) -> String {
         description

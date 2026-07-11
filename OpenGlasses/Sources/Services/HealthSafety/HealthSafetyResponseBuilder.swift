@@ -14,10 +14,14 @@ enum HealthSafetyResponseBuilder {
     /// - Parameters:
     ///   - subject: what was asked about ("ibuprofen").
     ///   - hits: deterministic rubric hits (any order; sorted here).
+    ///   - subjectRecognized: whether the catalog classified the subject at all — an
+    ///     unrecognised name with no hits must never receive the authoritative
+    ///     "no interactions found" absence claim.
     ///   - llmAdvisory: the grounded model answer for the long tail, or nil when unavailable.
     ///   - citations: vault sources used (e.g. ["medications", "conditions"]).
     static func compose(subject: String,
                         hits: [InteractionRubric.Hit],
+                        subjectRecognized: Bool = true,
                         llmAdvisory: String?,
                         citations: [String]) -> String {
         var parts: [String] = []
@@ -40,7 +44,11 @@ enum HealthSafetyResponseBuilder {
         }
 
         if sorted.isEmpty {
-            parts.append("No high-severity interactions found in your vault for \(subject).")
+            if subjectRecognized {
+                parts.append("No high-severity interactions found in your vault for \(subject).")
+            } else {
+                parts.append("I don't recognise \(subject) in my interaction table, so I can't rule out interactions — check it with your pharmacist or doctor.")
+            }
         }
 
         if let advisory = llmAdvisory?.trimmingCharacters(in: .whitespacesAndNewlines), !advisory.isEmpty {
