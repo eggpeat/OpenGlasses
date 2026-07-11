@@ -32,6 +32,18 @@ final class OfflineQueue {
         )
         """)
         exec("CREATE INDEX IF NOT EXISTS idx_ops_state ON ops(state)")
+        recoverInFlight()
+    }
+
+    // MARK: - Startup recovery
+
+    /// Re-arm ops stranded `inFlight` by a process killed mid-delivery. Only one process ever owns
+    /// this file, so any `inFlight` row seen at open time is a strand — `pending()` would never
+    /// surface it again, silently losing the work. Runs once on open; returns rows recovered.
+    @discardableResult
+    func recoverInFlight() -> Int {
+        exec("UPDATE ops SET state = 'pending' WHERE state = 'inFlight'")
+        return Int(sqlite3_changes(db))
     }
 
     deinit {
@@ -78,9 +90,11 @@ final class OfflineQueue {
         _ = sqlite3_step(stmt)
     }
 
-    /// Delete delivered (tombstone) ops to reclaim space.
+    /// Delete delivered (tombstone) ops to reclaim DB space. Excludes `photoUpload` — those keep
+    /// their delivered tombstone so `prunePhotoEvidence` can bound the on-disk photo cache and
+    /// evict the actual files; dropping their rows here would orphan the images on disk.
     func purgeDone() {
-        exec("DELETE FROM ops WHERE state = 'done'")
+        exec("DELETE FROM ops WHERE state = 'done' AND kind != 'photoUpload'")
     }
 
     /// Delete a single op by id.
