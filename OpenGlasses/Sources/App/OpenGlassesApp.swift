@@ -794,8 +794,11 @@ class AppState: ObservableObject, AppStateProtocol {
         nativeToolRegistry.register(translationTool)
 
         // Teleprompter tool (Phase 2): registered after the lazy service is available. The
-        // document store enables prompting from a saved knowledge-base doc (Document-RAG source).
-        nativeToolRegistry.register(TeleprompterTool(service: teleprompterService, documentStore: documentStore))
+        // document store enables prompting from a saved knowledge-base doc (Document-RAG source),
+        // scoped to the active project + global so it can't read another project's doc (Plan BM P8).
+        var teleprompterTool = TeleprompterTool(service: teleprompterService, documentStore: documentStore)
+        teleprompterTool.activeNamespace = { memoryForNamespace.activePersonaId ?? "global" }
+        nativeToolRegistry.register(teleprompterTool)
 
         // Wire translation output to TTS
         liveTranslation.onTranslation = { [weak self] translation in

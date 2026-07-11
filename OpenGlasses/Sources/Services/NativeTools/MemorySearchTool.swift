@@ -29,6 +29,15 @@ struct MemorySearchTool: NativeTool {
     ]
 
     weak var memoryStore: SemanticMemoryStore?
+    /// Resolves the active project's namespace (Plan AN). Defaults to "global". Search is scoped
+    /// through this so a global chat never surfaces another persona's memory (Plan BM P8).
+    var activeNamespace: (() -> String)?
+
+    /// Namespaces a scoped search may read: shared "global" plus the active project.
+    private func scopedNamespaces() -> [String] {
+        let ns = activeNamespace?() ?? "global"
+        return ns == "global" ? ["global"] : ["global", ns]
+    }
 
     func execute(args: [String: Any]) async throws -> String {
         guard let store = memoryStore else {
@@ -41,7 +50,8 @@ struct MemorySearchTool: NativeTool {
         let limit = min(args["limit"] as? Int ?? 5, 15)
         let topicFilter = args["topic"] as? String
 
-        var results = await MainActor.run { store.semanticSearch(query: query, limit: limit) }
+        let namespaces = scopedNamespaces()
+        var results = await MainActor.run { store.semanticSearch(query: query, limit: limit, namespaces: namespaces) }
 
         if let topic = topicFilter {
             results = results.filter { $0.topic == topic }

@@ -153,6 +153,18 @@ final class DocumentStore: ObservableObject {
             ?? documents.first { $0.name.lowercased().contains(needle) }
     }
 
+    /// Resolve a document by name, restricted to an allowed set of namespaces (project scope,
+    /// Plan AN). Callers that reach documents by name — e.g. the teleprompter — must pass
+    /// `{active project, "global"}` so a chat can never read another project's document text.
+    func document(named name: String, namespaces: [String]) -> DocumentRef? {
+        let needle = name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !needle.isEmpty else { return nil }
+        let allowed = Set(namespaces)
+        let scoped = documents.filter { allowed.contains($0.namespace) }
+        return scoped.first { $0.name.lowercased() == needle }
+            ?? scoped.first { $0.name.lowercased().contains(needle) }
+    }
+
     /// Reconstruct a document's continuous text from its (overlapping) chunks, in order.
     /// Used by sources that need the whole document, e.g. the teleprompter.
     func fullText(documentId: String) -> String? {

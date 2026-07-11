@@ -191,12 +191,14 @@ final class NativeToolRegistry {
         var brainTool = BrainTool()
         brainTool.memoryStore = semanticMemory
         brainTool.documentStore = documentStore
+        brainTool.activeNamespace = activeNamespace   // Project scoping (Plan AN / BM P8)
         register(brainTool)
 
         // Semantic memory tools — only available when memory is enabled
         if let memory = semanticMemory {
             var searchTool = MemorySearchTool()
             searchTool.memoryStore = memory
+            searchTool.activeNamespace = activeNamespace   // Project scoping (Plan AN / BM P8)
             register(searchTool)
             var diaryTool = AgentDiaryTool()
             diaryTool.memoryStore = memory

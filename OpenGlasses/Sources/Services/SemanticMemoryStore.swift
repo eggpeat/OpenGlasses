@@ -219,10 +219,22 @@ class SemanticMemoryStore: ObservableObject {
     // MARK: - Semantic Search (new)
 
     /// Search memories by meaning. Falls back to keyword scoring if no embedding model.
+    /// `namespace: nil` searches EVERY namespace — including other personas' scoped memory —
+    /// so callers at a chat boundary must pass an explicit scope (see the `namespaces:` overload).
     func semanticSearch(query: String, limit: Int = 5, namespace: String? = nil) -> [SearchResult] {
+        scoreSearch(query: query, limit: limit, rows: fetchAllMemories(namespace: namespace))
+    }
+
+    /// Search memories restricted to an explicit set of namespaces (project scope, Plan AN).
+    /// A scoped chat passes `["global", activePersonaId]` so it sees shared memory plus its own
+    /// persona, but never another persona's remembered facts.
+    func semanticSearch(query: String, limit: Int = 5, namespaces: [String]) -> [SearchResult] {
+        scoreSearch(query: query, limit: limit, rows: fetchAllMemories(namespaces: namespaces))
+    }
+
+    private func scoreSearch(query: String, limit: Int, rows: [MemoryEntry]) -> [SearchResult] {
         let queryVec = embed(query)
         let current = embedder.version
-        let rows = fetchAllMemories(namespace: namespace)
 
         let scored: [(MemoryEntry, Float)] = rows.map { row in
             if let qv = queryVec, let stored = fetchEmbedding(key: row.keyName, namespace: row.namespace) {
@@ -513,6 +525,37 @@ class SemanticMemoryStore: ObservableObject {
         defer { sqlite3_finalize(stmt) }
         if let ns = namespace {
             sqlite3_bind_text(stmt, 1, ns, -1, SQLITE_TRANSIENT)
+        }
+        let now = Date().timeIntervalSince1970
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            let expiresAt = sqlite3_column_type(stmt, 6) != SQLITE_NULL ? sqlite3_column_double(stmt, 6) : nil
+            if let exp = expiresAt, exp < now { continue }  // skip expired
+            entries.append(MemoryEntry(
+                id: String(cString: sqlite3_column_text(stmt, 0)),
+                keyName: String(cString: sqlite3_column_text(stmt, 1)),
+                value: String(cString: sqlite3_column_text(stmt, 2)),
+                topic: String(cString: sqlite3_column_text(stmt, 3)),
+                namespace: String(cString: sqlite3_column_text(stmt, 4)),
+                createdAt: Date(timeIntervalSince1970: sqlite3_column_double(stmt, 5)),
+                expiresAt: expiresAt.map { Date(timeIntervalSince1970: $0) }
+            ))
+        }
+        return entries
+    }
+
+    /// Fetch memories across an explicit set of namespaces (deduped). An empty set matches nothing,
+    /// which is the safe default — never fall through to "all namespaces" here.
+    private func fetchAllMemories(namespaces: [String]) -> [MemoryEntry] {
+        let unique = Array(Set(namespaces))
+        guard !unique.isEmpty else { return [] }
+        var entries: [MemoryEntry] = []
+        var stmt: OpaquePointer?
+        let placeholders = unique.map { _ in "?" }.joined(separator: ", ")
+        let sql = "SELECT id, key_name, value, topic, namespace, created_at, expires_at FROM memories WHERE namespace IN (\(placeholders))"
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return entries }
+        defer { sqlite3_finalize(stmt) }
+        for (i, ns) in unique.enumerated() {
+            sqlite3_bind_text(stmt, Int32(i + 1), ns, -1, SQLITE_TRANSIENT)
         }
         let now = Date().timeIntervalSince1970
         while sqlite3_step(stmt) == SQLITE_ROW {
