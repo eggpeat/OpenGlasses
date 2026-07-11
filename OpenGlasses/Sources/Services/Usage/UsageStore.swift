@@ -31,6 +31,10 @@ final class UsageStore {
         )
         """)
         exec("CREATE INDEX IF NOT EXISTS idx_usage_at ON usage(at)")
+        // Cache-token columns added post-launch (Plan BM P3). ADD COLUMN is idempotent
+        // enough here — it errors on an existing column, which we ignore.
+        exec("ALTER TABLE usage ADD COLUMN cache_write_tokens INTEGER NOT NULL DEFAULT 0")
+        exec("ALTER TABLE usage ADD COLUMN cache_read_tokens INTEGER NOT NULL DEFAULT 0")
     }
 
     deinit {
@@ -41,8 +45,8 @@ final class UsageStore {
 
     /// Persist a usage record. `cost_usd` is stored NULL when the model was unpriced.
     func insert(_ record: UsageRecord) {
-        let sql = "INSERT OR REPLACE INTO usage (id, session_id, provider, model, tokens_in, tokens_out, cost_usd, at) " +
-                  "VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+        let sql = "INSERT OR REPLACE INTO usage (id, session_id, provider, model, tokens_in, tokens_out, cache_write_tokens, cache_read_tokens, cost_usd, at) " +
+                  "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
         defer { sqlite3_finalize(stmt) }
@@ -52,12 +56,14 @@ final class UsageStore {
         bindText(stmt, 4, record.model)
         sqlite3_bind_int(stmt, 5, Int32(record.tokensIn))
         sqlite3_bind_int(stmt, 6, Int32(record.tokensOut))
+        sqlite3_bind_int(stmt, 7, Int32(record.cacheWriteTokens))
+        sqlite3_bind_int(stmt, 8, Int32(record.cacheReadTokens))
         if let cost = record.costUSD {
-            sqlite3_bind_double(stmt, 7, cost)
+            sqlite3_bind_double(stmt, 9, cost)
         } else {
-            sqlite3_bind_null(stmt, 7)
+            sqlite3_bind_null(stmt, 9)
         }
-        sqlite3_bind_double(stmt, 8, record.at.timeIntervalSince1970)
+        sqlite3_bind_double(stmt, 10, record.at.timeIntervalSince1970)
         _ = sqlite3_step(stmt)
     }
 
@@ -70,7 +76,7 @@ final class UsageStore {
 
     /// All records with `at >= since`, newest first.
     func records(since: Date) -> [UsageRecord] {
-        query("SELECT id, session_id, provider, model, tokens_in, tokens_out, cost_usd, at FROM usage " +
+        query("SELECT id, session_id, provider, model, tokens_in, tokens_out, cache_write_tokens, cache_read_tokens, cost_usd, at FROM usage " +
               "WHERE at >= \(since.timeIntervalSince1970) ORDER BY at DESC")
     }
 
@@ -96,10 +102,14 @@ final class UsageStore {
             let model = String(cString: sqlite3_column_text(stmt, 3))
             let tokensIn = Int(sqlite3_column_int(stmt, 4))
             let tokensOut = Int(sqlite3_column_int(stmt, 5))
-            let cost: Double? = sqlite3_column_type(stmt, 6) == SQLITE_NULL ? nil : sqlite3_column_double(stmt, 6)
-            let at = Date(timeIntervalSince1970: sqlite3_column_double(stmt, 7))
+            let cacheWrite = Int(sqlite3_column_int(stmt, 6))
+            let cacheRead = Int(sqlite3_column_int(stmt, 7))
+            let cost: Double? = sqlite3_column_type(stmt, 8) == SQLITE_NULL ? nil : sqlite3_column_double(stmt, 8)
+            let at = Date(timeIntervalSince1970: sqlite3_column_double(stmt, 9))
             out.append(UsageRecord(id: id, sessionId: sessionId, provider: provider, model: model,
-                                   tokensIn: tokensIn, tokensOut: tokensOut, costUSD: cost, at: at))
+                                   tokensIn: tokensIn, tokensOut: tokensOut,
+                                   cacheWriteTokens: cacheWrite, cacheReadTokens: cacheRead,
+                                   costUSD: cost, at: at))
         }
         return out
     }
