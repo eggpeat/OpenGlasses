@@ -149,6 +149,10 @@ class LLMService: ObservableObject {
     /// Local on-device LLM service (MLX Swift)
     var localLLMService: LocalLLMService?
 
+    /// Session the SSE streaming helpers use. Injectable purely so tests can stub `URLProtocol`
+    /// and exercise the stream parsing/error paths headlessly (BM P9); production uses `.shared`.
+    var streamingSession: URLSession = .shared
+
 
     #if canImport(FoundationModels)
     private var _appleSession: Any?
@@ -414,10 +418,12 @@ class LLMService: ObservableObject {
         )
     }
 
-    /// - Parameter onToken: optional per-token callback for streaming the final assistant reply
-    ///   into the UI as it's generated. Currently honoured by the on-device (`local`) provider;
-    ///   cloud providers ignore it and return the full reply on completion.
-    func sendMessage(_ text: String, locationContext: String? = nil, imageData: Data? = nil, memoryContext: String? = nil, agentContext: String? = nil, playbookContext: String? = nil, nowPlayingContext: String? = nil, shortcutsContext: String? = nil, promptSections: ConversationClassifier.PromptSections? = nil, onToken: ((String) -> Void)? = nil) async throws -> String {
+    /// - Parameter onToken: optional per-token callback for streaming the assistant reply into the
+    ///   UI as it's generated (honoured by the Anthropic, OpenAI-compatible, and local providers).
+    /// - Parameter onStreamReset: invoked at the start of each streamed tool-loop iteration so the
+    ///   caller can clear its accumulated bubble — intermediate tool-turn text must never
+    ///   concatenate with the final reply (BM P9).
+    func sendMessage(_ text: String, locationContext: String? = nil, imageData: Data? = nil, memoryContext: String? = nil, agentContext: String? = nil, playbookContext: String? = nil, nowPlayingContext: String? = nil, shortcutsContext: String? = nil, promptSections: ConversationClassifier.PromptSections? = nil, onToken: ((String) -> Void)? = nil, onStreamReset: (() -> Void)? = nil) async throws -> String {
         isProcessing = true
         defer { isProcessing = false }
 
@@ -479,7 +485,7 @@ class LLMService: ObservableObject {
         let rawResponse: String
         switch provider {
         case .anthropic:
-            rawResponse = try await sendAnthropic(text, systemPrompt: fullPrompt, config: modelConfig, includeTools: includeTools, imageData: imageData, onToken: onToken)
+            rawResponse = try await sendAnthropic(text, systemPrompt: fullPrompt, config: modelConfig, includeTools: includeTools, imageData: imageData, onToken: onToken, onStreamReset: onStreamReset)
         case .gemini:
             rawResponse = try await sendGemini(text, systemPrompt: fullPrompt, config: modelConfig, includeTools: includeTools, imageData: imageData)
         case .local:
@@ -487,7 +493,7 @@ class LLMService: ObservableObject {
         case .appleOnDevice:
             rawResponse = try await sendAppleOnDevice(text, systemPrompt: fullPrompt)
         case .openai, .groq, .zai, .qwen, .minimax, .xai, .openrouter, .custom:
-            rawResponse = try await sendOpenAICompatible(text, systemPrompt: fullPrompt, config: modelConfig, includeTools: includeTools, imageData: imageData, onToken: onToken)
+            rawResponse = try await sendOpenAICompatible(text, systemPrompt: fullPrompt, config: modelConfig, includeTools: includeTools, imageData: imageData, onToken: onToken, onStreamReset: onStreamReset)
         }
 
         // Strip <think> tags: keep reasoning in history but don't speak it
@@ -1177,7 +1183,9 @@ class LLMService: ObservableObject {
         }
     }
 
-    private func sendAnthropic(_ text: String, systemPrompt: String, config: ModelConfig, includeTools: Bool, imageData: Data?, onToken: ((String) -> Void)? = nil) async throws -> String {
+    // Internal (not private) so the BM P9 fixture tests can drive the full streamed tool loop
+    // through a stubbed `streamingSession`.
+    func sendAnthropic(_ text: String, systemPrompt: String, config: ModelConfig, includeTools: Bool, imageData: Data?, onToken: ((String) -> Void)? = nil, onStreamReset: (() -> Void)? = nil) async throws -> String {
         // An explicit API key wins; otherwise fall back to a connected Claude account (OAuth).
         let apiKey = await AnthropicAuth.resolveCredential(apiKey: config.apiKey)
         guard !apiKey.isEmpty else {
@@ -1267,7 +1275,16 @@ class LLMService: ObservableObject {
                 let content: [[String: Any]]
                 let stopReason: String?
                 if let onToken {
-                    (content, stopReason) = try await self.streamAnthropicContent(request: request, model: config.model, onToken: onToken)
+                    // New tool-loop iteration: clear the caller's accumulated bubble first, so an
+                    // intermediate tool turn's text never concatenates with the final reply (BM P9).
+                    onStreamReset?()
+                    let flag = TokenDeliveryFlag()
+                    (content, stopReason) = try await self.withTransientSSERetries(tokenFlag: flag) {
+                        try await self.streamAnthropicContent(request: request, model: config.model) { token in
+                            flag.mark()
+                            onToken(token)
+                        }
+                    }
                 } else {
                     let (data, response) = try await URLSession.shared.data(for: request)
 
@@ -1362,7 +1379,7 @@ class LLMService: ObservableObject {
         return nil
     }
 
-    private func sendOpenAICompatible(_ text: String, systemPrompt: String, config: ModelConfig, includeTools: Bool, imageData: Data?, onToken: ((String) -> Void)? = nil) async throws -> String {
+    private func sendOpenAICompatible(_ text: String, systemPrompt: String, config: ModelConfig, includeTools: Bool, imageData: Data?, onToken: ((String) -> Void)? = nil, onStreamReset: (() -> Void)? = nil) async throws -> String {
         let provider = config.llmProvider
         let apiKey = config.apiKey
         let authorization = try Self.openAICompatibleAuthorization(provider: provider, apiKey: apiKey)
@@ -1485,7 +1502,16 @@ class LLMService: ObservableObject {
                 // the reconstructed `message` (content + tool_calls) feeds the shared tool loop unchanged.
                 let message: [String: Any]
                 if let onToken {
-                    message = try await self.streamOpenAIMessage(request: request, provider: provider, model: config.model, onToken: onToken)
+                    // New tool-loop iteration: clear the caller's accumulated bubble first, so an
+                    // intermediate tool turn's text never concatenates with the final reply (BM P9).
+                    onStreamReset?()
+                    let flag = TokenDeliveryFlag()
+                    message = try await self.withTransientSSERetries(tokenFlag: flag) {
+                        try await self.streamOpenAIMessage(request: request, provider: provider, model: config.model) { token in
+                            flag.mark()
+                            onToken(token)
+                        }
+                    }
                 } else {
                     let (data, response) = try await URLSession.shared.data(for: request)
 
@@ -1573,12 +1599,60 @@ class LLMService: ObservableObject {
 
     // MARK: - Streaming (SSE) — Chat tab live token delivery
 
+    /// Whether an SSE failure is worth an automatic retry (BM P9) — rate limits (429), server-side
+    /// errors/overload (5xx incl. Anthropic 529), transient network drops, and interrupted streams
+    /// whose reason reads as overload/truncation. Mirrors `RealtimeReconnect`'s
+    /// fatal-vs-recoverable split for the chat path.
+    nonisolated static func isTransientSSEError(_ error: Error) -> Bool {
+        switch error {
+        case LLMError.apiError(_, let status, _):
+            return status == 429 || (500...599).contains(status)
+        case LLMError.streamInterrupted(_, let reason):
+            let r = reason.lowercased()
+            return r.contains("overloaded") || r.contains("rate_limit")
+                || r.contains("server_error") || r.contains("truncated")
+        case let urlError as URLError:
+            return [.timedOut, .networkConnectionLost, .notConnectedToInternet,
+                    .cannotConnectToHost, .dnsLookupFailed].contains(urlError.code)
+        default:
+            return false
+        }
+    }
+
+    /// Reference-typed flag the streaming retry uses to know whether any token already reached the
+    /// UI — a failure after visible partial text must surface as an error, never silently retry
+    /// into duplicated output.
+    final class TokenDeliveryFlag {
+        private(set) var delivered = false
+        func mark() { delivered = true }
+    }
+
+    /// Retry `attempt` on transient SSE failures with `RealtimeReconnect` backoff (BM P9). Retries
+    /// only while no token has been delivered; gives up after the policy's attempts or on the
+    /// first non-transient error.
+    func withTransientSSERetries<T>(policy: RealtimeReconnect.Policy = .init(maxAttempts: 2, maxBackoffSeconds: 4),
+                                    tokenFlag: TokenDeliveryFlag,
+                                    _ attempt: () async throws -> T) async throws -> T {
+        var failures = 0
+        while true {
+            do {
+                return try await attempt()
+            } catch {
+                failures += 1
+                guard !tokenFlag.delivered, Self.isTransientSSEError(error),
+                      let delay = policy.delay(forAttempt: failures) else { throw error }
+                print("🔁 SSE transient failure (attempt \(failures)) — retrying in \(delay)s: \(error.localizedDescription)")
+                try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            }
+        }
+    }
+
     /// Stream an OpenAI-compatible chat-completions response, invoking `onToken` for each text
     /// delta, and return a reconstructed `message` dict (same shape as `choices[].message`) so the
     /// caller's tool loop runs identically to the buffered path. Only used when a streaming caller
     /// (the Chat tab) passes `onToken`; every other caller keeps the buffered path.
-    private func streamOpenAIMessage(request: URLRequest, provider: LLMProvider, model: String, onToken: @escaping (String) -> Void) async throws -> [String: Any] {
-        let (bytes, response) = try await URLSession.shared.bytes(for: request)
+    func streamOpenAIMessage(request: URLRequest, provider: LLMProvider, model: String, onToken: @escaping (String) -> Void) async throws -> [String: Any] {
+        let (bytes, response) = try await streamingSession.bytes(for: request)
         guard let http = response as? HTTPURLResponse else { throw LLMError.invalidResponse(provider.displayName) }
         guard http.statusCode == 200 else {
             var data = Data()
@@ -1593,13 +1667,22 @@ class LLMService: ObservableObject {
         var fullContent = ""
         var toolAcc: [Int: (id: String, name: String, args: String)] = [:]  // tool_calls accumulate by index
         var usage = StreamingUsageAccumulator()   // from the final include_usage chunk
+        var sawDone = false
 
         for try await line in bytes.lines {
             guard line.hasPrefix("data:") else { continue }
             let payload = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
             if payload.isEmpty { continue }
-            if payload == "[DONE]" { break }
+            if payload == "[DONE]" { sawDone = true; break }
             guard let obj = try? JSONSerialization.jsonObject(with: Data(payload.utf8)) as? [String: Any] else { continue }
+            // A mid-stream error event means the response died — the partial content must never
+            // return as a successful turn (BM P9).
+            if let err = obj["error"] as? [String: Any] {
+                let msg = err["message"] as? String ?? "stream error"
+                let kind = err["type"] as? String
+                throw LLMError.streamInterrupted(provider: provider.displayName,
+                                                 reason: kind.map { "\($0): \(msg)" } ?? msg)
+            }
             usage.consumeOpenAI(obj)   // the usage chunk has empty choices, so parse it before the guard
             guard let choice = (obj["choices"] as? [[String: Any]])?.first,
                   let delta = choice["delta"] as? [String: Any] else { continue }
@@ -1622,6 +1705,12 @@ class LLMService: ObservableObject {
             }
         }
 
+        // Premature EOF (connection dropped before "[DONE]") is truncation, not success.
+        guard sawDone else {
+            throw LLMError.streamInterrupted(provider: provider.displayName,
+                                             reason: "stream ended before [DONE] — response truncated")
+        }
+
         recordUsage(provider: provider, model: model, tokensIn: usage.tokensIn, tokensOut: usage.tokensOut,
                     cacheWriteTokens: usage.cacheWriteTokens, cacheReadTokens: usage.cacheReadTokens)
 
@@ -1637,8 +1726,8 @@ class LLMService: ObservableObject {
     /// Stream an Anthropic Messages response, invoking `onToken` for each text delta, and return
     /// the reconstructed content blocks + stop reason so the caller's tool loop runs identically to
     /// the buffered path. Only used when a streaming caller (the Chat tab) passes `onToken`.
-    private func streamAnthropicContent(request: URLRequest, model: String, onToken: @escaping (String) -> Void) async throws -> (content: [[String: Any]], stopReason: String?) {
-        let (bytes, response) = try await URLSession.shared.bytes(for: request)
+    func streamAnthropicContent(request: URLRequest, model: String, onToken: @escaping (String) -> Void) async throws -> (content: [[String: Any]], stopReason: String?) {
+        let (bytes, response) = try await streamingSession.bytes(for: request)
         guard let http = response as? HTTPURLResponse else { throw LLMError.invalidResponse("Anthropic") }
         guard http.statusCode == 200 else {
             var data = Data()
@@ -1652,6 +1741,7 @@ class LLMService: ObservableObject {
         var toolJSON: [Int: String] = [:]         // accumulated input_json per tool_use block
         var stopReason: String?
         var usage = StreamingUsageAccumulator()   // input from message_start, output from message_delta
+        var sawMessageStop = false
 
         for try await line in bytes.lines {
             guard line.hasPrefix("data:") else { continue }
@@ -1684,9 +1774,25 @@ class LLMService: ObservableObject {
                 if let delta = obj["delta"] as? [String: Any], let sr = delta["stop_reason"] as? String {
                     stopReason = sr
                 }
+            case "message_stop":
+                sawMessageStop = true
+            case "error":
+                // A mid-stream error event (e.g. overloaded_error) means the response died — the
+                // partial content must never return as a successful turn (BM P9).
+                let err = obj["error"] as? [String: Any]
+                let msg = err?["message"] as? String ?? "stream error"
+                let kind = err?["type"] as? String
+                throw LLMError.streamInterrupted(provider: "Anthropic",
+                                                 reason: kind.map { "\($0): \(msg)" } ?? msg)
             default:
                 break
             }
+        }
+
+        // Premature EOF (connection dropped before message_stop) is truncation, not success.
+        guard sawMessageStop else {
+            throw LLMError.streamInterrupted(provider: "Anthropic",
+                                             reason: "stream ended before message_stop — response truncated")
         }
 
         // Finalize tool_use blocks: parse the accumulated partial JSON into `input`.
@@ -2187,6 +2293,10 @@ enum LLMError: LocalizedError {
     case invalidResponse(String)
     case invalidConfiguration(String)
     case apiError(provider: String, statusCode: Int, message: String?)
+    /// A streaming response died mid-flight — a mid-stream `error` event or a connection that
+    /// ended before the terminator (`[DONE]` / `message_stop`). Partial content must never be
+    /// returned as a successful turn (BM P9).
+    case streamInterrupted(provider: String, reason: String)
 
     var errorDescription: String? {
         switch self {
@@ -2196,6 +2306,8 @@ enum LLMError: LocalizedError {
         case .apiError(let provider, let code, let msg):
             if let msg { return "\(provider) error \(code): \(msg)" }
             return "\(provider) error: \(code)"
+        case .streamInterrupted(let provider, let reason):
+            return "\(provider) stream interrupted: \(reason)"
         }
     }
 }

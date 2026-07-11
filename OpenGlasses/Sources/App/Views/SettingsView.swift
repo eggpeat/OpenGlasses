@@ -645,7 +645,7 @@ struct SettingsView: View {
             } header: {
                 Text("About")
             } footer: {
-                Text("OpenGlasses is an open-source community project. Join the Discord for help, ideas, and to share what you've built.")
+                Text("OpenGlasses © 2026 Skunkworks NZ Ltd. All rights reserved. Free for personal, non-commercial use — commercial use requires a licence.\n\nJoin the Discord for help, ideas, and to share what you've built.")
             }
         }
         .navigationTitle("Settings")

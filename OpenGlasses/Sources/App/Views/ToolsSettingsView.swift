@@ -5,7 +5,7 @@ import UserNotifications
 import HealthKit
 
 /// Lists all registered native tools with toggle, description, and parameter info.
-/// Part of the open-source transparency — users can see and control what the AI can do.
+/// Transparency surface — users can see and control what the AI can do.
 struct ToolsSettingsView: View {
     @ObservedObject var appState: AppState
     @State private var disabledTools: Set<String> = Config.disabledTools
