@@ -106,6 +106,49 @@ final class SpeakerDiarizationCoreTests: XCTestCase {
         XCTAssertEqual(reloaded.namedSpeakerIds, [1])
     }
 
+    // MARK: - Speaker chips (BM P7)
+
+    func testNoChipWithoutSpeakerId() {
+        // The diarization-off / single-speaker path never sets a speaker id
+        // (`finalizeCaption` defaults it to nil) — those captions get no chip.
+        XCTAssertNil(SpeakerChipModel.chip(speaker: nil, registry: freshRegistry()))
+        let entry = AmbientCaptionService.CaptionEntry(text: "hello", timestamp: Date())
+        XCTAssertNil(SpeakerChipModel.chip(speaker: entry.speaker, registry: freshRegistry()))
+    }
+
+    func testChipForUnnamedSpeakerShowsDefaultLabelAndStableColor() {
+        let r = freshRegistry()
+        let chip = SpeakerChipModel.chip(speaker: 1, registry: r)
+        XCTAssertEqual(chip, SpeakerChip(speakerId: 1, label: "Speaker 2", colorIndex: r.colorIndex(for: 1)))
+    }
+
+    func testChipRenameRoundTripsThroughRegistry() {
+        let suite = UserDefaults(suiteName: "diarization.tests.\(UUID().uuidString)")!
+        let r = SpeakerRegistry(defaults: suite, storageKey: "names")
+        XCTAssertEqual(SpeakerChipModel.chip(speaker: 0, registry: r)?.label, "Speaker 1")
+
+        // The chip's tap-to-name action writes through the registry…
+        r.setName("Alice", for: 0)
+        XCTAssertEqual(SpeakerChipModel.chip(speaker: 0, registry: r)?.label, "Alice")
+
+        // …persists across a relaunch…
+        let reloaded = SpeakerRegistry(defaults: suite, storageKey: "names")
+        XCTAssertEqual(SpeakerChipModel.chip(speaker: 0, registry: reloaded)?.label, "Alice")
+
+        // …and clearing reverts to the default label.
+        reloaded.setName(nil, for: 0)
+        XCTAssertEqual(SpeakerChipModel.chip(speaker: 0, registry: reloaded)?.label, "Speaker 1")
+    }
+
+    func testChipsMergeOnSameName() {
+        let r = freshRegistry()
+        r.setName("Bob", for: 0)
+        r.setName("Bob", for: 5)
+        let merged = SpeakerChipModel.chip(speaker: 5, registry: r)
+        XCTAssertEqual(merged?.label, "Bob")
+        XCTAssertEqual(merged?.colorIndex, SpeakerChipModel.chip(speaker: 0, registry: r)?.colorIndex)
+    }
+
     // MARK: - PCMConverter
 
     func testDownmixAveragesChannels() {
