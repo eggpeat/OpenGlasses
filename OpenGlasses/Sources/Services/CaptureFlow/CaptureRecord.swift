@@ -86,3 +86,23 @@ struct CaptureRecord: Codable, Equatable {
         fields.first { $0.field == field }?.value
     }
 }
+
+extension CaptureRecord {
+    /// The append-only audit-log event for a finished record — `SessionExporter` folds these into
+    /// the consolidated export (closing Plan U's "audit-ready record" promise, BM P2). Values are
+    /// rendered via `display` so the export stays human-readable; the full typed record lives in
+    /// the offline queue as a `.captureRecord` op.
+    var auditEvent: SessionLogger.Event {
+        var payload: [String: AnyCodable] = [
+            "flow_id": AnyCodable(flowId),
+            "fields": AnyCodable(fields.map { [
+                "field": $0.field,
+                "value": $0.value.display,
+                "method": $0.provenance.method,
+            ] }),
+        ]
+        if let assetId { payload["asset_id"] = AnyCodable(assetId) }
+        return SessionLogger.Event(
+            timestamp: finishedAt ?? startedAt, kind: .captureRecordSaved, text: flowId, payload: payload)
+    }
+}

@@ -154,6 +154,93 @@ final class CaptureFlowTests: XCTestCase {
         XCTAssertTrue(FieldResolver.canRun(universal, vaultId: "anything"))
     }
 
+    // MARK: - Schema version + rejection reporting (BM P2)
+
+    func testSchemaVersionRoundTripsAndDefaultsToOne() throws {
+        let flow = sampleFlow()
+        XCTAssertEqual(flow.schemaVersion, 1)
+        let data = try JSONEncoder().encode(flow)
+        let json = try XCTUnwrap(String(data: data, encoding: .utf8))
+        XCTAssertTrue(json.contains("\"schema_version\":1"))
+        XCTAssertEqual(try JSONDecoder().decode(CaptureFlow.self, from: data), flow)
+
+        // Legacy JSON with no schema_version decodes as version 1.
+        let legacy = """
+        { "id": "f", "title": "F", "steps": [
+          { "field": "x", "prompt": "p", "binding": { "type": "voice" } } ] }
+        """.data(using: .utf8)!
+        XCTAssertEqual(try JSONDecoder().decode(CaptureFlow.self, from: legacy).schemaVersion, 1)
+    }
+
+    func testFutureSchemaVersionIsRejectedWithReason() {
+        let v2 = """
+        { "schema_version": 2, "id": "f", "title": "F", "steps": [
+          { "field": "x", "prompt": "p", "binding": { "type": "hologram" } } ] }
+        """.data(using: .utf8)!
+        let (flow, rejection) = CaptureFlowLibrary.decodeReporting(v2)
+        XCTAssertNil(flow)
+        // Reported as "too new", not as a pile of decode errors about the v2 binding type.
+        XCTAssertTrue(rejection?.contains("schema_version 2") == true)
+        XCTAssertTrue(rejection?.contains("newer") == true)
+    }
+
+    func testUnknownBindingTypeIsRejectedWithReason() {
+        let typo = """
+        { "id": "f", "title": "F", "steps": [
+          { "field": "x", "prompt": "p", "binding": { "type": "barcod" } } ] }
+        """.data(using: .utf8)!
+        let (flow, rejection) = CaptureFlowLibrary.decodeReporting(typo)
+        XCTAssertNil(flow)
+        XCTAssertTrue(rejection?.contains("barcod") == true, "reason should name the bad value: \(rejection ?? "nil")")
+    }
+
+    func testLoadStrictReportsRejectionsInsteadOfVanishing() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("flows_\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        try CaptureFlowBuilder.encode(sampleFlow()).write(to: dir.appendingPathComponent("good.json"))
+        try Data("""
+        { "id": "bad", "title": "Bad", "steps": [
+          { "field": "x", "prompt": "p", "binding": { "type": "barcod" } } ] }
+        """.utf8).write(to: dir.appendingPathComponent("bad.json"))
+        try Data("""
+        { "schema_version": 99, "id": "future", "title": "Future", "steps": [] }
+        """.utf8).write(to: dir.appendingPathComponent("future.json"))
+
+        let (flows, rejected) = CaptureFlowLibrary.loadStrict(bundleDir: nil, overlayDir: dir)
+        XCTAssertEqual(flows.map(\.id), ["asset_inspection_v1"])
+        XCTAssertEqual(rejected.count, 2)
+        XCTAssertTrue(rejected.contains { $0.hasPrefix("bad.json:") })
+        XCTAssertTrue(rejected.contains { $0.hasPrefix("future.json:") && $0.contains("newer") })
+    }
+
+    func testExplicitLibraryHasNoRejections() {
+        XCTAssertTrue(CaptureFlowLibrary(vaultId: "v", flows: [sampleFlow()]).rejected.isEmpty)
+    }
+
+    // MARK: - Audit event (BM P2)
+
+    func testAuditEventCarriesFlowAssetAndFields() {
+        var record = CaptureRecord(flowId: "asset_inspection_v1", sessionId: "s", assetId: "47B")
+        record.set("gauge", value: .number(118, unit: "psig"), provenance: Provenance(method: "voice_number"))
+        record.set("sev", value: .option("major"), provenance: Provenance(method: "enum"))
+        record.finishedAt = Date(timeIntervalSince1970: 99)
+
+        let event = record.auditEvent
+        XCTAssertEqual(event.kind, .captureRecordSaved)
+        XCTAssertEqual(event.timestamp, Date(timeIntervalSince1970: 99))
+        XCTAssertEqual(event.payload?["flow_id"]?.value as? String, "asset_inspection_v1")
+        XCTAssertEqual(event.payload?["asset_id"]?.value as? String, "47B")
+        let fields = event.payload?["fields"]?.value as? [Any]
+        XCTAssertEqual(fields?.count, 2)
+        let first = fields?.first as? [String: Any]
+        XCTAssertEqual(first?["field"] as? String, "gauge")
+        XCTAssertEqual(first?["value"] as? String, "118 psig")
+        XCTAssertEqual(first?["method"] as? String, "voice_number")
+    }
+
     // MARK: - CaptureRecord round-trip
 
     func testCaptureRecordRoundTrips() throws {

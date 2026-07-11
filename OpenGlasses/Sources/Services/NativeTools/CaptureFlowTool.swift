@@ -51,9 +51,15 @@ final class CaptureFlowTool: NativeTool {
         switch action {
         case "list":
             let flows = service.availableFlows()
-            return flows.isEmpty
+            var out = flows.isEmpty
                 ? "No capture flows are available in the active vault."
                 : "Available capture flows:\n" + flows.map { "• \($0)" }.joined(separator: "\n")
+            let issues = service.flowLoadIssues()
+            if !issues.isEmpty {
+                out += "\n⚠️ \(issues.count) flow file\(issues.count == 1 ? "" : "s") couldn't be loaded:\n"
+                    + issues.map { "• \($0)" }.joined(separator: "\n")
+            }
+            return out
 
         case "start":
             guard let id = (args["flow_id"] as? String), !id.isEmpty else {

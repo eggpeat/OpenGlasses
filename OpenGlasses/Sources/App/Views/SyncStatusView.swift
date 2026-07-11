@@ -66,10 +66,11 @@ struct SyncStatusView: View {
 
     private func label(for kind: OpKind) -> String {
         switch kind {
-        case .logEntry:     return "Log entry"
-        case .photoUpload:  return "Photo upload"
-        case .llmGrounding: return "Deferred question"
-        case .auditExport:  return "Audit export"
+        case .logEntry:      return "Log entry"
+        case .photoUpload:   return "Photo upload"
+        case .llmGrounding:  return "Deferred question"
+        case .auditExport:   return "Audit export"
+        case .captureRecord: return "Capture record"
         }
     }
 

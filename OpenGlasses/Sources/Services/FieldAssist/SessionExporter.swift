@@ -54,6 +54,7 @@ enum SessionExporter {
 
         var transcript: [SessionExport.TranscriptEntry] = []
         var photos: [SessionExport.PhotoRef] = []
+        var captures: [SessionExport.CaptureRun] = []
         var citations: [SessionExport.Citation] = []
         var escalations: [SessionExport.EscalationEntry] = []
 
@@ -89,6 +90,18 @@ enum SessionExporter {
                 }
             case .escalationRequested:
                 escalations.append(.init(timestamp: event.timestamp, reason: event.text ?? "Escalation requested"))
+            case .captureRecordSaved:
+                if let flowId = event.payload?["flow_id"]?.value as? String {
+                    let fields = (event.payload?["fields"]?.value as? [Any] ?? []).compactMap { raw -> SessionExport.CaptureRun.Field? in
+                        guard let dict = raw as? [String: Any], let field = dict["field"] as? String else { return nil }
+                        return .init(field: field,
+                                     value: dict["value"] as? String ?? "",
+                                     method: dict["method"] as? String ?? "")
+                    }
+                    captures.append(.init(timestamp: event.timestamp, flowId: flowId,
+                                          assetId: event.payload?["asset_id"]?.value as? String,
+                                          fields: fields))
+                }
             case .procedureStarted:
                 if let id = event.payload?["procedure_id"]?.value as? String {
                     if procStepIds[id] == nil { procStepIds[id] = []; procOrder.append(id) }
@@ -126,6 +139,7 @@ enum SessionExporter {
             transcript: transcript,
             photos: photos,
             proceduresRun: proceduresRun,
+            captures: captures,
             citations: citations,
             escalations: escalations
         )
@@ -172,6 +186,17 @@ enum SessionExporter {
                 for run in document.proceduresRun {
                     let outcome = run.outcome ?? "in progress"
                     layout.body("• \(run.procedureId) — \(run.stepsCompleted) step(s), outcome: \(outcome)")
+                }
+            }
+
+            if !document.captures.isEmpty {
+                layout.section("Captured Records")
+                for capture in document.captures {
+                    let asset = capture.assetId.map { " (\($0))" } ?? ""
+                    layout.body("• \(capture.flowId)\(asset) — \(capture.fields.count) field(s)")
+                    for field in capture.fields {
+                        layout.body("    \(field.field): \(field.value) [\(field.method)]")
+                    }
                 }
             }
 
