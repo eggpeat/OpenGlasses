@@ -8,6 +8,7 @@ import XCTest
 final class OfflineQueueTests: XCTestCase {
 
     private var tempFiles: [URL] = []
+    private var tempAux: [URL] = []
 
     override func tearDown() {
         for url in tempFiles {
@@ -15,8 +16,18 @@ final class OfflineQueueTests: XCTestCase {
                 try? FileManager.default.removeItem(at: URL(fileURLWithPath: url.path + suffix))
             }
         }
+        for url in tempAux { try? FileManager.default.removeItem(at: url) }
         tempFiles.removeAll()
+        tempAux.removeAll()
         super.tearDown()
+    }
+
+    /// Create a throwaway file of `bytes` and return its path (tracked for cleanup).
+    private func makePhotoFile(bytes: Int) -> String {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("photo_\(UUID().uuidString).jpg")
+        try? Data(repeating: 0xAB, count: bytes).write(to: url)
+        tempAux.append(url)
+        return url.path
     }
 
     private func tempPath() -> URL {
@@ -168,6 +179,92 @@ final class OfflineQueueTests: XCTestCase {
         reachability.setOnline(true)                      // rising edge → flush
         try? await Task.sleep(nanoseconds: 50_000_000)
         XCTAssertEqual(q.pendingCount, 0)
+    }
+
+    // MARK: - Plan BM P1: durability
+
+    func testInFlightStrandRecoveredOnReopen() {
+        let path = tempPath()
+        let id: String
+        do {
+            let q = OfflineQueue(path: path)
+            let a = op("s", at: 100)
+            id = a.id
+            q.enqueue(a)
+            q.mark(a.id, state: .inFlight)          // killed mid-delivery
+            XCTAssertTrue(q.pending().isEmpty)       // inFlight is invisible to pending()
+        }
+        let reopened = OfflineQueue(path: path)      // startup recovery re-arms it
+        XCTAssertEqual(reopened.pendingCount, 1)
+        XCTAssertEqual(reopened.pending().first?.id, id)
+    }
+
+    func testRecoverInFlightReturnsCount() {
+        let q = OfflineQueue(path: tempPath())
+        let a = op("s", at: 100), b = op("s", at: 200)
+        q.enqueue(a); q.enqueue(b)
+        q.mark(a.id, state: .inFlight)
+        q.mark(b.id, state: .inFlight)
+        XCTAssertEqual(q.recoverInFlight(), 2)
+        XCTAssertEqual(q.pendingCount, 2)
+        XCTAssertEqual(q.recoverInFlight(), 0)       // nothing left to recover
+    }
+
+    func testFlushDrainsBacklogBeyondBatchSize() async {
+        let q = OfflineQueue(path: tempPath())
+        for i in 0..<5 { q.enqueue(op("s", at: TimeInterval(i))) }
+        let engine = SyncEngine(queue: q, sink: LocalSyncSink())
+        engine.batchSize = 2                          // 5 ops, 2 per page → must loop
+        let delivered = await engine.flush()
+        XCTAssertEqual(delivered, 5)
+        XCTAssertEqual(q.pendingCount, 0)
+    }
+
+    func testAllTransientBacklogTerminatesAndRetainsOncePerOp() async {
+        let q = OfflineQueue(path: tempPath())
+        for i in 0..<4 { q.enqueue(op("s", at: TimeInterval(i))) }
+        let sink = FakeSink(); sink.defaultOutcome = .transient(reason: "no signal")
+        let engine = SyncEngine(queue: q, sink: sink)
+        engine.batchSize = 1                          // small page must not spin or skip ops
+        _ = await engine.flush()
+        XCTAssertEqual(q.pendingCount, 4)             // all retained, none lost
+        XCTAssertEqual(Set(q.pending().map(\.attempts)), [1])  // each attempted exactly once
+        XCTAssertEqual(sink.deliveredIds.count, 4)    // every op tried, no spin
+    }
+
+    func testFlushMaintenancePurgesDeliveredNonPhotoTombstones() async {
+        let q = OfflineQueue(path: tempPath())
+        q.enqueue(op("s", at: 100)); q.enqueue(op("s", at: 200))
+        let engine = SyncEngine(queue: q, sink: LocalSyncSink())
+        _ = await engine.flush()                      // delivers → done → maintenance purges
+        XCTAssertTrue(q.all().isEmpty, "delivered log tombstones are reclaimed post-flush")
+    }
+
+    func testPurgeDoneKeepsPhotoTombstones() {
+        let q = OfflineQueue(path: tempPath())
+        let photo = QueuedOp.make(kind: .photoUpload, sessionId: "s", json: ["path": "/tmp/x.jpg"])
+        let log = op("s", at: 100)
+        q.enqueue(photo); q.enqueue(log)
+        q.mark(photo.id, state: .done)
+        q.mark(log.id, state: .done)
+        q.purgeDone()
+        // Photo tombstone survives (so prunePhotoEvidence can still manage its file); log is gone.
+        XCTAssertEqual(q.all().map(\.id), [photo.id])
+    }
+
+    func testFlushPrunesDeliveredPhotoEvidencePastCap() async {
+        let q = OfflineQueue(path: tempPath())
+        let paths = (0..<3).map { _ in makePhotoFile(bytes: 100) }
+        for p in paths {
+            q.enqueue(QueuedOp.make(kind: .photoUpload, sessionId: "s", json: ["path": p]))
+        }
+        let engine = SyncEngine(queue: q, sink: LocalSyncSink())
+        engine.photoEvidenceCapBytes = 150            // 300 bytes on disk, cap 150 → evict 2 oldest
+        _ = await engine.flush()
+
+        let onDisk = paths.filter { FileManager.default.fileExists(atPath: $0) }
+        XCTAssertEqual(onDisk.count, 1, "only the newest delivered photo stays under the cap")
+        XCTAssertEqual(q.all(limit: 500).filter { $0.kind == .photoUpload }.count, 1)
     }
 
     // MARK: - ConflictResolver

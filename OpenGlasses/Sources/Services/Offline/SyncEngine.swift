@@ -47,6 +47,11 @@ final class SyncEngine: ObservableObject {
     var onConflict: ((QueuedOp, String) -> Void)?
     /// Max delivery attempts before an op is marked `failed`.
     var maxAttempts = 6
+    /// Ops fetched per drain page. A backlog larger than this is drained across loop iterations.
+    var batchSize = 500
+    /// Disk cap for delivered photo evidence; pruned after every flush and on launch so the queue
+    /// can't grow without bound. `nil` disables photo pruning.
+    var photoEvidenceCapBytes: Int? = 256 * 1024 * 1024   // 256 MB
 
     private var reachabilityChange: ((Bool) -> Void)?
 
@@ -65,7 +70,9 @@ final class SyncEngine: ObservableObject {
     }
 
     /// Deliver all pending ops in FIFO order. Returns the number delivered this pass. Re-entrant
-    /// calls are coalesced (a flush already running wins).
+    /// calls are coalesced (a flush already running wins). Loops in `batchSize` pages until the
+    /// whole backlog is drained — a >`batchSize` queue no longer needs multiple reconnects — while
+    /// tracking handled ids so a transient op re-queued this flush isn't reprocessed in a spin.
     @discardableResult
     func flush() async -> Int {
         guard !isFlushing else { return 0 }
@@ -74,32 +81,50 @@ final class SyncEngine: ObservableObject {
 
         var delivered = 0
         var conflicts = 0
-        for op in queue.pending() {
-            queue.mark(op.id, state: .inFlight)
-            switch await sink.deliver(op) {
-            case .done:
-                queue.mark(op.id, state: .done)
-                delivered += 1
-            case .conflict(let reason):
-                queue.mark(op.id, state: .conflict)
-                conflicts += 1
-                onConflict?(op, reason)
-            case .transient(let reason):
-                let attempts = op.attempts + 1
-                if attempts >= maxAttempts {
-                    queue.mark(op.id, state: .failed, attempts: attempts)
-                    NSLog("[SyncEngine] op %@ failed after %d attempts: %@", op.id, attempts, reason)
-                } else {
-                    queue.mark(op.id, state: .pending, attempts: attempts)   // retained for a later flush
+        // Transient failures are re-armed to `pending` only *after* the drain completes. During the
+        // loop they stay `inFlight` (out of the pending set) so `pending()` strictly shrinks each
+        // page and the loop can't spin on a retained op — the whole backlog drains in one flush.
+        var retry: [(id: String, attempts: Int)] = []
+        while true {
+            let batch = queue.pending(limit: batchSize)
+            if batch.isEmpty { break }
+            for op in batch {
+                queue.mark(op.id, state: .inFlight)
+                switch await sink.deliver(op) {
+                case .done:
+                    queue.mark(op.id, state: .done)
+                    delivered += 1
+                case .conflict(let reason):
+                    queue.mark(op.id, state: .conflict)
+                    conflicts += 1
+                    onConflict?(op, reason)
+                case .transient(let reason):
+                    let attempts = op.attempts + 1
+                    if attempts >= maxAttempts {
+                        queue.mark(op.id, state: .failed, attempts: attempts)
+                        NSLog("[SyncEngine] op %@ failed after %d attempts: %@", op.id, attempts, reason)
+                    } else {
+                        retry.append((op.id, attempts))   // re-armed below, once the drain is done
+                    }
+                case .permanent(let reason):
+                    queue.mark(op.id, state: .failed)
+                    NSLog("[SyncEngine] op %@ permanently failed: %@", op.id, reason)
                 }
-            case .permanent(let reason):
-                queue.mark(op.id, state: .failed)
-                NSLog("[SyncEngine] op %@ permanently failed: %@", op.id, reason)
             }
         }
+        for r in retry { queue.mark(r.id, state: .pending, attempts: r.attempts) }
 
         lastSyncedCount = delivered
         lastConflictCount = conflicts
+        runMaintenance()
         return delivered
+    }
+
+    /// Reclaim queue space: drop delivered non-photo tombstones and evict oldest delivered photo
+    /// evidence past `photoEvidenceCapBytes`. Runs at the tail of every flush and can be called
+    /// standalone on launch so space is reclaimed even when there's nothing to send.
+    func runMaintenance() {
+        if let cap = photoEvidenceCapBytes { queue.prunePhotoEvidence(maxBytes: cap) }
+        queue.purgeDone()
     }
 }

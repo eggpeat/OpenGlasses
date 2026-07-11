@@ -787,6 +787,17 @@ class AppState: ObservableObject, AppStateProtocol {
         syncEngine.onConflict = { [weak self] _, reason in
             Task { @MainActor in await self?.speechService.speak("Heads up — \(reason).") }
         }
+        // Launch-time flush (Plan BM P1): a relaunch that comes up already-online produces no
+        // reachability edge, so bind() alone would never sync work captured before the last quit.
+        // OfflineQueue.init already re-armed any inFlight strands. Reclaim space either way.
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            if self.reachability.isOnline, self.offlineQueue.pendingCount > 0 {
+                await self.syncEngine.flush()      // drains (in pages) and maintains
+            } else {
+                self.syncEngine.runMaintenance()
+            }
+        }
 
         // Register live translation tool with its service reference
         var translationTool = LiveTranslationTool()
