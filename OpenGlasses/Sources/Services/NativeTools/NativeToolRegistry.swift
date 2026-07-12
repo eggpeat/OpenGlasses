@@ -78,7 +78,13 @@ final class NativeToolRegistry {
         }
 
         // Tier 3 tools
-        register(FitnessCoachingTool())
+        var fitnessTool = FitnessCoachingTool()
+        if let camera = cameraService {
+            // BK P6: feed check_form the latest camera frame so it actually runs PoseAnalyzer,
+            // making the tool's "check form via camera" claim true.
+            fitnessTool.frameProvider = { camera.latestFrame }
+        }
+        register(fitnessTool)
         register(FirstAidTool())
         // BK P0: register the gateway-skills tool only when the gateway is an active agentic
         // capability (configured AND Agent Mode on). Registering on `isOpenClawConfigured` alone

@@ -8,6 +8,11 @@ import Vision
 struct FitnessCoachingTool: NativeTool {
     let name = "fitness_coach"
     let description = "Fitness coaching: start/stop workout tracking, log exercises, get rep counts, check form via camera, and view workout history from HealthKit."
+
+    /// Latest camera frame, for `check_form` (BK P6). Wired to `CameraService` in production; a
+    /// test injects a fake frame. `nil` (unset / no frame) ⇒ honest "no camera view" guidance
+    /// instead of the old hardcoded deflection that never ran the built `PoseAnalyzer`.
+    var frameProvider: (@MainActor () -> UIImage?)?
     let parametersSchema: [String: Any] = [
         "type": "object",
         "properties": [
@@ -71,7 +76,7 @@ struct FitnessCoachingTool: NativeTool {
         case "log_exercise":
             return logExercise(args: args)
         case "check_form":
-            return "Form checking requires a camera frame. Ask the user to show their exercise form to the camera and I'll analyze the pose."
+            return await checkForm(args: args)
         case "workout_history":
             return await getWorkoutHistory()
         case "step_goal":
@@ -136,6 +141,18 @@ struct FitnessCoachingTool: NativeTool {
         saveWorkoutNote(summary: summary)
 
         return summary
+    }
+
+    /// Analyse the wearer's form from the latest camera frame (BK P6). Previously a hardcoded
+    /// deflection — the built `PoseAnalyzer` was never called, so "check form via camera" was a
+    /// false claim. Now it actually runs Vision pose estimation on the frame, or gives honest
+    /// guidance when no camera view is available.
+    private func checkForm(args: [String: Any]) async -> String {
+        let exercise = (args["exercise"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "your exercise"
+        guard let frame = await frameProvider?() else {
+            return "To check your form, make sure the glasses camera can see you doing \(exercise), then ask again."
+        }
+        return PoseAnalyzer.analyzeForm(image: frame, exercise: exercise)
     }
 
     private func logExercise(args: [String: Any]) -> String {
