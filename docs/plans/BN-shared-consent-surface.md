@@ -1,6 +1,11 @@
 # Plan BN — Shared Remote-Action Consent Surface (one confirm, three plans)
 
-**Status:** 📋 Planned
+**Status:** ✅ Shipped — P1 ([#205](https://github.com/straff2002/OpenGlasses/pull/205)) closed the
+`code_agent confirm` self-approval hole (approval routes through `ToolConfirmationCoordinator` via
+`confirmPendingActionViaUserPrompt`, user-originated only) + shared `RemoteActionConsentView` and
+source-attributed `RemoteActionConsentRequest`; P2 threaded `origin` through `RemoteCommandPolicy`
++ audit with per-origin rate buckets (the BL P4 prerequisite). Tests: `RemoteActionConsentTests`,
+`RemoteCommandOriginTests`, `AgentSessionTests`. Phase detail below is retained as the design record.
 **Origin:** The 2026-07-10 review sweep found three plans independently converging on the same
 missing affordance — a user-distinct confirm for remote/agentic actions — plus one live
 vulnerability in the only confirm that exists today.
