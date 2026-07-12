@@ -1,6 +1,8 @@
 # Plan BM — Plan-Review Sweep Remediation (2026-07-10)
 
-**Status:** 📋 Planned
+**Status:** ✅ Shipped (2026-07-12) — all 11 phases merged, one PR each:
+P8 #193 · P0 #194 · P1 #195 · P3 #196 · P4 #197 · P2 #198 · P5 #199 · P6 #200 · P7 #201 ·
+P9 #202 · P10 #203. Suite grew 1660 → 1703 tests across the sweep.
 **Origin:** The 2026-07-10 code-verified review sweep across every open/partial plan (BJ/BK/BL, AI,
 AH, BA, AL, N/BH/AR, T/U/V, AP/AS/AQ/AF, L/M/AB/AU + the consolidated-partials index audit). Each
 finding was verified against source with file:line evidence before inclusion; the detailed analysis
