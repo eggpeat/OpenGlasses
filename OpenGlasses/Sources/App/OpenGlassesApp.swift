@@ -2736,26 +2736,45 @@ class AppState: ObservableObject, AppStateProtocol {
             await ConversationTurnRunner.run(.init(
                 send: { [self] in
                     let rawResponse: String
-                    if useLocalAgent {
-                        // Fast path: on-device Gemma 4 agent
-                        rawResponse = try await llmService.sendViaLocalAgent(
-                            query,
-                            locationContext: classification.relevantSections.contains(.location) ? locationService.locationContext : nil,
-                            memoryContext: Config.userMemoryEnabled ? userMemory.systemPromptContext(query: Config.userMemoryRetrievalEnabled ? query : nil) : nil
-                        )
-                    } else {
-                        // Standard path: cloud LLM
+                    let backgrounded = UIApplication.shared.applicationState == .background
+                    let locationCtx = classification.relevantSections.contains(.location) ? locationService.locationContext : nil
+                    let memoryCtx = Config.userMemoryEnabled ? userMemory.systemPromptContext(query: Config.userMemoryRetrievalEnabled ? query : nil) : nil
+                    // Cloud send with automatic model fall-over (BK P2b): active model leads, then
+                    // the user's fallback order — spills on overflow / rate-limit / empty completion.
+                    func cloudCascade() async throws -> String {
                         let imageData = await smartCameraImageData(for: query)
-                        rawResponse = try await llmService.sendMessage(
+                        return try await llmService.sendMessageCascading(
                             query,
-                            locationContext: classification.relevantSections.contains(.location) ? locationService.locationContext : nil,
+                            locationContext: locationCtx,
                             imageData: imageData,
-                            memoryContext: Config.userMemoryEnabled ? userMemory.systemPromptContext(query: Config.userMemoryRetrievalEnabled ? query : nil) : nil,
+                            memoryContext: memoryCtx,
                             playbookContext: classification.relevantSections.contains(.playbook) ? playbookStore.playbookContext() : nil,
                             nowPlayingContext: nowPlayingAtStart?.promptContext,
                             shortcutsContext: ShortcutsCatalog.shared.promptBlock(),
-                            promptSections: classification.relevantSections
+                            promptSections: classification.relevantSections,
+                            backgrounded: backgrounded
                         )
+                    }
+                    if useLocalAgent {
+                        // Fast path: on-device Gemma 4 agent — but spill to the cloud cascade if it
+                        // can't serve the turn (BK P2b: prefer local for cost, fall over to cloud).
+                        do {
+                            rawResponse = try await llmService.sendViaLocalAgent(
+                                query,
+                                locationContext: locationCtx,
+                                memoryContext: memoryCtx
+                            )
+                        } catch is CancellationError {
+                            throw CancellationError()
+                        } catch {
+                            guard Config.modelCascadeEnabled,
+                                  ModelFallbackChain.classify(error) != .terminalForTurn,
+                                  !Task.isCancelled else { throw error }
+                            print("🔀 Local agent failed (\(error)) — cascading to cloud")
+                            rawResponse = try await cloudCascade()
+                        }
+                    } else {
+                        rawResponse = try await cloudCascade()
                     }
                     nowPlayingAtStart = nil  // consumed for this turn
                     return rawResponse
@@ -2861,13 +2880,14 @@ class AppState: ObservableObject, AppStateProtocol {
                     } else {
                         image = await smartCameraImageData(for: query)
                     }
-                    return try await llmService.sendMessage(
+                    return try await llmService.sendMessageCascading(
                         query,
                         locationContext: locationService.locationContext,
                         imageData: image,
                         memoryContext: Config.userMemoryEnabled ? userMemory.systemPromptContext(query: Config.userMemoryRetrievalEnabled ? query : nil) : nil,
                         playbookContext: playbookStore.playbookContext(),
                         shortcutsContext: ShortcutsCatalog.shared.promptBlock(),
+                        backgrounded: UIApplication.shared.applicationState == .background,
                         onToken: { [weak self] chunk in
                             guard let self, let id = streamThreadId else { return }
                             if self.streamingTurn?.threadId == id { self.streamingTurn?.text += chunk }

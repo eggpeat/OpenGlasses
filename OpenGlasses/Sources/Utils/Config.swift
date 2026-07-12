@@ -283,6 +283,24 @@ struct Config {
 
     static func setAutoModelRoutingEnabled(_ enabled: Bool) { autoModelRoutingEnabled = enabled }
 
+    /// Whether a failed turn cascades to the next model instead of erroring (BK P2b). When on, a
+    /// `promptTooLong`/`429`/quota/empty-completion failure spills to the next candidate — the
+    /// stated cost preference: prefer the active (often local) model, fall over to cloud only when
+    /// it can't handle the turn. Default on.
+    @UserDefaultsBacked("modelCascadeEnabled", default: true) static var modelCascadeEnabled: Bool
+
+    static func setModelCascadeEnabled(_ enabled: Bool) { modelCascadeEnabled = enabled }
+
+    private static let modelFallbackOrderKey = "modelFallbackOrder"
+
+    /// User-ordered fallback model ids the cascade tries after the active model (cost preference:
+    /// local first, then progressively more capable/expensive cloud). Empty ⇒ the cascade falls
+    /// back on the remaining saved models in their existing order.
+    static var modelFallbackOrder: [String] {
+        get { UserDefaults.standard.stringArray(forKey: modelFallbackOrderKey) ?? [] }
+        set { UserDefaults.standard.set(newValue, forKey: modelFallbackOrderKey) }
+    }
+
     /// Get the model explicitly assigned to a tier by the user.
     /// Falls back to keyword-based auto-detection if no model is assigned.
     static func modelForTier(_ tier: ModelTier) -> ModelConfig? {

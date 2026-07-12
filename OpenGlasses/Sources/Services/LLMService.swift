@@ -510,6 +510,62 @@ class LLMService: ObservableObject {
         return rawResponse
     }
 
+    // MARK: - Model Cascade (BK P2b)
+
+    /// `sendMessage` with automatic fall-over to the next model when the active one can't serve the
+    /// turn (`promptTooLong`, `429`/quota, empty completion, …). The active model leads; the user's
+    /// fallback order (then the remaining saved models) follow. Between hops the active model is
+    /// swapped and the conversation history is rewound to its pre-turn snapshot so a failed attempt
+    /// never leaves half a turn (or a duplicated user turn) behind. The active model is always
+    /// restored on exit, so a cascade is transparent to the caller's own switch/restore bookkeeping.
+    ///
+    /// Falls straight through to a single `sendMessage` when the cascade is disabled or there's only
+    /// one candidate. Exhaustion throws the *last real* error (not a generic line) so the caller can
+    /// speak the true reason.
+    func sendMessageCascading(_ text: String, locationContext: String? = nil, imageData: Data? = nil, memoryContext: String? = nil, agentContext: String? = nil, playbookContext: String? = nil, nowPlayingContext: String? = nil, shortcutsContext: String? = nil, promptSections: ConversationClassifier.PromptSections? = nil, backgrounded: Bool = false, onToken: ((String) -> Void)? = nil, onStreamReset: (() -> Void)? = nil, onModelSwitch: ((_ from: ModelConfig?, _ to: ModelConfig?, _ failure: ModelFallbackChain.FailureClass) async -> Void)? = nil) async throws -> String {
+
+        func send() async throws -> String {
+            try await sendMessage(text, locationContext: locationContext, imageData: imageData, memoryContext: memoryContext, agentContext: agentContext, playbookContext: playbookContext, nowPlayingContext: nowPlayingContext, shortcutsContext: shortcutsContext, promptSections: promptSections, onToken: onToken, onStreamReset: onStreamReset)
+        }
+
+        let candidates = ModelFallbackChain.candidates(
+            activeId: Config.activeModelId, saved: Config.savedModels,
+            fallbackOrder: Config.modelFallbackOrder)
+        guard Config.modelCascadeEnabled, candidates.count > 1 else {
+            return try await send()
+        }
+
+        let startId = Config.activeModelId
+        let historySnapshot = conversationHistory
+        let savedById = Dictionary(Config.savedModels.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        defer {
+            Config.setActiveModelId(startId)
+            refreshActiveModel()
+        }
+
+        return try await ModelCascade.run(
+            candidates: candidates,
+            needs: .init(requiresVision: imageData != nil, isBackgrounded: backgrounded),
+            maxAttempts: min(candidates.count, 4),
+            isCancelled: { Task.isCancelled },
+            onSwitch: { from, to, failure in
+                // Rewind the partial UI stream and log the hop; P2c narrates it out loud.
+                onStreamReset?()
+                print("🔀 Model cascade: \(from.id) → \(to.id) (\(failure))")
+                await onModelSwitch?(savedById[from.id], savedById[to.id], failure)
+            },
+            attempt: { [weak self] candidate in
+                guard let self else { throw LLMError.invalidConfiguration("LLM service released") }
+                // Start each attempt from the clean pre-turn history so a failed hop doesn't leave a
+                // dangling/duplicated turn, and point the active model at this candidate.
+                self.conversationHistory = historySnapshot
+                Config.setActiveModelId(candidate.id)
+                self.refreshActiveModel()
+                return try await send()
+            }
+        )
+    }
+
     // MARK: - Plan-then-execute (Plan S)
 
     /// Decide whether to route `text` through the plan-then-execute loop (Plan S Phase 2).
