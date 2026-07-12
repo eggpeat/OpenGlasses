@@ -105,9 +105,9 @@ class WakeWordService: NSObject, ObservableObject {
     }
 
     /// Force reconfigure audio session (e.g. when mic source changes)
-    func reconfigureAudioSession() {
+    func reconfigureAudioSession() async {
         audioSessionConfigured = false
-        configureAudioSession()
+        await configureAudioSession()
     }
 
     /// Pause other audio (podcasts, music) while actively listening.
@@ -119,7 +119,7 @@ class WakeWordService: NSObject, ObservableObject {
     /// whole interaction and only resume after everything finishes.
     private var pauseHoldCount: Int = 0
 
-    func pauseOtherAudio() {
+    func pauseOtherAudio() async {
         guard !carPlayMode else { return }
         // Never interrupt an active phone or FaceTime call
         let callObserver = CXCallObserver()
@@ -128,12 +128,13 @@ class WakeWordService: NSObject, ObservableObject {
             print("🎤 Active call detected — skipping audio pause")
             return
         }
+        // BJ PR2: mutate the refcount synchronously *before* the first await, so nested
+        // beginPause/endPause still nest cleanly across the suspension point below.
         pauseHoldCount += 1
         guard pauseHoldCount == 1 else {
             print("🎤 Audio already paused (hold count \(pauseHoldCount))")
             return
         }
-        let session = AVAudioSession.sharedInstance()
         let useGlassesMic = Config.useGlassesMicForWakeWord
         // Omitting mixWithOthers/duckOthers causes iOS to interrupt (pause) other audio apps
         let options: AVAudioSession.CategoryOptions = useGlassesMic
@@ -142,10 +143,13 @@ class WakeWordService: NSObject, ObservableObject {
         // .default (NOT .measurement): .measurement disables system audio processing/gain,
         // which makes TTS playback extremely quiet on the iPhone speaker. The wake-word /
         // command capture works fine in .default (see resumeOtherAudio, which already does this).
-        try? session.setCategory(.playAndRecord, mode: .default, options: options)
-        try? session.setActive(true)
-        // Belt-and-suspenders: when not on a Bluetooth (glasses) route, force the main
-        // speaker so playback never ends up stuck on the receiver/earpiece.
+        // BJ PR2: the blocking setCategory→setActive runs off-main through the coordinator's
+        // `reconfigure` (no deactivate-first, no fallback — the hand-tuned options are preserved).
+        try? await AudioSessionCoordinator.shared.reconfigure(
+            category: .playAndRecord, mode: .default, options: options)
+        // Cheap, non-blocking route hints stay inline (they are not the TPC hang source — the
+        // blocking activation above is what moved off-main).
+        let session = AVAudioSession.sharedInstance()
         let onBluetooth = session.currentRoute.outputs.contains {
             [.bluetoothHFP, .bluetoothA2DP, .bluetoothLE].contains($0.portType)
         }
@@ -157,15 +161,15 @@ class WakeWordService: NSObject, ObservableObject {
 
     /// Restore other audio (podcasts, music) after active listening ends.
     /// The .notifyOthersOnDeactivation flag tells paused apps to resume.
-    func resumeOtherAudio() {
+    func resumeOtherAudio() async {
         guard !carPlayMode else { return }
         guard pauseHoldCount > 0 else { return }
+        // BJ PR2: decrement synchronously before any await (see pauseOtherAudio).
         pauseHoldCount -= 1
         guard pauseHoldCount == 0 else {
             print("🎤 Audio still held by \(pauseHoldCount) other holder(s) — not resuming yet")
             return
         }
-        let session = AVAudioSession.sharedInstance()
         let useGlassesMic = Config.useGlassesMicForWakeWord
         let options: AVAudioSession.CategoryOptions = useGlassesMic
             ? [.mixWithOthers, .allowBluetoothHFP, .allowBluetoothA2DP, .defaultToSpeaker]
@@ -173,17 +177,18 @@ class WakeWordService: NSObject, ObservableObject {
         // .default (not .measurement) so concurrent music/podcasts keep playing cleanly
         // while the wake-word listener runs — .measurement disables system audio
         // processing and fights other audio even with .mixWithOthers.
-        try? session.setCategory(.playAndRecord, mode: .default, options: options)
         // notifyOthersOnDeactivation tells paused apps (Music, Podcasts) they can resume.
-        try? session.setActive(true, options: .notifyOthersOnDeactivation)
+        try? await AudioSessionCoordinator.shared.reconfigure(
+            category: .playAndRecord, mode: .default, options: options,
+            activeOptions: .notifyOthersOnDeactivation)
         print("🎤 Restored audio mix — other apps can resume")
     }
 
     /// Force release of any held pauses — used when listening is toggled off entirely.
-    func forceResumeOtherAudio() {
+    func forceResumeOtherAudio() async {
         guard pauseHoldCount > 0 else { return }
         pauseHoldCount = 1  // resumeOtherAudio will decrement to 0 and restore
-        resumeOtherAudio()
+        await resumeOtherAudio()
     }
 
     /// When "use glasses mic" is on, explicitly prefer a Bluetooth input belonging to the
@@ -208,54 +213,68 @@ class WakeWordService: NSObject, ObservableObject {
         }
     }
 
-    /// Configure the shared audio session once — call before first use
-    func configureAudioSession() {
+    /// Configure the shared audio session once — call before first use.
+    ///
+    /// BJ PR2: records baseline ownership (`assumeOwnership`) then activates **off-main** through the
+    /// coordinator's `reconfigure` (no deactivate-first, no `.default` fallback — the hand-tuned
+    /// `mixWithOthers` options must survive). `assumeOwnership` is deliberately kept rather than
+    /// retired: wake word must not deactivate-first, so `acquireOffMain` (which does) is wrong here —
+    /// ownership is recorded and the activation runs through the no-deactivate `reconfigure`.
+    func configureAudioSession() async {
         guard !audioSessionConfigured else { return }
+        // Register as the baseline owner first (supersedes any prior lease); the reconfigure below
+        // performs the real activation while keeping the tuned config.
+        sessionLease = AudioSessionCoordinator.shared.assumeOwnership(.wakeWord)
+
+        let category: AVAudioSession.Category = .playAndRecord
+        let mode: AVAudioSession.Mode
+        let options: AVAudioSession.CategoryOptions
+        if carPlayMode {
+            // In CarPlay mode, only activate recording when explicitly requested (voice control
+            // template showing). Otherwise use playback-only to avoid disrupting car audio.
+            mode = .voiceChat
+            options = [.mixWithOthers, .allowBluetoothHFP, .allowBluetoothA2DP, .defaultToSpeaker]
+        } else {
+            let useGlassesMic = Config.useGlassesMicForWakeWord
+            // .default (not .measurement) so other audio coexists cleanly with the always-on
+            // listener — see resumeOtherAudio for the same rationale.
+            mode = .default
+            options = useGlassesMic
+                ? [.mixWithOthers, .allowBluetoothHFP, .allowBluetoothA2DP, .defaultToSpeaker]
+                : [.mixWithOthers, .defaultToSpeaker]
+        }
+
         do {
-            let audioSession = AVAudioSession.sharedInstance()
-
-            // In CarPlay mode, only activate recording when explicitly requested
-            // (voice control template showing). Otherwise use playback-only to
-            // avoid disrupting car audio.
-            if carPlayMode {
-                try audioSession.setCategory(.playAndRecord, mode: .voiceChat, options: [.mixWithOthers, .allowBluetoothHFP, .allowBluetoothA2DP, .defaultToSpeaker])
-                try audioSession.setActive(true, options: .notifyOthersOnDeactivation)
-                audioSessionConfigured = true
-                print("🎤 CarPlay mode: .playAndRecord + .voiceChat (voice control active)")
-            } else {
-                let useGlassesMic = Config.useGlassesMicForWakeWord
-                let options: AVAudioSession.CategoryOptions = useGlassesMic
-                    ? [.mixWithOthers, .allowBluetoothHFP, .allowBluetoothA2DP, .defaultToSpeaker]
-                    : [.mixWithOthers, .defaultToSpeaker]
-                // .default (not .measurement) so other audio coexists cleanly with the
-                // always-on listener — see resumeOtherAudio for the same rationale.
-                try audioSession.setCategory(.playAndRecord, mode: .default, options: options)
-                try audioSession.setActive(true, options: .notifyOthersOnDeactivation)
-                preferGlassesMicIfAvailable(audioSession)
-                audioSessionConfigured = true
-                print("🎤 Mic source: \(useGlassesMic ? "glasses (Bluetooth)" : "phone (built-in)")")
-            }
-
-            // Register as the baseline owner. We self-activated above (keeping the tuned
-            // mixWithOthers config), so this only records ownership; it supersedes any prior lease.
-            sessionLease = AudioSessionCoordinator.shared.assumeOwnership(.wakeWord)
-
-            let route = audioSession.currentRoute
-            for input in route.inputs {
-                print("🎤 Audio input: \(input.portName) (\(input.portType.rawValue))")
-            }
-            for output in route.outputs {
-                print("🔊 Audio output: \(output.portName) (\(output.portType.rawValue))")
-            }
-            print("🎤 Audio session configured: .playAndRecord with Bluetooth")
-
-            // Handle audio interruptions + route changes. Tokens are owned and removed before any
-            // re-registration (Plan BE) — the old code discarded them, leaking a fresh pair on
-            // every reconfigure so one route change fired N duplicate handlers after N reconnects.
-            installSessionObservers(audioSession: audioSession)
+            try await AudioSessionCoordinator.shared.reconfigure(
+                category: category, mode: mode, options: options,
+                activeOptions: .notifyOthersOnDeactivation)
         } catch {
             print("🎤 Failed to configure audio session: \(error)")
+            return
         }
+        audioSessionConfigured = true
+
+        let audioSession = AVAudioSession.sharedInstance()
+        if carPlayMode {
+            print("🎤 CarPlay mode: .playAndRecord + .voiceChat (voice control active)")
+        } else {
+            preferGlassesMicIfAvailable(audioSession)
+            print("🎤 Mic source: \(Config.useGlassesMicForWakeWord ? "glasses (Bluetooth)" : "phone (built-in)")")
+        }
+
+        let route = audioSession.currentRoute
+        for input in route.inputs {
+            print("🎤 Audio input: \(input.portName) (\(input.portType.rawValue))")
+        }
+        for output in route.outputs {
+            print("🔊 Audio output: \(output.portName) (\(output.portType.rawValue))")
+        }
+        print("🎤 Audio session configured: .playAndRecord with Bluetooth")
+
+        // Handle audio interruptions + route changes. Tokens are owned and removed before any
+        // re-registration (Plan BE) — the old code discarded them, leaking a fresh pair on
+        // every reconfigure so one route change fired N duplicate handlers after N reconnects.
+        installSessionObservers(audioSession: audioSession)
     }
 
     /// Register the interruption + route-change observers exactly once per configuration, removing
@@ -304,8 +323,12 @@ class WakeWordService: NSObject, ObservableObject {
             let hasBluetooth = route.inputs.contains { $0.portType == .bluetoothHFP }
             if hasBluetooth {
                 print("🎤 Audio interruption ended — restarting listener (Bluetooth active)")
-                try? AVAudioSession.sharedInstance().setActive(true)
-                Task { try? await startListening() }
+                // BJ PR2: reactivate off-main through the coordinator (was a main-thread setActive),
+                // then restart — one Task so the reactivate precedes the listener start.
+                Task {
+                    await AudioSessionCoordinator.shared.ensureActiveOffMain()
+                    try? await startListening()
+                }
             } else {
                 print("🎤 Audio interruption ended — NOT restarting (no Bluetooth)")
             }
@@ -346,7 +369,7 @@ class WakeWordService: NSObject, ObservableObject {
                 Task {
                     try? await Task.sleep(nanoseconds: 500_000_000)
                     audioSessionConfigured = false
-                    configureAudioSession()
+                    await configureAudioSession()
                     try? await startListening()
                 }
             } else {
@@ -396,7 +419,7 @@ class WakeWordService: NSObject, ObservableObject {
         }
 
         // Ensure audio session is configured
-        configureAudioSession()
+        await configureAudioSession()
 
         // Retry up to 3 times with increasing delay if audio engine fails
         var lastError: Error?
@@ -424,23 +447,21 @@ class WakeWordService: NSObject, ObservableObject {
 
     /// Fully deactivate the audio session — use when CarPlay voice control is dismissed
     /// so car audio (FM radio, other apps) can resume.
-    func deactivateAudioSession() {
+    func deactivateAudioSession() async {
         cleanupAudioEngine()
         isListening = false
         audioSessionConfigured = false
         if let lease = sessionLease {
             // Release through the coordinator: it deactivates only if wake word is still the
             // current owner, so this can't tear down a live Gemini/OpenAI session that preempted us.
+            // The deactivation itself runs off-main on the coordinator's sessionIOQueue (BJ PR1).
             sessionLease = nil
             AudioSessionCoordinator.shared.release(lease)
             print("🎤 Audio session released (CarPlay voice ended)")
         } else {
-            do {
-                try AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
-                print("🎤 Audio session deactivated (CarPlay voice ended)")
-            } catch {
-                print("🎤 Failed to deactivate audio session: \(error)")
-            }
+            // BJ PR2: rare no-lease fallback — deactivate off-main via the coordinator too.
+            await AudioSessionCoordinator.shared.deactivateOffMain()
+            print("🎤 Audio session deactivated (CarPlay voice ended)")
         }
     }
 
@@ -814,7 +835,7 @@ class WakeWordService: NSObject, ObservableObject {
 
     /// Re-configure audio session if Bluetooth route changed (glasses disconnect/reconnect)
     /// Call this before startListening() when recovering from background or route change
-    func reconfigureAudioSessionIfNeeded() {
+    func reconfigureAudioSessionIfNeeded() async {
         let route = AVAudioSession.sharedInstance().currentRoute
         let hasBluetooth = route.inputs.contains { $0.portType == .bluetoothHFP } ||
                            route.outputs.contains { $0.portType == .bluetoothHFP || $0.portType == .bluetoothA2DP }
@@ -836,7 +857,7 @@ class WakeWordService: NSObject, ObservableObject {
 
         // Force reconfigure to pick up new route
         audioSessionConfigured = false
-        configureAudioSession()
+        await configureAudioSession()
     }
 
     private func restartRecognition() {

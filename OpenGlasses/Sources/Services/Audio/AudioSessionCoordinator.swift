@@ -153,12 +153,30 @@ final class AudioSessionCoordinator: @unchecked Sendable {
         category: AVAudioSession.Category,
         mode: AVAudioSession.Mode,
         options: AVAudioSession.CategoryOptions,
+        activeOptions: AVAudioSession.SetActiveOptions = [],
         configure: @escaping (AudioSessionConforming) -> Void = { _ in }
     ) async throws {
         try await runOnSessionIO {
             try self.session.setCategory(category, mode: mode, options: options)
             configure(self.session)
-            try self.session.setActive(true, options: [])
+            try self.session.setActive(true, options: activeOptions)
+        }
+    }
+
+    /// Ensure the shared session is active, on `sessionIOQueue`, without changing its category or
+    /// ownership (BJ PR2). For a coexisting rider (TTS playback) whose `AVAudioPlayer.play()` would
+    /// otherwise *implicitly* activate the session on the main thread when no exclusive owner has
+    /// activated it (CarPlay / call-active, where wake word's pause early-returns). `setActive(true)`
+    /// is idempotent when already active.
+    func ensureActiveOffMain() async {
+        try? await runOnSessionIO { try self.session.setActive(true, options: []) }
+    }
+
+    /// Deactivate the shared session off-main when there is no lease to `release` (a rare fallback —
+    /// wake word normally holds a lease). Prefer `release(_:)`, which also honours ownership.
+    func deactivateOffMain() async {
+        try? await runOnSessionIO {
+            try self.session.setActive(false, options: .notifyOthersOnDeactivation)
         }
     }
 

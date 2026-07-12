@@ -107,21 +107,23 @@ class TextToSpeechService: NSObject, ObservableObject, AVSpeechSynthesizerDelega
     /// own the mic), so it registers as non-exclusive — never preempting or deactivating the session.
     private var coexistToken: UUID?
 
-    private func beginPause() {
+    private func beginPause() async {
         guard !didHoldPause else { return }
-        wakeWordService?.pauseOtherAudio()
+        didHoldPause = true   // set before the await so a concurrent beginPause can't double-hold
+        await wakeWordService?.pauseOtherAudio()
         coexistToken = AudioSessionCoordinator.shared.beginCoexisting(.textToSpeech)
-        didHoldPause = true
     }
 
-    private func endPause() {
+    private func endPause() async {
         guard didHoldPause else { return }
         didHoldPause = false
         if let token = coexistToken {
             coexistToken = nil
             AudioSessionCoordinator.shared.endCoexisting(token)
         }
-        wakeWordService?.resumeOtherAudio()
+        // BJ PR2: await the resume so a teardown (barge-in / stopSpeaking) doesn't return before
+        // other audio is actually restored (was fire-and-forget).
+        await wakeWordService?.resumeOtherAudio()
     }
 
     // MARK: - Public API
@@ -208,7 +210,7 @@ class TextToSpeechService: NSObject, ObservableObject, AVSpeechSynthesizerDelega
         }
 
         isSpeaking = true
-        beginPause()
+        await beginPause()
 
         // Wrap the actual speech work in a trackable task
         let task = Task { @MainActor [weak self] in
@@ -226,7 +228,7 @@ class TextToSpeechService: NSObject, ObservableObject, AVSpeechSynthesizerDelega
         // Only clear isSpeaking if this generation is still current
         if gen == speechGeneration {
             isSpeaking = false
-            endPause()
+            await endPause()
             print("🔊 TTS: Finished speaking")
         }
     }
@@ -349,7 +351,9 @@ class TextToSpeechService: NSObject, ObservableObject, AVSpeechSynthesizerDelega
         audioPlayer = nil
         synthesizer.stopSpeaking(at: .immediate)
         isSpeaking = false
-        endPause()
+        // BJ PR2: the immediate teardown above stays synchronous (barge-in must stop *now*); the
+        // resume-other-audio is inherently off-main now, so dispatch it without blocking the stop.
+        Task { await endPause() }
         speechContinuation?.resume()
         speechContinuation = nil
     }
@@ -612,6 +616,11 @@ class TextToSpeechService: NSObject, ObservableObject, AVSpeechSynthesizerDelega
         let player = try AVAudioPlayer(data: data)
         self.audioPlayer = player
         player.prepareToPlay()
+
+        // BJ PR2: ensure the session is active off-main *before* play(), which would otherwise
+        // implicitly activate it on the main thread when no exclusive owner has (CarPlay / call-active,
+        // where wake word's pause early-returns). Idempotent when already active.
+        await AudioSessionCoordinator.shared.ensureActiveOffMain()
 
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             self.speechContinuation = continuation

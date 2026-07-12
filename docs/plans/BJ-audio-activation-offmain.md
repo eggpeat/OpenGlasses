@@ -98,6 +98,17 @@ lease back **through the coordinator** (today that invariant is only tested at t
 
 ## PR2 — wiring the call sites (thin edge — device-verified)
 
+**Status:** 🚧 Core wiring in draft PR — WakeWordService (pause/resume/configure/interruption/
+deactivate) + TextToSpeechService (beginPause/endPause + main speech player) + `ConversationStartSequence.Deps`
++ CarPlay/App callers routed through the coordinator; compiles + headless suites + Release green.
+**Two adjustments from the plan letter:** (1) `assumeOwnership` is **kept, not retired** — wake word
+must not deactivate-first, so it records ownership then activates through the no-deactivate
+`reconfigure` (rather than `acquireOffMain`, which deactivates first). (2) `stopSpeaking` stays
+**synchronous** (barge-in must stop *now*); only its resume-other-audio is dispatched off-main, so it
+doesn't ripple async to ~12 teardown callers. Deferred to a small follow-up (independent leaves that
+own their own session): **`LiveTranslationService` + `TranscriptionService` fallback** engine starts.
+On-glasses smoke test gates merge.
+
 - `WakeWordService.pauseOtherAudio` / `resumeOtherAudio` / `configureAudioSession` become `async`
   and route through `reconfigure` with the **identical** category/mode/options. The `:307`
   interruption-ended path and `:439` deactivation fallback route through the coordinator too;
