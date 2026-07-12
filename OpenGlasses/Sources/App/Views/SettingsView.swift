@@ -1061,6 +1061,29 @@ struct SmartRoutingView: View {
                     Text("Assign any model to each tier. Simple queries use Fast, most use Balanced, complex reasoning uses Best.")
                 }
             }
+
+            Section {
+                InfoToggle(
+                    title: "Model Fallback",
+                    isOn: Binding(
+                        get: { Config.modelCascadeEnabled },
+                        set: { Config.setModelCascadeEnabled($0) }
+                    ),
+                    info: "If a model can't handle a request — the prompt is too long, it's rate-limited, or it returns nothing — the assistant automatically tries the next model instead of failing. It prefers your active (often on-device) model and only falls over to cloud when needed."
+                )
+                InfoToggle(
+                    title: "Narrate Model Switches",
+                    isOn: Binding(
+                        get: { Config.narrateModelSwitchesEnabled },
+                        set: { Config.setNarrateModelSwitchesEnabled($0) }
+                    ),
+                    info: "Speaks a short notice when the assistant changes models mid-request (for example, \"That's a bit much for the on-device model — switching to Claude\"), so you know the model — and its cost — changed. Turn off for silent switching."
+                )
+            } header: {
+                Text("Fallback")
+            } footer: {
+                Text("Fallback keeps a turn alive across model limits; narration keeps you informed when it happens.")
+            }
         }
         .navigationTitle("Smart Routing")
     }

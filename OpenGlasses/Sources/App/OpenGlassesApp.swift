@@ -566,6 +566,9 @@ class AppState: ObservableObject, AppStateProtocol {
     private var cancellables: [Any] = []
     private var autoSleepTask: Task<Void, Never>?
     private var currentLLMTask: Task<Void, Never>?
+    /// BK P2c — set once the model-switch notice has been spoken this turn, so a multi-hop cascade
+    /// narrates only the FIRST fallback hop (not once per hop). Reset at the start of every turn.
+    private var didNarrateModelSwitchThisTurn = false
     @Published private(set) var isProcessing: Bool = false
     private var hasEverRegistered: Bool = false
     var inConversation: Bool = false
@@ -2586,6 +2589,24 @@ class AppState: ObservableObject, AppStateProtocol {
         }
     }
 
+    /// BK P2c — speak a one-line "switching model" notice on the FIRST fallback hop of a turn.
+    /// Only wired into the interactive voice/typed send paths (notification triage / scheduled runs
+    /// don't cascade), so this is inherently interactive-only per Plan W's presence principle.
+    /// Restarts the thinking sound afterwards — `speak()` stops it, and the turn hasn't finished, so
+    /// without this the retry latency would be the exact dead air the notice was meant to fill.
+    @MainActor
+    private func narrateModelSwitch(from: ModelConfig?, to: ModelConfig?,
+                                    failure: ModelFallbackChain.FailureClass) async {
+        guard Config.narrateModelSwitchesEnabled, !didNarrateModelSwitchThisTurn else { return }
+        didNarrateModelSwitchThisTurn = true
+        let phrase = ModelSwitchNarrator.fallbackPhrase(
+            from: .init(name: from?.name ?? "the model", isLocal: from?.llmProvider == .local),
+            to: .init(name: to?.name ?? "another model", isLocal: to?.llmProvider == .local),
+            failure: failure)
+        await speechService.speak(phrase, urgency: .low, mirrorToHUD: true)
+        speechService.startThinkingSound()
+    }
+
     func handleTranscription(_ text: String) async {
         // Shared consent surface, voice half (BN P1): while an approve/deny prompt is pending, a
         // short spoken yes/no answers THE PROMPT — never the model. Checked before the
@@ -2697,6 +2718,7 @@ class AppState: ObservableObject, AppStateProtocol {
         // Tier 2: Model selection (Plan BG P2). The pure `ModelRoutingPolicy` decides between the
         // on-device agent model, a temporary switch to the tier-recommended model, and keeping the
         // active one; this applies the chosen route's side effects.
+        didNarrateModelSwitchThisTurn = false   // BK P2c: fresh per-turn narration budget
         var originalModelId: String?
         var useLocalAgent = false
         let agentIsCloud = Config.savedModels.contains(where: { $0.id == Config.agentModelId })
@@ -2720,6 +2742,14 @@ class AppState: ObservableObject, AppStateProtocol {
             Config.setActiveModelId(id)
             llmService.refreshActiveModel()
             print("🧭 Model routed: \(classification.modelTier.rawValue) → \(tierModel?.name ?? id)")
+            // BK P2c: narrate the auto-routing switch too, so the principle holds everywhere a model
+            // changes under the user (not just on failure). Speaks before the thinking sound starts.
+            if Config.narrateModelSwitchesEnabled, let dest = tierModel {
+                didNarrateModelSwitchThisTurn = true
+                await speechService.speak(
+                    ModelSwitchNarrator.routingPhrase(to: .init(name: dest.name, isLocal: dest.llmProvider == .local)),
+                    urgency: .low, mirrorToHUD: true)
+            }
         case .keepCurrent:
             break
         }
@@ -2752,7 +2782,10 @@ class AppState: ObservableObject, AppStateProtocol {
                             nowPlayingContext: nowPlayingAtStart?.promptContext,
                             shortcutsContext: ShortcutsCatalog.shared.promptBlock(),
                             promptSections: classification.relevantSections,
-                            backgrounded: backgrounded
+                            backgrounded: backgrounded,
+                            onModelSwitch: { [self] from, to, failure in
+                                await narrateModelSwitch(from: from, to: to, failure: failure)
+                            }
                         )
                     }
                     if useLocalAgent {
@@ -2811,7 +2844,13 @@ class AppState: ObservableObject, AppStateProtocol {
                 },
                 onError: { [self] error in
                     errorMessage = "Failed to get response: \(error.localizedDescription)"
-                    await speechService.speak("Sorry, I encountered an error.")
+                    // BK P2c: when the cascade is exhausted, speak the real reason instead of the
+                    // generic line (e.g. "the last one was rate-limited"), so the app stays honest
+                    // about what happened. Off ⇒ the generic line.
+                    let spoken = Config.narrateModelSwitchesEnabled
+                        ? ModelSwitchNarrator.exhaustionPhrase(lastError: error)
+                        : "Sorry, I encountered an error."
+                    await speechService.speak(spoken)
                 },
                 finish: { [self] in
                     // Restore original model if we switched for this request
@@ -2861,6 +2900,7 @@ class AppState: ObservableObject, AppStateProtocol {
         }
 
         isProcessing = true
+        didNarrateModelSwitchThisTurn = false   // BK P2c: fresh per-turn narration budget
         speechService.startThinkingSound()
 
         // Live-stream the reply into the Chat thread (where the provider supports it).
@@ -2897,6 +2937,10 @@ class AppState: ObservableObject, AppStateProtocol {
                             // iteration's text so the bubble never shows intermediate+final concatenated.
                             guard let self, let id = streamThreadId else { return }
                             if self.streamingTurn?.threadId == id { self.streamingTurn?.text = "" }
+                        },
+                        onModelSwitch: { [self] from, to, failure in
+                            guard speakResponse else { return }   // silent when Siri speaks the reply
+                            await narrateModelSwitch(from: from, to: to, failure: failure)
                         }
                     )
                 },
@@ -2931,7 +2975,11 @@ class AppState: ObservableObject, AppStateProtocol {
                     streamingTurn = nil
                     errorMessage = "Failed to get response: \(error.localizedDescription)"
                     if speakResponse {
-                        await speechService.speak("Sorry, I encountered an error.")
+                        // BK P2c: speak the real exhaustion reason, not the generic line.
+                        let spoken = Config.narrateModelSwitchesEnabled
+                            ? ModelSwitchNarrator.exhaustionPhrase(lastError: error)
+                            : "Sorry, I encountered an error."
+                        await speechService.speak(spoken)
                     }
                 },
                 finish: { [self] in

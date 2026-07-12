@@ -291,6 +291,13 @@ struct Config {
 
     static func setModelCascadeEnabled(_ enabled: Bool) { modelCascadeEnabled = enabled }
 
+    /// Whether the app speaks a one-line notice when it switches models (BK P2c) — a fallback hop
+    /// or an auto-routing switch. Keeps the user informed that the model (and its cost/latency)
+    /// changed under them. Default on, matching the "tell the user what it's doing" preference.
+    @UserDefaultsBacked("narrateModelSwitchesEnabled", default: true) static var narrateModelSwitchesEnabled: Bool
+
+    static func setNarrateModelSwitchesEnabled(_ enabled: Bool) { narrateModelSwitchesEnabled = enabled }
+
     private static let modelFallbackOrderKey = "modelFallbackOrder"
 
     /// User-ordered fallback model ids the cascade tries after the active model (cost preference:
