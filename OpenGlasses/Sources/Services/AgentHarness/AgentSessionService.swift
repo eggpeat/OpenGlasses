@@ -29,6 +29,12 @@ final class AgentSessionService: ObservableObject {
     /// Injected speaker. AppState wires `TextToSpeechService`; tests capture the lines.
     var speak: (String) -> Void = { _ in }
 
+    /// User-distinct consent seam (BN P1): wired by AppState to the shared consent surface
+    /// (`ToolConfirmationCoordinator`); tests inject grants/denials. When nil, a tool-called
+    /// confirm fails CLOSED — approval must come from a real user prompt, never from tool-call
+    /// output (the prompt-injection → self-approved-push hole).
+    var requestUserConsent: ((RemoteActionConsentRequest) async -> Bool)?
+
     private var eventTask: Task<Void, Never>?
 
     init() {}
@@ -137,7 +143,28 @@ final class AgentSessionService: ObservableObject {
         eventTask = nil
     }
 
+    /// Entry for the `code_agent confirm` tool call (BN P1). The model's call is only a REQUEST
+    /// to show the user-distinct consent prompt — a prompt-injected turn (web result, OCR'd sign,
+    /// ambient caption) can raise the question, but never answer it. Denying at the prompt
+    /// cancels the run, the same safety default as `respondToConfirmation(approved: false)`.
+    func confirmPendingActionViaUserPrompt() async -> String {
+        guard let run = activeRun, run.status == .awaitingInput else {
+            return "There's nothing waiting for confirmation."
+        }
+        guard let requestUserConsent else {
+            return "Approval needs the on-screen confirm prompt, which isn't available right now — nothing was approved."
+        }
+        let request = RemoteActionConsentRequest(
+            source: .codingAgent,
+            summary: awaitingInputPrompt ?? "proceed with the pending action")
+        let granted = await requestUserConsent(request)
+        await respondToConfirmation(approved: granted)
+        return granted ? "Confirmed — the agent will proceed." : "Okay, I won't proceed."
+    }
+
     /// Answer an `awaitingInput` confirmation. Declining cancels the run (safety default).
+    /// The grant must be user-originated: reach here via `confirmPendingActionViaUserPrompt`
+    /// (tool path, coordinator-prompted) or a direct UI control — never straight from a model turn.
     func respondToConfirmation(approved: Bool) async {
         guard let harness = activeHarness, let run = activeRun, run.status == .awaitingInput else { return }
         try? await harness.respondToInput(run, approved: approved)

@@ -73,8 +73,9 @@ struct AgentControlTool: NativeTool {
             return "Cancelling the agent run."
 
         case "confirm", "approve", "yes":
-            await session.respondToConfirmation(approved: true)
-            return "Confirmed — the agent will proceed."
+            // BN P1: the tool call only ASKS — approval comes from the user-distinct consent
+            // prompt. A prompt-injected turn can reach this case; it must never self-approve.
+            return await session.confirmPendingActionViaUserPrompt()
 
         case "deny", "decline", "no":
             await session.respondToConfirmation(approved: false)

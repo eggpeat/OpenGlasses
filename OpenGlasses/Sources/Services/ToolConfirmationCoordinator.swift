@@ -7,6 +7,8 @@ struct PendingToolConfirmation: Identifiable {
     let toolName: String
     /// Human-readable description of what will happen (e.g. "Send a message to Mom: …").
     let summary: String
+    /// Who is asking (BN P1) — drives the source line on the consent card + spoken prompt.
+    let source: RemoteActionSource
     fileprivate let continuation: CheckedContinuation<Bool, Never>
 }
 
@@ -29,12 +31,13 @@ final class ToolConfirmationCoordinator: ObservableObject {
 
     /// Suspend until the user approves or denies `toolName`. Returns `true` to proceed.
     /// If another confirmation is already outstanding, the new request is denied to avoid stacking
-    /// prompts (the model can retry after the user has dealt with the first one).
-    func requestConfirmation(toolName: String, summary: String) async -> Bool {
+    /// prompts (the model can retry after the user has dealt with the first one). `source`
+    /// attributes the ask on the card and in the spoken prompt (BN P1).
+    func requestConfirmation(toolName: String, summary: String, source: RemoteActionSource = .assistant) async -> Bool {
         if pending != nil { return false }
-        onSpeakPrompt?("Confirm: \(summary)?")
+        onSpeakPrompt?(RemoteActionConsentRequest(source: source, summary: summary).spokenPrompt)
         return await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
-            pending = PendingToolConfirmation(toolName: toolName, summary: summary, continuation: continuation)
+            pending = PendingToolConfirmation(toolName: toolName, summary: summary, source: source, continuation: continuation)
         }
     }
 
@@ -43,5 +46,16 @@ final class ToolConfirmationCoordinator: ObservableObject {
         guard let p = pending else { return }
         pending = nil
         p.continuation.resume(returning: approved)
+    }
+
+    /// Voice half of the shared consent surface (BN P1): interpret a wearer utterance as an
+    /// answer to the pending prompt. Returns `true` when the utterance was consumed (the prompt
+    /// resolved); `false` leaves the prompt pending and the utterance for the normal turn
+    /// pipeline. Never resolves on an ambiguous phrase.
+    @discardableResult
+    func resolveByVoice(_ text: String) -> Bool {
+        guard pending != nil, let approved = RemoteActionVoiceConsent.interpret(text) else { return false }
+        resolve(approved)
+        return true
     }
 }
