@@ -5,7 +5,7 @@ import UIKit
 /// Automatically resolves contact names to phone numbers.
 struct SendMessageTool: NativeTool {
     let name = "send_message"
-    let description = "Send a text message (SMS/iMessage). Accepts a phone number OR a contact name — names are automatically looked up in Contacts. If multiple matches are found, returns options for the user to choose."
+    let description = "Opens Messages with a pre-filled SMS/iMessage for the user to review and send — it cannot send automatically. Accepts a phone number OR a contact name (auto-looked-up in Contacts); if multiple matches are found, returns options for the user to choose."
     let parametersSchema: [String: Any] = [
         "type": "object",
         "properties": [

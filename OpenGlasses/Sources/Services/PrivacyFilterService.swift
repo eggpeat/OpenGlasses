@@ -14,8 +14,10 @@ class PrivacyFilterService: ObservableObject {
     /// Blur radius for face anonymization
     var blurRadius: Double = 20.0
 
-    /// Known face IDs to NOT blur (the user's saved faces)
-    var exemptFaceprints: [[Float]] = []
+    // BK P6: `exemptFaceprints` (a "don't blur known contacts" list) was declared but never
+    // populated or read — the blur path blurs every detected face. Removed the dead field rather
+    // than ship a config surface that does nothing; wiring real known-contact exemption would need
+    // face-matching in the blur path (a Plan-level feature, not a mechanical honesty fix).
 
     /// Shared render context — `nonisolated` so the off-main `blurFaces` reuses this one Metal
     /// pipeline instead of building a fresh CIContext per frame (a classic per-frame GPU cost).
