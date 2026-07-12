@@ -2085,6 +2085,11 @@ class LLMService: ObservableObject {
                 history: history,
                 onToken: onToken
             )
+        } catch is CancellationError {
+            // BK P4: a barge-in cancels the local generation. Propagate CancellationError UNWRAPPED
+            // so ConversationTurnRunner maps it to onCancelled (partial reply not spoken) instead
+            // of onError. Wrapping it in LLMError here would speak the generic error line.
+            throw CancellationError()
         } catch let error as LocalLLMError {
             // Propagate .backgrounded unwrapped so callers (e.g. AgentScheduler) can
             // tell "can't run on-device in background" apart from a real failure and
@@ -2136,6 +2141,8 @@ class LLMService: ObservableObject {
                     systemPrompt: fullPrompt,
                     history: updatedHistory
                 )
+            } catch is CancellationError {
+                throw CancellationError()   // BK P4: a barge-in during the tool-result regen cancels too
             } catch {
                 // If re-generation fails, just return the tool result directly
                 finalResponse = textBefore.isEmpty ? resultText : "\(textBefore) \(resultText)"
