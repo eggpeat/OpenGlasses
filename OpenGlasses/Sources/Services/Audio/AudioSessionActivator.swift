@@ -17,11 +17,11 @@ enum AudioSessionActivator {
     ///   use it for non-fatal hints like `setPreferredSampleRate` (call them with `try?` inside;
     ///   a rejected hint must not abort activation).
     static func activate(
-        _ session: AVAudioSession,
+        _ session: AudioSessionConforming,
         category: AVAudioSession.Category,
         mode: AVAudioSession.Mode,
         options: AVAudioSession.CategoryOptions,
-        configure: (AVAudioSession) -> Void = { _ in }
+        configure: (AudioSessionConforming) -> Void = { _ in }
     ) throws {
         // Clear any stale active route first so a pending route change doesn't block activation.
         try? session.setActive(false, options: .notifyOthersOnDeactivation)
@@ -29,14 +29,14 @@ enum AudioSessionActivator {
         do {
             try session.setCategory(category, mode: mode, options: options)
             configure(session)
-            try session.setActive(true)
+            try session.setActive(true, options: [])
         } catch {
             NSLog("[Audio] Preferred session config failed (mode %@): %@ — retrying with .default",
                   mode.rawValue, error.localizedDescription)
             do {
                 try session.setCategory(category, mode: .default, options: [.defaultToSpeaker])
                 configure(session)
-                try session.setActive(true)
+                try session.setActive(true, options: [])
                 NSLog("[Audio] Activated with fallback (.default)")
             } catch {
                 throw AudioSessionError.activationFailed(error.localizedDescription)
