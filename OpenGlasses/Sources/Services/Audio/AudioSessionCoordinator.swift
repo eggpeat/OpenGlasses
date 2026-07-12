@@ -11,15 +11,37 @@ import Foundation
 /// this type adds the serial-queue safety and the real activation/deactivation.
 ///
 /// Activation goes through `AudioSessionActivator`, so the preferred → `.default` fallback and
-/// deactivate-first-to-clear-a-stale-route behaviour are unchanged.
+/// deactivate-first-to-clear-a-stale-route behaviour of the *acquire* path are unchanged.
+///
+/// **BJ PR1 — off-main activation.** Synchronous `setActive` on the main thread can stall the UI on
+/// an `AVAudioSession` route change (worst on the Bluetooth glasses path). Two additions close that,
+/// without changing any existing behaviour:
+///  - **One serial `sessionIOQueue` for both activation and deactivation** (total order). The
+///    deactivation block re-checks the ledger first, so a superseded deactivation becomes a no-op
+///    instead of tearing the session out from under a newer owner (this *closes* the prior
+///    `deactivationQueue`-vs-`acquire` race, it doesn't copy it).
+///  - **`acquireOffMain` / `reconfigure`** run activation on that queue and are awaited, so a
+///    main-actor caller hands off the blocking work. `reconfigure` re-tunes the already-active
+///    session in place with **no deactivate-first and no fallback**, so a subsystem's hand-tuned
+///    options (wake word's `mixWithOthers`) are never silently swapped.
+///
+/// The session is injected (`AudioSessionConforming`) so tests drive a fake; production uses
+/// `.shared`, which binds `AVAudioSession.sharedInstance()`.
 final class AudioSessionCoordinator: @unchecked Sendable {
     static let shared = AudioSessionCoordinator()
 
     private let stateQueue = DispatchQueue(label: "audio.session.coordinator.state")
-    private let deactivationQueue = DispatchQueue(label: "audio.session.coordinator.deactivation", qos: .userInitiated)
+    /// BJ PR1 — one serial queue for BOTH activation and deactivation, so their order is total.
+    /// Internal (not private) so a test can block it and drive the release race deterministically.
+    let sessionIOQueue = DispatchQueue(label: "audio.session.coordinator.io", qos: .userInitiated)
     private var ledger = AudioSessionLedger()
+    private let session: AudioSessionConforming
 
-    private init() {}
+    private init() { self.session = AVAudioSession.sharedInstance() }
+
+    /// Test seam — inject a fake session. Never `.shared` in tests (the AVAudioSession/Wearables
+    /// house rule: tests use fresh instances, never the shared singleton).
+    init(session: AudioSessionConforming) { self.session = session }
 
     /// The owner currently recognised as holding the shared session, or `nil` if it's free.
     var currentOwner: AudioSessionOwner? {
@@ -62,9 +84,11 @@ final class AudioSessionCoordinator: @unchecked Sendable {
         return lease
     }
 
-    /// Acquire the shared session for `owner`, configuring and activating it. Supersedes any prior
-    /// holder. On activation failure the lease is rolled back (so a failed acquire never leaves the
-    /// caller recorded as owner) and the error is rethrown.
+    /// Acquire the shared session for `owner`, configuring and activating it **on the caller's
+    /// thread**. Supersedes any prior holder. On activation failure the lease is rolled back (so a
+    /// failed acquire never leaves the caller recorded as owner) and the error is rethrown.
+    ///
+    /// For callers already off the main thread. Main-actor callers should prefer `acquireOffMain`.
     ///
     /// - Parameter configure: run after `setCategory` and before `setActive` — for non-fatal hints
     ///   like `setPreferredSampleRate` (call them with `try?` inside).
@@ -74,13 +98,13 @@ final class AudioSessionCoordinator: @unchecked Sendable {
         category: AVAudioSession.Category,
         mode: AVAudioSession.Mode,
         options: AVAudioSession.CategoryOptions,
-        configure: (AVAudioSession) -> Void = { _ in }
+        configure: (AudioSessionConforming) -> Void = { _ in }
     ) throws -> AudioSessionLease {
         let token = UUID()
         let lease = stateQueue.sync { ledger.acquire(owner, token: token).lease }
         do {
             try AudioSessionActivator.activate(
-                AVAudioSession.sharedInstance(),
+                session,
                 category: category,
                 mode: mode,
                 options: options,
@@ -89,23 +113,75 @@ final class AudioSessionCoordinator: @unchecked Sendable {
             NSLog("[AudioCoordinator] acquired by %@", owner.rawValue)
             return lease
         } catch {
-            // Roll the lease back if it's still ours so a failed acquire doesn't leave us "owner".
-            stateQueue.sync {
-                if ledger.current == lease { _ = ledger.release(lease) }
-            }
+            rollBack(lease)
             throw error
         }
     }
 
+    /// Like `acquire`, but performs the (potentially blocking) activation on `sessionIOQueue`
+    /// instead of the caller's thread, so a main-actor caller never stalls the UI on an
+    /// `AVAudioSession` route change. Supersedes any prior holder; rolls the lease back on failure.
+    @discardableResult
+    func acquireOffMain(
+        _ owner: AudioSessionOwner,
+        category: AVAudioSession.Category,
+        mode: AVAudioSession.Mode,
+        options: AVAudioSession.CategoryOptions,
+        configure: @escaping (AudioSessionConforming) -> Void = { _ in }
+    ) async throws -> AudioSessionLease {
+        let token = UUID()
+        let lease = stateQueue.sync { ledger.acquire(owner, token: token).lease }
+        do {
+            try await runOnSessionIO {
+                try AudioSessionActivator.activate(
+                    self.session, category: category, mode: mode, options: options, configure: configure)
+            }
+            NSLog("[AudioCoordinator] acquired off-main by %@", owner.rawValue)
+            return lease
+        } catch {
+            rollBack(lease)
+            throw error
+        }
+    }
+
+    /// Re-tune the **already-active** session in place: `setCategory` → optional hints → `setActive`,
+    /// on `sessionIOQueue`, with **no deactivate-first and no fallback**. For subsystems that adjust
+    /// their own live session (wake word pause/resume/configure) and must not have the session torn
+    /// down or their hand-tuned options silently swapped to `.default`. A transient failure surfaces
+    /// to the caller. Ownership is unchanged — the caller already owns (or self-owns) the session.
+    func reconfigure(
+        category: AVAudioSession.Category,
+        mode: AVAudioSession.Mode,
+        options: AVAudioSession.CategoryOptions,
+        configure: @escaping (AudioSessionConforming) -> Void = { _ in }
+    ) async throws {
+        try await runOnSessionIO {
+            try self.session.setCategory(category, mode: mode, options: options)
+            configure(self.session)
+            try self.session.setActive(true, options: [])
+        }
+    }
+
     /// Release `lease`. Deactivates the shared session only if `lease` is still the current owner;
-    /// a stale release (a newer owner has acquired since) is ignored.
+    /// a stale release (a newer owner has acquired since) is ignored. The deactivation runs on
+    /// `sessionIOQueue` and **re-checks the ledger** immediately before `setActive(false)`, so a
+    /// deactivation that was queued before a newer owner acquired becomes a no-op (BJ PR1).
     func release(_ lease: AudioSessionLease) {
         let decision = stateQueue.sync { ledger.release(lease) }
         switch decision {
         case .deactivate:
-            deactivationQueue.async {
+            sessionIOQueue.async { [self] in
+                // Re-check under the state lock: if a newer owner acquired the session between the
+                // release decision and this block running, do NOT deactivate — that would kill the
+                // live session out from under them (the race the single queue + this guard close).
+                let stillFree = stateQueue.sync { ledger.current == nil }
+                guard stillFree else {
+                    NSLog("[AudioCoordinator] deactivate suppressed — re-acquired since %@ released",
+                          lease.owner.rawValue)
+                    return
+                }
                 do {
-                    try AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+                    try session.setActive(false, options: .notifyOthersOnDeactivation)
                     NSLog("[AudioCoordinator] deactivated (released by %@)", lease.owner.rawValue)
                 } catch {
                     NSLog("[AudioCoordinator] deactivate failed (%@): %@", lease.owner.rawValue, error.localizedDescription)
@@ -115,6 +191,35 @@ final class AudioSessionCoordinator: @unchecked Sendable {
             NSLog("[AudioCoordinator] stale release ignored: %@ superseded by %@", lease.owner.rawValue, by.rawValue)
         case .alreadyReleased:
             break
+        }
+    }
+
+    /// Await all currently-queued activation/deactivation to finish. With async activation the
+    /// ledger can report owner X *before* X's `setActive(true)` has actually run; callers that
+    /// consult ownership to decide audio routing (wake-word interruption handling, expert-call
+    /// precedence) await this so they act on reality, not a pending intention.
+    func activationSettled() async {
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            sessionIOQueue.async { cont.resume() }
+        }
+    }
+
+    // MARK: - Private
+
+    /// Roll a lease back if it's still current (a failed activation must not leave the caller owner).
+    private func rollBack(_ lease: AudioSessionLease) {
+        stateQueue.sync {
+            if ledger.current == lease { _ = ledger.release(lease) }
+        }
+    }
+
+    /// Run blocking session I/O on the single serial `sessionIOQueue`, bridged to `async`.
+    private func runOnSessionIO(_ work: @escaping () throws -> Void) async throws {
+        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+            sessionIOQueue.async {
+                do { try work(); cont.resume() }
+                catch { cont.resume(throwing: error) }
+            }
         }
     }
 }
