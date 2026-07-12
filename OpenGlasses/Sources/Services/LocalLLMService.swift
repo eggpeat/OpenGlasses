@@ -110,13 +110,6 @@ final class LocalLLMService: ObservableObject {
         "mlx-community/SmolVLM2-500M-Video-Instruct-mlx",
     ]
 
-    /// Hard ceiling on the tokenized prompt fed to an on-device model. Prefill + KV cache for a
-    /// 2B model scale with sequence length; an ~8k-token prompt (the full ~100-tool system
-    /// prompt) exhausted memory and got the app Jetsam-killed on an iPhone. Well above any lean
-    /// prompt the agent path now builds, so it only trips on a pathological input — where a
-    /// catchable throw beats an uncatchable OOM process kill.
-    static let maxPromptTokens = 4096
-
     /// Whether the currently loaded model supports vision.
     var isVisionModel: Bool {
         guard let id = loadedModelId else { return false }
@@ -260,32 +253,40 @@ final class LocalLLMService: ObservableObject {
         isGenerating = true
         defer { isGenerating = false }
 
-        // Build messages for chat template
-        var messages: [[String: String]] = [
-            ["role": "system", "content": systemPrompt]
-        ]
-        for turn in history {
-            messages.append(["role": turn.role, "content": turn.content])
-        }
-        messages.append(["role": "user", "content": userMessage])
-
-        // Tokenize using chat template — some models don't support system role,
-        // so fall back to prepending system prompt to the first user message.
+        // Tokenize a candidate history exactly as the model will — chat template, with the
+        // no-system-role fallback some small models need. Used both to measure truncation
+        // candidates and to produce the final token ids.
         let tokenizer = await container.tokenizer
-        let tokens: [Int]
-        do {
-            tokens = try tokenizer.applyChatTemplate(messages: messages)
-        } catch {
-            print("⚠️ Chat template failed with system role, retrying without: \(error.localizedDescription)")
-            // Merge system prompt into first user message
-            var fallbackMessages: [[String: String]] = []
-            for turn in history {
-                fallbackMessages.append(["role": turn.role, "content": turn.content])
+        func tokenize(_ hist: [(role: String, content: String)]) throws -> [Int] {
+            var messages: [[String: String]] = [["role": "system", "content": systemPrompt]]
+            for turn in hist { messages.append(["role": turn.role, "content": turn.content]) }
+            messages.append(["role": "user", "content": userMessage])
+            do {
+                return try tokenizer.applyChatTemplate(messages: messages)
+            } catch {
+                // Merge the system prompt into the user turn for models without a system role.
+                var fallback: [[String: String]] = []
+                for turn in hist { fallback.append(["role": turn.role, "content": turn.content]) }
+                fallback.append(["role": "user", "content": systemPrompt + "\n\nUser: " + userMessage])
+                return try tokenizer.applyChatTemplate(messages: fallback)
             }
-            let combinedUserMessage = systemPrompt + "\n\nUser: " + userMessage
-            fallbackMessages.append(["role": "user", "content": combinedUserMessage])
-            tokens = try tokenizer.applyChatTemplate(messages: fallbackMessages)
         }
+
+        // BK P2: budget the prompt from the *loaded model's* context window minus the generation
+        // reserve (prompt + up to 512 new tokens must both fit, or generation OOMs mid-stream —
+        // an uncatchable per-token kill), then truncate oldest-history-first to fit instead of
+        // hard-rejecting. Only a prompt that can't be trimmed under budget (system + current turn
+        // alone too big) throws `.promptTooLong` — catchable, so the caller can fall back to cloud.
+        let budget = LocalModelBudget.promptBudget(for: loadedModelId)
+        let trimmedHistory = try LocalModelBudget.historyFittingBudget(
+            history: history, budget: budget
+        ) { try tokenize($0).count }
+        if trimmedHistory.count < history.count {
+            NSLog("🔬 LocalLLM.generate trimmed history %d→%d turns to fit budget %d",
+                  history.count, trimmedHistory.count, budget)
+        }
+        let tokens = try tokenize(trimmedHistory)
+
         // Build a 2D (1, L) batch, not a 1D (L,) array. The Gemma 4 / 3n forward pass
         // indexes x.dim(2) and fatally crashes ("SmallVector out of range") on 1D input —
         // its prepare() path doesn't expand 1D internally (ml-explore/mlx-swift-lm#240).
@@ -294,13 +295,6 @@ final class LocalLLMService: ObservableObject {
         // NSLog (not print) so it survives the fatal MLX crash in the unified log,
         // confirming the 2D fix is live and what shape reaches the model.
         NSLog("🔬 LocalLLM.generate model=%@ tokenIDs.shape=%@ count=%d", loadedModelId ?? "?", "\(tokenIDs.shape)", tokens.count)
-
-        // Refuse a prompt that would OOM the device. MLX allocation failure is an *uncatchable*
-        // trap (it Jetsam-kills the process), so we must reject BEFORE feeding it to the model —
-        // a catchable error lets the caller fall back to cloud instead of the app dying.
-        guard tokens.count <= Self.maxPromptTokens else {
-            throw LocalLLMError.promptTooLong(tokens: tokens.count, limit: Self.maxPromptTokens)
-        }
 
         let input = LMInput(text: .init(tokens: tokenIDs))
 

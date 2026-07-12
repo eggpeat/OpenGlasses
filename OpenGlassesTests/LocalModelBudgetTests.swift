@@ -1,0 +1,78 @@
+import XCTest
+@testable import OpenGlasses
+
+/// BK P2 — the on-device prompt budget is now derived per model (window − generation reserve −
+/// margin) and the caller truncates oldest-history-first to fit, only hard-failing when the
+/// minimal prompt (system + current turn) can't fit any window. All pure/headless.
+final class LocalModelBudgetTests: XCTestCase {
+
+    // MARK: - Budget calculation
+
+    func testBudgetSubtractsGenerationReserveAndMargin() {
+        // The concrete review example: a 4096 window must NOT admit a 4096-token prompt, or
+        // prompt + 512 generated tokens overflows mid-stream.
+        let budget = LocalModelBudget.promptBudget(contextWindow: 4096)
+        XCTAssertEqual(budget, 4096 - LocalModelBudget.generationReserve - LocalModelBudget.safetyMargin)
+        XCTAssertLessThan(budget, 4096, "must leave room for the model's own 512-token output")
+    }
+
+    func testUnknownModelFallsBackToConservativeDefault() {
+        XCTAssertEqual(LocalModelBudget.contextWindow(for: "some/model-nobody-knows"),
+                       LocalModelBudget.defaultContextWindow)
+        XCTAssertEqual(LocalModelBudget.contextWindow(for: nil),
+                       LocalModelBudget.defaultContextWindow)
+    }
+
+    func testKnownModelUsesItsTableWindow() {
+        // A tiny model gets a larger memory-safe window than the conservative default.
+        XCTAssertGreaterThan(
+            LocalModelBudget.contextWindow(for: "mlx-community/Qwen2.5-0.5B-Instruct-4bit"),
+            LocalModelBudget.defaultContextWindow)
+    }
+
+    func testBudgetNeverGoesBelowFloor() {
+        // A mis-entered tiny window can't produce a zero/negative budget that rejects everything.
+        XCTAssertEqual(LocalModelBudget.promptBudget(contextWindow: 10),
+                       LocalModelBudget.minimumBudget)
+    }
+
+    // MARK: - Truncation: drop oldest history first
+
+    /// Each history turn counts as 10 tokens; system + user baseline is 20. Lets us drive the
+    /// pure truncation loop deterministically without a real tokenizer.
+    private func fakeCount(_ hist: [(role: String, content: String)]) -> Int {
+        20 + hist.count * 10
+    }
+
+    func testUnderBudgetKeepsAllHistory() throws {
+        let history = [("user", "a"), ("assistant", "b")].map { (role: $0.0, content: $0.1) }
+        let kept = try LocalModelBudget.historyFittingBudget(history: history, budget: 100) {
+            fakeCount($0)
+        }
+        XCTAssertEqual(kept.count, 2)
+    }
+
+    func testOverBudgetDropsOldestFirstUntilFits() throws {
+        // 5 turns → 20 + 50 = 70 tokens. Budget 40 admits (40-20)/10 = 2 turns.
+        let history = (0..<5).map { (role: "user", content: "turn\($0)") }
+        let kept = try LocalModelBudget.historyFittingBudget(history: history, budget: 40) {
+            fakeCount($0)
+        }
+        XCTAssertEqual(kept.count, 2)
+        XCTAssertEqual(kept.map(\.content), ["turn3", "turn4"],
+                       "oldest dropped, the most recent turns are preserved")
+        XCTAssertLessThanOrEqual(fakeCount(kept), 40)
+    }
+
+    func testMinimalPromptStillTooBigThrowsPromptTooLong() {
+        // Baseline (system + current turn) alone is 20 tokens; a budget of 15 can never fit.
+        let history = [(role: "user", content: "x")]
+        XCTAssertThrowsError(
+            try LocalModelBudget.historyFittingBudget(history: history, budget: 15) { fakeCount($0) }
+        ) { error in
+            guard case LocalLLMError.promptTooLong = error else {
+                return XCTFail("expected .promptTooLong, got \(error)")
+            }
+        }
+    }
+}
