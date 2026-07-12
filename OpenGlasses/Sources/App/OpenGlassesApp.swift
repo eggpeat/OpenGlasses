@@ -1042,7 +1042,9 @@ class AppState: ObservableObject, AppStateProtocol {
                     await self.speechService.speak(message, urgency: urgency, mirrorToHUD: false)
                 }
             }
-            geofenceTool.restoreGeofences()
+            // BK P1: wire the region-event forwarders (via LocationService's single delegate) and
+            // re-arm saved geofences. Without this the alert path was dead code.
+            geofenceTool.activate()
         }
 
         // OpenClaw WebSocket — triage notifications through the agent before speaking

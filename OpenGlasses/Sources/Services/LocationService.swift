@@ -1,6 +1,24 @@
 import Foundation
 import CoreLocation
 
+/// The region-monitoring surface a geofence tool needs (BK P1). Abstracting it lets `GeofenceTool`
+/// route through the app's single `CLLocationManager`/delegate (`LocationService`) in production,
+/// and lets tests inject a fake so entering/exiting a region, the authorization state, and the
+/// 20-region cap are all drivable headlessly (no `CLLocationManager` on GPU / no permission prompt).
+@MainActor
+protocol RegionMonitoring: AnyObject {
+    var regionAuthorizationStatus: CLAuthorizationStatus { get }
+    var monitoredRegionCount: Int { get }
+    func regionMonitoringAvailable() -> Bool
+    func requestAlwaysAuthorization()
+    func startMonitoringRegion(_ region: CLCircularRegion)
+    func stopMonitoringRegion(_ region: CLCircularRegion)
+    /// Fired on a region enter (`didEnter == true`) / exit (`false`).
+    var onRegionEvent: ((CLRegion, _ didEnter: Bool) -> Void)? { get set }
+    /// Fired when authorization becomes `authorizedAlways` — the moment deferred geofences can arm.
+    var onBecameAuthorizedAlways: (() -> Void)? { get set }
+}
+
 /// Provides the user's current location for LLM context
 @MainActor
 class LocationService: NSObject, ObservableObject {
@@ -11,6 +29,10 @@ class LocationService: NSObject, ObservableObject {
 
     private let locationManager = CLLocationManager()
     // private let geocoder = CLGeocoder() // Deprecated in iOS 26
+
+    /// Region-monitoring event forwarders (BK P1). Set by `GeofenceTool.activate()`.
+    var onRegionEvent: ((CLRegion, Bool) -> Void)?
+    var onBecameAuthorizedAlways: (() -> Void)?
 
     override init() {
         super.init()
@@ -81,6 +103,19 @@ class LocationService: NSObject, ObservableObject {
     }
 }
 
+// MARK: - RegionMonitoring (BK P1)
+
+extension LocationService: RegionMonitoring {
+    var regionAuthorizationStatus: CLAuthorizationStatus { locationManager.authorizationStatus }
+    var monitoredRegionCount: Int { locationManager.monitoredRegions.count }
+    func regionMonitoringAvailable() -> Bool {
+        CLLocationManager.isMonitoringAvailable(for: CLCircularRegion.self)
+    }
+    func requestAlwaysAuthorization() { locationManager.requestAlwaysAuthorization() }
+    func startMonitoringRegion(_ region: CLCircularRegion) { locationManager.startMonitoring(for: region) }
+    func stopMonitoringRegion(_ region: CLCircularRegion) { locationManager.stopMonitoring(for: region) }
+}
+
 // MARK: - CLLocationManagerDelegate
 
 extension LocationService: CLLocationManagerDelegate {
@@ -100,6 +135,8 @@ extension LocationService: CLLocationManagerDelegate {
                 self.isAuthorized = true
                 manager.startUpdatingLocation()
                 print("📍 Location authorized")
+                // BK P1: geofences deferred while permission was pending can arm now.
+                if status == .authorizedAlways { self.onBecameAuthorizedAlways?() }
             case .denied, .restricted:
                 self.isAuthorized = false
                 self.locationError = "Location access denied"
@@ -114,6 +151,23 @@ extension LocationService: CLLocationManagerDelegate {
         Task { @MainActor in
             print("📍 Location error: \(error.localizedDescription)")
             self.locationError = error.localizedDescription
+        }
+    }
+
+    // MARK: Region monitoring (BK P1) — the callbacks that were missing, so a geofence can fire.
+
+    nonisolated func locationManager(_ manager: CLLocationManager, didEnterRegion region: CLRegion) {
+        Task { @MainActor in self.onRegionEvent?(region, true) }
+    }
+
+    nonisolated func locationManager(_ manager: CLLocationManager, didExitRegion region: CLRegion) {
+        Task { @MainActor in self.onRegionEvent?(region, false) }
+    }
+
+    nonisolated func locationManager(_ manager: CLLocationManager, monitoringDidFailFor region: CLRegion?, withError error: Error) {
+        Task { @MainActor in
+            print("📍 Region monitoring failed for \(region?.identifier ?? "?"): \(error.localizedDescription)")
+            self.locationError = "Region monitoring failed: \(error.localizedDescription)"
         }
     }
 }
