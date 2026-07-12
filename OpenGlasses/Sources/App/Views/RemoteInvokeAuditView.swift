@@ -22,9 +22,18 @@ struct RemoteInvokeAuditView: View {
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
                         }
-                        Text(entry.disposition)
-                            .font(.caption)
-                            .foregroundStyle(entry.disposition == "allowed" ? .green : .orange)
+                        HStack(spacing: 6) {
+                            // Per-origin attribution (Plan BN P2): tag the caller so a specific
+                            // gateway/peer's activity is traceable in the log.
+                            Text(entry.origin)
+                                .font(.caption2.monospaced())
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 1)
+                                .background(Capsule().fill(.quaternary))
+                            Text(entry.disposition)
+                                .font(.caption)
+                                .foregroundStyle(entry.disposition == "allowed" ? .green : .orange)
+                        }
                     }
                     .padding(.vertical, 2)
                 }

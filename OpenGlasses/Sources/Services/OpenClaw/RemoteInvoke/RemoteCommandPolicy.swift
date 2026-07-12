@@ -26,14 +26,21 @@ struct TokenBucket: Equatable {
     }
 }
 
-/// Per-class token buckets for a remote-invoke session.
+/// Per-origin, per-class token buckets for a remote-invoke session (Plan BN P2). Each origin
+/// (gateway, or a distinct MCP peer) gets its own independent bucket set, created lazily on first
+/// contact and full at that moment — so a chatty peer can't starve the gateway's budget.
 struct RemoteInvokeRateState: Equatable {
-    private var buckets: [RemoteCommandClass: TokenBucket]
+    private var byOrigin: [RemoteCommandOrigin: [RemoteCommandClass: TokenBucket]]
+
+    init(now: Date) {
+        // Pre-create the gateway origin so its behavior (and its tests) is byte-identical.
+        byOrigin = [.gateway: Self.freshBuckets(now: now)]
+    }
 
     /// Defaults: generous for reads, tight for anything that acts. Bursts are the capacity;
     /// sustained rates are the refill (per minute in the comments).
-    init(now: Date) {
-        buckets = [
+    private static func freshBuckets(now: Date) -> [RemoteCommandClass: TokenBucket] {
+        [
             .observe: TokenBucket(capacity: 10, refillPerSecond: 30.0 / 60.0, now: now),  // 30/min
             .output: TokenBucket(capacity: 5, refillPerSecond: 10.0 / 60.0, now: now),    // 10/min
             .capture: TokenBucket(capacity: 2, refillPerSecond: 4.0 / 60.0, now: now),    // 4/min
@@ -41,11 +48,19 @@ struct RemoteInvokeRateState: Equatable {
         ]
     }
 
-    mutating func tryConsume(_ commandClass: RemoteCommandClass, now: Date) -> Bool {
+    /// Consume one token from `origin`'s `commandClass` bucket (per-origin isolation).
+    mutating func tryConsume(_ origin: RemoteCommandOrigin, _ commandClass: RemoteCommandClass, now: Date) -> Bool {
+        var buckets = byOrigin[origin] ?? Self.freshBuckets(now: now)
         guard var bucket = buckets[commandClass] else { return false }
         let allowed = bucket.tryConsume(now: now)
         buckets[commandClass] = bucket
+        byOrigin[origin] = buckets
         return allowed
+    }
+
+    /// Convenience for the gateway origin — keeps the original two-arg call site working.
+    mutating func tryConsume(_ commandClass: RemoteCommandClass, now: Date) -> Bool {
+        tryConsume(.gateway, commandClass, now: now)
     }
 }
 
@@ -98,6 +113,7 @@ enum RemoteCommandPolicy {
 
     static func decide(
         command: RemoteGlassesCommand,
+        origin: RemoteCommandOrigin = .gateway,
         agentModeEnabled: Bool,
         toggles: Toggles,
         rateState: inout RemoteInvokeRateState,
@@ -113,7 +129,8 @@ enum RemoteCommandPolicy {
         default: break
         }
 
-        guard rateState.tryConsume(commandClass, now: now) else {
+        // Rate limits are keyed per origin (Plan BN P2), so one caller can't spend another's budget.
+        guard rateState.tryConsume(origin, commandClass, now: now) else {
             return .deny(.rateLimited(commandClass))
         }
         return .allow

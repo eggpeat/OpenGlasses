@@ -169,4 +169,34 @@ final class RemoteInvokeServiceTests: XCTestCase {
         let second = service()
         XCTAssertEqual(second.auditLog.first?.action, "device_status")
     }
+
+    // MARK: - Origin attribution (Plan BN P2)
+
+    func testAuditEntryCarriesOrigin() async {
+        let svc = service()
+        _ = await svc.handleFrame(invoke("device_status"))                                 // gateway (default)
+        _ = await svc.handleFrame(invoke("device_status"), origin: .mcpPeer(id: "acme"))    // peer
+        XCTAssertEqual(svc.auditLog[0].origin, "peer:acme", "newest is the peer call")
+        XCTAssertEqual(svc.auditLog[1].origin, "gateway")
+    }
+
+    func testPeerRateBudgetIsIndependentOfGateway() async {
+        let svc = service()   // capture on; fixed clock, so no refill
+        // Exhaust the gateway capture bucket (capacity 2).
+        _ = await svc.handleFrame(invoke("capture_photo"))
+        _ = await svc.handleFrame(invoke("capture_photo"))
+        let gatewayDenied = await svc.handleFrame(invoke("capture_photo"))
+        XCTAssertEqual((gatewayDenied?["error"] as? [String: String])?["code"], "denied.rate_limited.capture")
+
+        // A peer arriving now has its own full capture budget — not starved by the gateway.
+        let peerOk = await svc.handleFrame(invoke("capture_photo"), origin: .mcpPeer(id: "acme"))
+        XCTAssertEqual(peerOk?["ok"] as? Bool, true)
+    }
+
+    func testPeerOriginPersistsAcrossInstances() async {
+        let first = service()
+        _ = await first.handleFrame(invoke("device_status"), origin: .mcpPeer(id: "acme"))
+        let second = service()
+        XCTAssertEqual(second.auditLog.first?.origin, "peer:acme")
+    }
 }
