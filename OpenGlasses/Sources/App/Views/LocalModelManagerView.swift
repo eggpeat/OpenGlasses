@@ -119,8 +119,18 @@ struct LocalModelManagerView: View {
                                 Image(systemName: "checkmark.circle.fill")
                                     .foregroundStyle(.green)
                             } else if downloadingModelId == model.id {
-                                ProgressView(value: localService?.downloadProgress ?? 0)
-                                    .frame(width: 60)
+                                HStack(spacing: 8) {
+                                    ProgressView(value: localService?.downloadProgress ?? 0)
+                                        .frame(width: 60)
+                                    // BK P5: a real Cancel — routes through the service so the
+                                    // in-flight download is actually stopped, not just hidden.
+                                    Button("Cancel") {
+                                        localService?.cancelDownload()
+                                        downloadingModelId = nil
+                                    }
+                                    .buttonStyle(.borderless)
+                                    .controlSize(.small)
+                                }
                             } else if !model.isCompatibleWithDevice {
                                 Label("Needs 8 GB", systemImage: "memorychip")
                                     .font(.caption)
@@ -204,6 +214,8 @@ struct LocalModelManagerView: View {
                 try await localService?.downloadModel(modelId)
                 refreshDownloaded()
                 downloadingModelId = nil
+            } catch is CancellationError {
+                downloadingModelId = nil   // BK P5: user cancelled — not an error to surface
             } catch {
                 downloadError = error.localizedDescription
                 downloadingModelId = nil

@@ -23,6 +23,11 @@ final class LocalLLMService: ObservableObject {
     private var modelContainer: ModelContainer?
     private var activeDownloadTask: Task<Void, Error>?
 
+    /// Injectable download primitive (BK P5) so a test can drive a fake download — and its
+    /// cancellation — without touching the network. `nil` ⇒ the real `HubClient` path. Reports
+    /// fractional progress; throws (e.g. `CancellationError`) to abort.
+    var downloadFunction: ((_ modelId: String, _ onProgress: @escaping (Double) -> Void) async throws -> Void)?
+
     /// Set when the app enters the background during a generation so the token loop
     /// can stop before submitting the next Metal command buffer (forbidden in the
     /// background — see `generate`).
@@ -123,7 +128,11 @@ final class LocalLLMService: ObservableObject {
     /// Download a model from HuggingFace without loading into memory.
     /// Only one download runs at a time — call cancelDownload() first if needed.
     func downloadModel(_ modelId: String) async throws {
-        guard !isDownloading else { return }
+        // BK P5: a second download while one is live is refused with a VISIBLE error (was a silent
+        // `return`, which let a second multi-GB download start over the same shared progress state).
+        guard !isDownloading else {
+            throw LocalLLMError.alreadyDownloading
+        }
         isDownloading = true
         downloadingModelId = modelId
         downloadProgress = 0
@@ -133,18 +142,37 @@ final class LocalLLMService: ObservableObject {
             activeDownloadTask = nil
         }
 
-        guard let repoID = Repo.ID(rawValue: modelId) else {
-            throw LocalLLMError.generationFailed("Invalid model id: \(modelId)")
+        // BK P5: own the cancellable unit. Before, the real Task lived in the caller and
+        // `activeDownloadTask` was permanently nil, so `cancelDownload()` cancelled nothing and
+        // `hub.downloadSnapshot` ran to completion — Cancel was a UI-only no-op. Running the
+        // download inside `activeDownloadTask` means cancellation reaches the network/disk layer.
+        let task = Task { [weak self] in
+            guard let self else { return }
+            if let fake = self.downloadFunction {
+                try await fake(modelId) { self.downloadProgress = $0 }
+            } else {
+                guard let repoID = Repo.ID(rawValue: modelId) else {
+                    throw LocalLLMError.generationFailed("Invalid model id: \(modelId)")
+                }
+                _ = try await self.hub.downloadSnapshot(of: repoID) { @MainActor progress in
+                    self.downloadProgress = progress.fractionCompleted
+                }
+            }
         }
-        _ = try await hub.downloadSnapshot(of: repoID) { @MainActor progress in
-            self.downloadProgress = progress.fractionCompleted
+        activeDownloadTask = task
+        do {
+            try await task.value
+        } catch is CancellationError {
+            print("🚫 Model download cancelled: \(modelId)")
+            throw CancellationError()
         }
 
         downloadProgress = 1.0
         print("✅ Local model downloaded: \(modelId)")
     }
 
-    /// Cancel any in-progress download and reset state.
+    /// Cancel any in-progress download and reset state (BK P5). Now that the download runs inside
+    /// `activeDownloadTask`, this actually stops it instead of just clearing the UI flags.
     func cancelDownload() {
         activeDownloadTask?.cancel()
         activeDownloadTask = nil
@@ -425,6 +453,7 @@ enum LocalLLMError: LocalizedError {
     case backgrounded
     case promptTooLong(tokens: Int, limit: Int)
     case alreadyGenerating
+    case alreadyDownloading
 
     var errorDescription: String? {
         switch self {
@@ -438,6 +467,8 @@ enum LocalLLMError: LocalizedError {
             return "Prompt is too long for the on-device model (\(tokens) tokens; limit \(limit)). Switch to a cloud model for this request."
         case .alreadyGenerating:
             return "The on-device model is already generating a response. Wait for it to finish."
+        case .alreadyDownloading:
+            return "A model download is already in progress. Cancel it first, or wait for it to finish."
         }
     }
 }
