@@ -1081,7 +1081,9 @@ class AppState: ObservableObject, AppStateProtocol {
             }
         }
 
-        if Config.isOpenClawConfigured {
+        // BK P0: only start the inbound event loop (→ LLM triage → outbound delegate) when the
+        // gateway is an active agentic capability. `connect()` re-checks this itself, too.
+        if Config.isOpenClawAgentActive {
             openClawEventClient.connect()
             Task { await openClawBridge.checkConnection() }
         }
@@ -3102,6 +3104,9 @@ class AppState: ObservableObject, AppStateProtocol {
     /// Assess an incoming OpenClaw notification through the agent.
     /// The agent decides: summarize it, query OpenClaw for clarification, or skip.
     func triageOpenClawNotification(_ rawMessage: String) async {
+        // BK P0: triaging untrusted gateway output through the LLM (whose CLARIFY/FIX branches call
+        // delegateTask) is an autonomous action — don't run it with Agent Mode off.
+        guard Config.isOpenClawAgentActive else { return }
         let trimmed = rawMessage.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, trimmed.count > 5 else { return }
 

@@ -80,7 +80,11 @@ final class NativeToolRegistry {
         // Tier 3 tools
         register(FitnessCoachingTool())
         register(FirstAidTool())
-        if let bridge = openClawBridge, Config.isOpenClawConfigured {
+        // BK P0: register the gateway-skills tool only when the gateway is an active agentic
+        // capability (configured AND Agent Mode on). Registering on `isOpenClawConfigured` alone
+        // would list `openclaw_skills` in the generated tool prompt/schema while Agent Mode is off
+        // — a capability the model can't actually use (a P6-style honesty violation).
+        if let bridge = openClawBridge, Config.isOpenClawAgentActive {
             var skillsTool = OpenClawSkillsTool()
             skillsTool.openClawBridge = bridge
             register(skillsTool)

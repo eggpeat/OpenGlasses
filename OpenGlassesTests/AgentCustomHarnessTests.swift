@@ -189,6 +189,9 @@ final class AgentCustomHarnessTests: XCTestCase {
     // MARK: - Registry-backed dispatch + switch_harness tool
 
     func testSessionDispatchUsesRegistryActive() async {
+        let prior = Config.agentModeEnabled
+        defer { Config.setAgentModeEnabled(prior) }
+        Config.setAgentModeEnabled(true)   // BK P0: dispatch is agent-mode-gated at the service layer
         let service = AgentSessionService()
         service.configure(registry: AgentHarnessRegistry([StubHarness(kind: .custom, configured: true)]),
                           speak: { _ in })

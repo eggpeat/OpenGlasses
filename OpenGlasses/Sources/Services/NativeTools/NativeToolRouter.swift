@@ -141,8 +141,9 @@ final class NativeToolRouter {
             }
         }
 
-        // 3. Fall through to OpenClaw for "execute" or unknown tools
-        if let bridge = openClawBridge, Config.isOpenClawConfigured {
+        // 3. Fall through to OpenClaw for "execute" or unknown tools (BK P0: gateway delegation is
+        // an autonomous action, so it needs Agent Mode on, not just a configured gateway).
+        if let bridge = openClawBridge, Config.isOpenClawAgentActive {
             let taskDesc = args["task"] as? String ?? String(describing: args)
             NSLog("[NativeToolRouter] Delegating to OpenClaw: %@(%@)", name, String(taskDesc.prefix(100)))
             return await bridge.delegateTask(task: taskDesc, toolName: name)

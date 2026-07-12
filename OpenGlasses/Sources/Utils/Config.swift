@@ -1514,6 +1514,14 @@ struct Config {
         (openClawEnabled && !openClawGatewayToken.isEmpty) || !enabledGateways.isEmpty
     }
 
+    /// The gateway is an autonomous/agentic capability, so exposing or invoking it requires BOTH a
+    /// configured gateway AND Agent Mode on (BK P0 — the house rule that all gateway/autonomous
+    /// features sit behind `agentModeEnabled`). Every `execute`/`openclaw_skills` exposure and
+    /// delegation gate reads this, so the surface can never advertise or run while Agent Mode is off.
+    static var isOpenClawAgentActive: Bool {
+        isOpenClawConfigured && agentModeEnabled
+    }
+
     // MARK: - Multi-Gateway Configuration
 
     /// All configured gateways, sorted by priority (lower = first). Persisted in the

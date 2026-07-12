@@ -34,10 +34,14 @@ class ToolCallRouter {
             let result: ToolResult
             if let router = nativeToolRouter {
                 result = await router.handleToolCall(name: callName, args: call.args)
-            } else {
-                // Fallback: direct OpenClaw delegation (legacy path)
+            } else if Config.isOpenClawAgentActive {
+                // Fallback: direct OpenClaw delegation (legacy path). BK P0: only as an active
+                // agentic capability — delegateTask itself now fails closed otherwise, but don't
+                // route here at all with Agent Mode off.
                 let taskDesc = call.args["task"] as? String ?? String(describing: call.args)
                 result = await bridge.delegateTask(task: taskDesc, toolName: callName)
+            } else {
+                result = .failure("Unknown tool '\(callName)'")
             }
 
             // Resume streaming after tool execution

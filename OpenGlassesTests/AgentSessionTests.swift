@@ -6,6 +6,19 @@ import XCTest
 @MainActor
 final class AgentSessionTests: XCTestCase {
 
+    // BK P0: dispatch is now gated at the service layer on Agent Mode. These tests exercise the
+    // dispatch/confirmation success paths, so enable it (restoring the real value after each).
+    private var savedAgentMode = false
+    override func setUp() {
+        super.setUp()
+        savedAgentMode = Config.agentModeEnabled
+        Config.setAgentModeEnabled(true)
+    }
+    override func tearDown() {
+        Config.setAgentModeEnabled(savedAgentMode)
+        super.tearDown()
+    }
+
     // MARK: - AgentSessionService state machine
 
     func testDispatchFailsWhenHarnessUnconfigured() async {

@@ -131,8 +131,11 @@ class GeminiLiveSessionManager: ObservableObject {
         NSLog("[Session] System instruction built — length: %d chars, camera streaming: %@",
               systemInstruction.count, isCameraStreaming ? "YES" : "NO")
         let openClawConnected = openClawBridge?.connectionState == .connected
-        let includeOpenClaw = Config.isOpenClawConfigured && openClawConnected
-        if Config.isOpenClawConfigured && !openClawConnected {
+        // BK P0: expose the gateway `execute` tool only when it's an active agentic capability
+        // (configured AND Agent Mode on) — Gemini Live had the same isOpenClawConfigured-only gap
+        // as Direct mode, handing the model an execute schema + full-machine-access prompt.
+        let includeOpenClaw = Config.isOpenClawAgentActive && openClawConnected
+        if Config.isOpenClawAgentActive && !openClawConnected {
             NSLog("[Session] OpenClaw configured but not connected — omitting execute tool declaration")
         }
         let toolDefs = ToolDeclarations.allDeclarations(registry: nativeToolRouter?.registry, includeOpenClaw: includeOpenClaw)
@@ -216,7 +219,7 @@ class GeminiLiveSessionManager: ObservableObject {
             Task { @MainActor in
                 NSLog("[Session] Reconnected — re-configuring session")
                 // Re-configure with current settings (including fresh location)
-                let includeOpenClaw = Config.isOpenClawConfigured
+                let includeOpenClaw = Config.isOpenClawAgentActive   // BK P0: gate on Agent Mode too
                 let toolDefs = ToolDeclarations.allDeclarations(registry: self.nativeToolRouter?.registry, includeOpenClaw: includeOpenClaw)
                 self.geminiService.configure(
                     systemInstruction: self.buildSystemInstruction(),
@@ -233,9 +236,10 @@ class GeminiLiveSessionManager: ObservableObject {
             }
         }
 
-        // Wire tool calls — native tools always available, OpenClaw if configured
+        // Wire tool calls — native tools always available, OpenClaw only as an active agentic
+        // capability (BK P0: configured AND Agent Mode on).
         let hasNativeTools = nativeToolRouter != nil
-        let hasOpenClaw = Config.isOpenClawConfigured && openClawBridge != nil
+        let hasOpenClaw = Config.isOpenClawAgentActive && openClawBridge != nil
 
         if hasNativeTools || hasOpenClaw {
             if let bridge = openClawBridge, hasOpenClaw {
@@ -469,7 +473,7 @@ class GeminiLiveSessionManager: ObservableObject {
 
         // Add tool instructions
         let hasNativeTools = nativeToolRouter != nil
-        let hasOpenClaw = Config.isOpenClawConfigured
+        let hasOpenClaw = Config.isOpenClawAgentActive   // BK P0: don't advertise the gateway with Agent Mode off
         if hasNativeTools || hasOpenClaw {
             var toolSection = """
 

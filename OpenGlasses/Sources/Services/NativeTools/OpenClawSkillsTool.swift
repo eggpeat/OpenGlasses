@@ -32,8 +32,12 @@ struct OpenClawSkillsTool: NativeTool {
             return "No action specified."
         }
 
+        // BK P0: the gateway is an agentic capability — needs Agent Mode on, not just configured.
         guard Config.isOpenClawConfigured else {
             return "OpenClaw is not configured. Enable it in Settings and provide a gateway token."
+        }
+        guard Config.agentModeEnabled else {
+            return "Agent Mode is off, so the OpenClaw gateway is disabled. Turn on Agentic Features in Settings to use it."
         }
 
         switch action {

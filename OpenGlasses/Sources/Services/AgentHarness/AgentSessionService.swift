@@ -65,6 +65,10 @@ final class AgentSessionService: ObservableObject {
 
     @discardableResult
     func dispatch(prompt: String, project: String?) async -> Result<AgentRun, AgentHarnessError> {
+        // BK P0: dispatching a remote agent run is an autonomous action — gate it at the service
+        // layer, not only at the tool layer (`AgentControlTool`). Latent today (its only caller is
+        // tool-gated), but this is the gate-at-the-service-layer lesson the phase codifies.
+        guard Config.agentModeEnabled else { return .failure(.agentModeOff) }
         guard let harness = activeHarness else { return .failure(.notConfigured(Config.defaultAgentHarness)) }
         guard harness.isConfigured else { return .failure(.notConfigured(harness.kind)) }
 
