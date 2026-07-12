@@ -32,25 +32,19 @@ struct RootView: View {
     }
 }
 
-/// Presents an Approve / Deny prompt for a pending high-impact tool call.
+/// Presents the shared, source-attributed consent card for a pending remote/high-impact action
+/// (BN P1) — one surface for agent confirms, gateway capture consent, and assistant tool calls.
 private struct ToolConfirmationModifier: ViewModifier {
     @ObservedObject var coordinator: ToolConfirmationCoordinator
 
     func body(content: Content) -> some View {
-        content.confirmationDialog(
-            "Confirm action",
-            isPresented: Binding(
-                get: { coordinator.pending != nil },
-                set: { if !$0 { coordinator.resolve(false) } }
-            ),
-            titleVisibility: .visible,
-            presenting: coordinator.pending
-        ) { pending in
-            Button("Approve", role: .destructive) { coordinator.resolve(true) }
-            Button("Cancel", role: .cancel) { coordinator.resolve(false) }
-        } message: { pending in
-            Text(pending.summary)
+        content.overlay(alignment: .bottom) {
+            if let pending = coordinator.pending {
+                RemoteActionConsentView(pending: pending) { coordinator.resolve($0) }
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
         }
+        .animation(.easeOut(duration: 0.2), value: coordinator.pending?.id)
     }
 }
 

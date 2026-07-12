@@ -648,6 +648,8 @@ class AppState: ObservableObject, AppStateProtocol {
         }
         toolConfirmationCoordinator.onSpeakPrompt = { [weak self] prompt in
             guard let self else { return }
+            // Shared consent surface (BN P1): spoken prompt + in-lens HUD card together.
+            self.glassesDisplay.showNotification(title: "Approve?", body: prompt, icon: .info, duration: 10)
             Task { @MainActor in
                 await self.speechService.speak(prompt)
             }
@@ -939,6 +941,13 @@ class AppState: ObservableObject, AppStateProtocol {
         AgentSessionService.shared.configure(registry: makeAgentRegistry(), speak: { [weak self] line in
             Task { @MainActor in await self?.speechService.speak(line) }
         })
+        // BN P1: a `code_agent confirm` tool call only raises the user-distinct consent prompt —
+        // it can never approve itself (the prompt-injection → self-approved-push hole).
+        AgentSessionService.shared.requestUserConsent = { [weak self] request in
+            guard let self else { return false }
+            return await self.toolConfirmationCoordinator.requestConfirmation(
+                toolName: "code_agent", summary: request.summary, source: request.source)
+        }
 
         // Configure Navigation Assist (Plan J) similarly.
         NavigationAssistService.shared.configure(camera: cameraService, llm: llmService, tts: speechService)
@@ -2574,6 +2583,15 @@ class AppState: ObservableObject, AppStateProtocol {
     }
 
     func handleTranscription(_ text: String) async {
+        // Shared consent surface, voice half (BN P1): while an approve/deny prompt is pending, a
+        // short spoken yes/no answers THE PROMPT — never the model. Checked before the
+        // isProcessing guard because the turn that raised the prompt is still in flight,
+        // suspended on the coordinator.
+        if toolConfirmationCoordinator.pending != nil, toolConfirmationCoordinator.resolveByVoice(text) {
+            currentTranscription = text
+            print("🛡️ Consent prompt answered by voice: \(text)")
+            return
+        }
         guard !isProcessing else {
             print("⚠️ Already processing, ignoring: \(text)")
             return
