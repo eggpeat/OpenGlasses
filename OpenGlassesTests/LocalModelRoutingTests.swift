@@ -22,14 +22,18 @@ final class LocalModelRoutingTests: XCTestCase {
                       "only genuine VLMs belong in the vision factory route")
     }
 
-    /// The on-device prompt guard must sit below the observed OOM point (an ~8.2k-token prompt
-    /// Jetsam-killed the app) yet well above the lean agent prompt, so it only trips on a
-    /// pathological input — where a catchable throw beats an uncatchable memory kill.
-    func testOnDevicePromptGuardIsBelowTheObservedOOMPoint() {
-        XCTAssertLessThan(LocalLLMService.maxPromptTokens, 8241,
-                          "must reject before the size that actually OOM-killed the app")
-        XCTAssertGreaterThanOrEqual(LocalLLMService.maxPromptTokens, 2048,
-                          "but leave headroom for a normal lean prompt + some history")
+    /// The on-device prompt budget (BK P2) must sit below the observed OOM point (an ~8.2k-token
+    /// prompt Jetsam-killed the app) yet leave headroom for a normal lean prompt + some history —
+    /// for every recommended model and for an unknown/user-typed id.
+    func testOnDevicePromptBudgetIsBelowTheObservedOOMPoint() {
+        let ids = LocalLLMService.recommendedModels.map(\.id) + [nil, "some/unknown-model"]
+        for id in ids {
+            let budget = LocalModelBudget.promptBudget(for: id)
+            XCTAssertLessThan(budget, 8241,
+                              "budget for \(id ?? "nil") must sit below the OOM point")
+            XCTAssertGreaterThanOrEqual(budget, 2048,
+                              "budget for \(id ?? "nil") must leave headroom for a lean prompt + history")
+        }
     }
 
     func testPromptTooLongErrorIsDescriptive() {

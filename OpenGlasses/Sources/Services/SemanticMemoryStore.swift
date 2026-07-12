@@ -178,6 +178,19 @@ class SemanticMemoryStore: ObservableObject {
         systemPromptContext(query: nil)
     }
 
+    /// BK P2 — bound the memory block so it can't silently balloon the prompt past the on-device
+    /// budget as the store grows. Every branch is capped: at most `maxMemoryLines` entries per
+    /// section (the semantic-hit path was already limited to 8; these caps extend the same
+    /// discipline to the sorted global fallback, persona, and gateway paths, which previously
+    /// dumped the *entire* store), and each value is clamped to `maxValueChars`.
+    static let maxMemoryLines = 8
+    static let maxValueChars = 300
+
+    private static func clampValue(_ value: String) -> String {
+        guard value.count > maxValueChars else { return value }
+        return String(value.prefix(maxValueChars)) + "…"
+    }
+
     /// Returns a formatted memory context for injection into the system prompt.
     /// When `query` is provided, global memories are filtered to the most relevant
     /// via semantic search, keeping token usage lean.
@@ -192,24 +205,28 @@ class SemanticMemoryStore: ObservableObject {
         if hasGlobal {
             let pairs: [(String, String)]
             if let q = query, !q.isEmpty, embedder.isAvailable {
-                let results = semanticSearch(query: q, limit: 8, namespace: "global")
+                let results = semanticSearch(query: q, limit: Self.maxMemoryLines, namespace: "global")
                 pairs = results.isEmpty
                     ? memories.sorted { $0.key < $1.key }
                     : results.map { ($0.keyName, $0.value) }
             } else {
+                // No query / embedder unavailable / retrieval off: previously dumped the whole
+                // store. Clamp to the same cap so a large global store can't overflow the budget.
                 pairs = memories.sorted { $0.key < $1.key }
             }
-            let lines = pairs.map { "- \($0.0): \($0.1)" }
+            let lines = pairs.prefix(Self.maxMemoryLines).map { "- \($0.0): \(Self.clampValue($0.1))" }
             sections.append("SHARED MEMORY (facts about the user — reference naturally):\n\(lines.joined(separator: "\n"))")
         }
 
         if hasPersona, let pid = activePersonaId {
-            let lines = personaMemories.sorted { $0.key < $1.key }.map { "- \($0.key): \($0.value)" }
+            let lines = personaMemories.sorted { $0.key < $1.key }
+                .prefix(Self.maxMemoryLines)
+                .map { "- \($0.key): \(Self.clampValue($0.value))" }
             sections.append("PERSONA MEMORY (\(pid)):\n\(lines.joined(separator: "\n"))")
         }
 
         if hasGateway {
-            let lines = gatewayMemories.map { "- \($0)" }
+            let lines = gatewayMemories.prefix(Self.maxMemoryLines).map { "- \(Self.clampValue($0))" }
             sections.append("GATEWAY MEMORY (other devices):\n\(lines.joined(separator: "\n"))")
         }
 
