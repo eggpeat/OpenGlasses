@@ -2141,10 +2141,9 @@ class LLMService: ObservableObject {
                 finalResponse = textBefore.isEmpty ? resultText : "\(textBefore) \(resultText)"
             }
 
-            let cleanFinal = finalResponse
-                .replacingOccurrences(of: #"<tool_call>.*?</tool_call>"#, with: "", options: .regularExpression)
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-
+            // BK P3: an all-markup / empty final (e.g. the model answers the tool result with
+            // another <tool_call>) must surface as an error, not silent dead air at the speaker.
+            let cleanFinal = try Self.cleanedNonEmptyLocalAnswer(finalResponse)
             conversationHistory.append(["role": "assistant", "content": cleanFinal])
             trimHistory()
             return cleanFinal
@@ -2175,9 +2174,12 @@ class LLMService: ObservableObject {
             )
         }
 
-        conversationHistory.append(["role": "assistant", "content": finalAnswer])
+        // BK P3: reject an empty local completion (immediate EOS / all-markup) instead of
+        // speaking silence — matches the Anthropic/Gemini empty-completion guards.
+        let validated = try Self.cleanedNonEmptyLocalAnswer(finalAnswer)
+        conversationHistory.append(["role": "assistant", "content": validated])
         trimHistory()
-        return finalAnswer
+        return validated
     }
 
     // MARK: - Local Agent Model
@@ -2260,6 +2262,20 @@ extension ToolResult {
 extension LLMService {
     /// Strip `<think>...</think>` blocks from LLM output.
     /// Returns the spoken text (without think tags) and the extracted reasoning (if any).
+    /// Strip `<tool_call>` markup + trim, then require a non-empty result (BK P3). A sub-1B local
+    /// model can emit only `<tool_call>` markup (stripped to nothing) or an immediate EOS —
+    /// `TextToSpeechService.speak` drops an empty string silently, so the turn is total dead air:
+    /// no TTS, no tone, no HUD, no error. Anthropic and Gemini already reject an empty completion;
+    /// the local path must too. Throws `invalidResponse("Local")` on empty so the turn surfaces as
+    /// an error (which the P2b cascade can later act on) instead of silence. Pure + headless.
+    nonisolated static func cleanedNonEmptyLocalAnswer(_ raw: String) throws -> String {
+        let cleaned = raw
+            .replacingOccurrences(of: #"<tool_call>.*?</tool_call>"#, with: "", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleaned.isEmpty else { throw LLMError.invalidResponse("Local") }
+        return cleaned
+    }
+
     static func stripThinkTags(_ text: String) -> (spoken: String, reasoning: String?) {
         let pattern = "<think>[\\s\\S]*?</think>"
         guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else {
