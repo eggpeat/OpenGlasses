@@ -215,6 +215,13 @@ final class LocalLLMService: ObservableObject {
         // kIOGPUCommandBufferCallbackErrorBackgroundExecutionNotPermitted, which MLX
         // surfaces as an *uncatchable* C++ exception that terminates the process.
         // Refuse early with a catchable Swift error so callers can defer instead.
+        // BK P4: one generation at a time per ModelContainer. A fast follow-up (or a stray
+        // concurrent call) must not enter while a generation is live — two token loops on one
+        // container is undefined. Checked before we flip `isGenerating`. (The sequential
+        // re-generations inside `sendLocal` are strictly one-at-a-time and won't trip this.)
+        guard !isGenerating else {
+            throw LocalLLMError.alreadyGenerating
+        }
         guard UIApplication.shared.applicationState != .background else {
             throw LocalLLMError.backgrounded
         }
@@ -287,32 +294,54 @@ final class LocalLLMService: ObservableObject {
         let parameters = GenerateParameters(maxTokens: 512, temperature: 0.7, topP: 0.9)
         let stream = try await container.generate(input: input, parameters: parameters)
 
-        var output = ""
-        // Drive the stream manually so we can bail out *before* requesting the next
-        // token — i.e. before MLX submits the next Metal command buffer. Stopping
-        // here avoids the uncatchable background-GPU crash; whatever tokens we have
-        // so far are returned (or .backgrounded is thrown if nothing was produced).
+        // Drive the stream through the pure loop below so we can bail out *before* requesting the
+        // next token — before MLX submits the next Metal command buffer. Non-text generations
+        // (`.info`/`.toolCall`) are skipped; the loop keeps pulling until a text chunk or the end.
         var iterator = stream.makeAsyncIterator()
+        let output = try await Self.drainTokenStream(
+            nextChunk: {
+                while let generation = await iterator.next() {
+                    if case .chunk(let text) = generation { return text }
+                    // .info / .toolCall / unknown — not spoken text; keep pulling.
+                }
+                return nil
+            },
+            isBackgrounded: { [weak self] in
+                (self?.enteredBackgroundDuringGeneration ?? false) || UIApplication.shared.applicationState == .background
+            },
+            onToken: onToken
+        )
+        return output.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Pure token-drain loop (BK P4). Accumulates text chunks, honouring:
+    /// - **Barge-in cancellation** — checked every iteration *before* pulling the next token, and
+    ///   it always **throws `CancellationError`** (never a partial return). `ConversationTurnRunner`
+    ///   maps `CancellationError` → `onCancelled`, the only path where a barge-in doesn't speak the
+    ///   partial reply. Without this the MLX loop polled only background state, so `stop`/barge-in
+    ///   marked the task cancelled but inference ran to completion (GPU/battery burn).
+    /// - **Mid-stream backgrounding** — bail before the next Metal eval (uncatchable GPU crash);
+    ///   return what we have, or throw `.backgrounded` if nothing was produced.
+    ///
+    /// `nextChunk`/`isBackgrounded` are injected so a fake stream drives this headlessly (no MLX
+    /// model / GPU). Returns the accumulated (untrimmed) output.
+    static func drainTokenStream(
+        nextChunk: () async -> String?,
+        isBackgrounded: () -> Bool,
+        onToken: ((String) -> Void)?
+    ) async throws -> String {
+        var output = ""
         while true {
-            if enteredBackgroundDuringGeneration || UIApplication.shared.applicationState == .background {
+            try Task.checkCancellation()
+            if isBackgrounded() {
                 if output.isEmpty { throw LocalLLMError.backgrounded }
                 break
             }
-            guard let generation = await iterator.next() else { break }
-            switch generation {
-            case .chunk(let text):
-                output += text
-                onToken?(text)
-            case .info:
-                break  // Generation complete info
-            case .toolCall:
-                break  // Handled at a higher level via text parsing
-            @unknown default:
-                break
-            }
+            guard let text = await nextChunk() else { break }
+            output += text
+            onToken?(text)
         }
-
-        return output.trimmingCharacters(in: .whitespacesAndNewlines)
+        return output
     }
 
     // MARK: - Storage Info
@@ -395,6 +424,7 @@ enum LocalLLMError: LocalizedError {
     case generationFailed(String)
     case backgrounded
     case promptTooLong(tokens: Int, limit: Int)
+    case alreadyGenerating
 
     var errorDescription: String? {
         switch self {
@@ -406,6 +436,8 @@ enum LocalLLMError: LocalizedError {
             return "On-device models can't run while the app is in the background. Switch to a cloud model for background tasks."
         case .promptTooLong(let tokens, let limit):
             return "Prompt is too long for the on-device model (\(tokens) tokens; limit \(limit)). Switch to a cloud model for this request."
+        case .alreadyGenerating:
+            return "The on-device model is already generating a response. Wait for it to finish."
         }
     }
 }
