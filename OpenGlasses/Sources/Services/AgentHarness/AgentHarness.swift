@@ -38,6 +38,7 @@ enum AgentHarnessError: LocalizedError, Equatable {
     case notConfigured(AgentHarnessKind)
     case transport(String)
     case unsupported(String)
+    case agentModeOff   // BK P0: dispatch is an autonomous action — gated at the service layer
 
     var errorDescription: String? {
         switch self {
@@ -47,6 +48,8 @@ enum AgentHarnessError: LocalizedError, Equatable {
             return message
         case .unsupported(let what):
             return "\(what) isn't supported by this harness yet."
+        case .agentModeOff:
+            return "Agent Mode is off; remote agent dispatch is disabled."
         }
     }
 }

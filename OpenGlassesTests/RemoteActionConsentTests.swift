@@ -7,6 +7,19 @@ import XCTest
 @MainActor
 final class RemoteActionConsentTests: XCTestCase {
 
+    // BK P0: AgentSessionService.dispatch is now agent-mode-gated. These tests drive the
+    // dispatch→awaitingInput→confirm flow, so enable Agent Mode (restoring after each).
+    private var savedAgentMode = false
+    override func setUp() {
+        super.setUp()
+        savedAgentMode = Config.agentModeEnabled
+        Config.setAgentModeEnabled(true)
+    }
+    override func tearDown() {
+        Config.setAgentModeEnabled(savedAgentMode)
+        super.tearDown()
+    }
+
     // MARK: - Prompt composition (source attribution)
 
     func testConsentPromptCarriesTheSource() {

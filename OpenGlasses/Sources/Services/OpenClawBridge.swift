@@ -443,7 +443,13 @@ class OpenClawBridge: ObservableObject {
     /// same WebSocket transport. A thin pass-through to `sendRequest` so the harness adapter doesn't
     /// reach into the bridge's internals.
     func agentRequest(method: String, params: [String: Any]) async throws -> [String: Any] {
-        try await sendRequest(method: method, params: params)
+        // BK P0: gate at the service layer, not just at the tool layer. This public pass-through
+        // to `sendRequest` is otherwise an ungated hole of the same shape as `delegateTask`.
+        guard Config.agentModeEnabled else {
+            throw NSError(domain: "OpenClaw", code: -2,
+                          userInfo: [NSLocalizedDescriptionKey: "Agent mode not enabled"])
+        }
+        return try await sendRequest(method: method, params: params)
     }
 
     private func sendRequest(method: String, params: [String: Any]) async throws -> [String: Any] {
@@ -693,6 +699,10 @@ class OpenClawBridge: ObservableObject {
         toolName: String = "execute",
         imageData: Data? = nil
     ) async -> ToolResult {
+        // BK P0: the one gateway method that actually ships a task must honour the Agent-Mode gate
+        // like its nine siblings — otherwise `execute` is reachable (and unconfirmed) from ordinary
+        // or prompt-injected conversation while Agent Mode is off.
+        guard Config.agentModeEnabled else { return .failure("Agent mode not enabled") }
         lastToolCallStatus = .executing(toolName)
 
         do {

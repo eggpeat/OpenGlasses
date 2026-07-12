@@ -128,6 +128,11 @@ final class OpenClawBridgeTests: XCTestCase {
     // MARK: - Delegate Task with Invalid URL
 
     func testDelegateTaskFailsGracefully() async {
+        // BK P0: delegateTask now fails closed unless Agent Mode is on — enable it so this test
+        // exercises the invalid-URL path it's actually about (restored after).
+        let priorAgent = Config.agentModeEnabled
+        defer { Config.setAgentModeEnabled(priorAgent) }
+        Config.setAgentModeEnabled(true)
         // Configure with empty values — URL will be invalid
         Config.setOpenClawEnabled(true)
         Config.setOpenClawGatewayToken("test-token")

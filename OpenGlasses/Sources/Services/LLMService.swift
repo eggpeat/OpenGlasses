@@ -408,7 +408,7 @@ class LLMService: ObservableObject {
                 guard let self else { return .failure("Service unavailable") }
                 if let router = self.nativeToolRouter {
                     return await router.handleToolCall(name: name, args: args)
-                } else if let bridge = self.openClawBridge {
+                } else if let bridge = self.openClawBridge, Config.isOpenClawAgentActive {
                     let taskDesc = args["task"] as? String ?? (rawArgs ?? String(describing: args))
                     return await bridge.delegateTask(task: taskDesc, toolName: name)
                 }
@@ -442,7 +442,7 @@ class LLMService: ObservableObject {
         let provider = modelConfig.llmProvider
         let isOnDevice = (provider == .local || provider == .appleOnDevice)
         let hasNativeTools = nativeToolRouter != nil
-        let includeOpenClaw = Config.isOpenClawConfigured && openClawBridge != nil
+        let includeOpenClaw = Config.isOpenClawAgentActive && openClawBridge != nil
         let includeTools = hasNativeTools || includeOpenClaw
         let nativeToolNames = nativeToolRouter?.registry.toolNames ?? []   // used by the agent-plan block too
 
@@ -1254,7 +1254,7 @@ class LLMService: ObservableObject {
                 ]
 
                 if includeTools {
-                    let includeOpenClaw = Config.isOpenClawConfigured && self.openClawBridge != nil
+                    let includeOpenClaw = Config.isOpenClawAgentActive && self.openClawBridge != nil
                     let toolsData: Data = await MainActor.run {
                         let tools = ToolDeclarations.anthropicTools(registry: self.nativeToolRouter?.registry, includeOpenClaw: includeOpenClaw, mcpClient: self.nativeToolRouter?.mcpClient)
                         return (try? JSONSerialization.data(withJSONObject: tools)) ?? Data()
@@ -1474,7 +1474,7 @@ class LLMService: ObservableObject {
                 let providerSupportsTools = provider == .openai || provider == .groq || provider == .zai || provider == .qwen || provider == .openrouter
 
                 if includeTools && providerSupportsTools {
-                    let includeOpenClaw = Config.isOpenClawConfigured && self.openClawBridge != nil
+                    let includeOpenClaw = Config.isOpenClawAgentActive && self.openClawBridge != nil
                     let toolsData: Data = await MainActor.run {
                         let tools = ToolDeclarations.openAITools(registry: self.nativeToolRouter?.registry, includeOpenClaw: includeOpenClaw, mcpClient: self.nativeToolRouter?.mcpClient)
                         return (try? JSONSerialization.data(withJSONObject: tools)) ?? Data()
@@ -1877,7 +1877,7 @@ class LLMService: ObservableObject {
                 ]
 
                 if includeTools {
-                    let includeOpenClaw = Config.isOpenClawConfigured && self.openClawBridge != nil
+                    let includeOpenClaw = Config.isOpenClawAgentActive && self.openClawBridge != nil
                     let toolsData: Data = await MainActor.run {
                         let tools = ToolDeclarations.geminiRESTTools(registry: self.nativeToolRouter?.registry, includeOpenClaw: includeOpenClaw, mcpClient: self.nativeToolRouter?.mcpClient)
                         return (try? JSONSerialization.data(withJSONObject: tools)) ?? Data()

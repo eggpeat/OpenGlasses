@@ -88,7 +88,9 @@ struct PromptInspectorView: View {
     private func buildSections() {
         let basePrompt = Config.systemPrompt
         let toolNames = appState.nativeToolRouter.registry.toolNames
-        let hasOpenClaw = Config.isOpenClawConfigured
+        // BK P0: the prompt preview must match the real gated prompt — the OpenClaw block is only
+        // present when the gateway is an active agentic capability.
+        let hasOpenClaw = Config.isOpenClawAgentActive
         let locationContext = appState.locationService.locationContext
         let memoryContext = Config.userMemoryEnabled ? appState.userMemory.systemPromptContext() : nil
 
