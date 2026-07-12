@@ -15,8 +15,9 @@ enum ConversationStartSequence {
     struct Deps {
         /// Mark the conversation active (`inConversation = true`).
         let beginConversation: @MainActor () -> Void
-        /// Configure the shared audio session for recording.
-        let configureAudioSession: @MainActor () -> Void
+        /// Configure the shared audio session for recording. Async since BJ PR2 — the blocking
+        /// activation now runs off-main through the coordinator.
+        let configureAudioSession: @MainActor () async -> Void
         /// Bring the shared audio engine up. Failure must not abort the start — the
         /// transcription path has its own fallback engine.
         let ensureAudioEngineRunning: @MainActor () async throws -> Void
@@ -25,7 +26,8 @@ enum ConversationStartSequence {
         /// Snapshot what's playing before pausing it.
         let snapshotNowPlaying: @MainActor () -> Void
         /// Pause podcasts/music so the user can speak clearly (skips if call in progress).
-        let pauseOtherAudio: @MainActor () -> Void
+        /// Async since BJ PR2 (off-main session reconfigure).
+        let pauseOtherAudio: @MainActor () async -> Void
         /// Play the acknowledgment tone.
         let playAcknowledgmentTone: @MainActor () -> Void
         /// Start transcribing the user's turn.
@@ -38,11 +40,11 @@ enum ConversationStartSequence {
     static func run(_ deps: Deps) async {
         deps.beginConversation()
         // Audio session + engine BEFORE marking ourselves as listening (see type comment).
-        deps.configureAudioSession()
+        await deps.configureAudioSession()
         try? await deps.ensureAudioEngineRunning()
         deps.markListening()
         deps.snapshotNowPlaying()
-        deps.pauseOtherAudio()
+        await deps.pauseOtherAudio()
         deps.playAcknowledgmentTone()
         deps.startRecording()
         deps.updateLiveActivity()

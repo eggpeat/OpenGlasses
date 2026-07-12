@@ -324,7 +324,7 @@ struct OpenGlassesApp: App {
                         if !appState.wakeWordService.isListening && !appState.isListening && appState.isConnected && !appState.micMuted && !Config.silentMode {
                             print("🎤 Restarting wake word listener after foreground...")
                             // Re-configure audio session in case Bluetooth route changed
-                            appState.wakeWordService.reconfigureAudioSessionIfNeeded()
+                            await appState.wakeWordService.reconfigureAudioSessionIfNeeded()
                             // Small delay for route to stabilize after foregrounding
                             try? await Task.sleep(nanoseconds: 500_000_000)
                             try? await appState.wakeWordService.startListening()
@@ -423,7 +423,7 @@ class AppState: ObservableObject, AppStateProtocol {
                     // Let the Bluetooth audio link settle before grabbing the mic.
                     try? await Task.sleep(nanoseconds: 2_500_000_000)
                     guard self.isConnected else { return }  // bail if it dropped again
-                    self.wakeWordService.reconfigureAudioSessionIfNeeded()
+                    await self.wakeWordService.reconfigureAudioSessionIfNeeded()
                     if self.listeningEnabled && !self.isListening {
                         try? await self.wakeWordService.startListening()
                     }
@@ -1755,7 +1755,7 @@ class AppState: ObservableObject, AppStateProtocol {
             speechService.stopSpeaking()
             liveActivityManager.end()
             // Release any audio pause held by an in-flight conversation so Music/Podcasts resume.
-            wakeWordService.forceResumeOtherAudio()
+            Task { await wakeWordService.forceResumeOtherAudio() }
             isListening = false
             NSLog("[Listening] Disabled")
         }
@@ -2286,7 +2286,7 @@ class AppState: ObservableObject, AppStateProtocol {
         print("🎤 Action Button: starting direct transcription (no wake word)")
         Task {
             // Configure audio (uses glasses mic if connected, phone mic otherwise)
-            wakeWordService.configureAudioSession()
+            await wakeWordService.configureAudioSession()
             // manual: true — this is an explicit user trigger (Action Button / Siri / tap),
             // so the reply speaks through the phone speaker even with no glasses connected.
             await handleWakeWordDetected(manual: true)
@@ -2311,11 +2311,11 @@ class AppState: ObservableObject, AppStateProtocol {
         // The engine-before-listening ordering lives (tested) in ConversationStartSequence.
         await ConversationStartSequence.run(.init(
             beginConversation: { [self] in inConversation = true },
-            configureAudioSession: { [self] in wakeWordService.configureAudioSession() },
+            configureAudioSession: { [self] in await wakeWordService.configureAudioSession() },
             ensureAudioEngineRunning: { [self] in try await wakeWordService.ensureAudioEngineRunning() },
             markListening: { [self] in isListening = true },
             snapshotNowPlaying: { [self] in nowPlayingAtStart = NowPlayingSnapshot.current() },
-            pauseOtherAudio: { [self] in wakeWordService.pauseOtherAudio() },
+            pauseOtherAudio: { [self] in await wakeWordService.pauseOtherAudio() },
             playAcknowledgmentTone: { [self] in speechService.playAcknowledgmentTone() },
             startRecording: { [self] in transcriptionService.startRecording() },
             updateLiveActivity: { [self] in updateLiveActivity() }
@@ -3459,7 +3459,7 @@ class AppState: ObservableObject, AppStateProtocol {
         // Resume podcasts/music after active listening
         let resumedMedia = nowPlayingAtStart
         nowPlayingAtStart = nil
-        wakeWordService.resumeOtherAudio()
+        await wakeWordService.resumeOtherAudio()
         speechService.playDisconnectTone()
         // Announce what's resuming (e.g. "Resuming Hardcore History by Dan Carlin")
         if let media = resumedMedia {

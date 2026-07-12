@@ -168,7 +168,7 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate {
         Task { @MainActor in
             guard let appState = AppStateProvider.shared else { return }
             appState.wakeWordService.carPlayMode = true
-            appState.wakeWordService.reconfigureAudioSession()
+            await appState.wakeWordService.reconfigureAudioSession()
             appState.wakeWordService.stopListening()
             try? await Task.sleep(nanoseconds: 100_000_000)
             await appState.handleWakeWordDetected()
@@ -186,7 +186,7 @@ class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate {
         Task { @MainActor in
             guard let appState = AppStateProvider.shared else { return }
             appState.speechService.stopSpeaking()
-            appState.wakeWordService.deactivateAudioSession()
+            await appState.wakeWordService.deactivateAudioSession()
             appState.isListening = false
             appState.inConversation = false
         }
