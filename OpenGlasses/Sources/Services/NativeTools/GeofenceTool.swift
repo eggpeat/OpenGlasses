@@ -46,7 +46,10 @@ final class GeofenceTool: NativeTool, @unchecked Sendable {
         "required": ["action"]
     ]
 
-    private let locationManager: CLLocationManager
+    /// The region-monitoring seam (BK P1): production routes through `LocationService`'s single
+    /// `CLLocationManager`/delegate; tests inject a fake. Replaces the tool's own orphaned manager
+    /// (which never set `.delegate`, so no region event could ever reach `handleRegionEvent`).
+    private let regionMonitor: RegionMonitoring
     private let locationService: LocationService
 
     /// Callback to speak alerts via TTS, with an urgency for rate/prefix.
@@ -66,9 +69,50 @@ final class GeofenceTool: NativeTool, @unchecked Sendable {
         let createdAt: Date
     }
 
-    init(locationService: LocationService) {
+    init(locationService: LocationService, regionMonitor: RegionMonitoring? = nil) {
         self.locationService = locationService
-        self.locationManager = CLLocationManager()
+        self.regionMonitor = regionMonitor ?? locationService
+    }
+
+    /// Wire the region-event callbacks and re-arm saved geofences (BK P1). Called by AppState once
+    /// the tool is registered; safe to call again. Without this the delegate had no forwarder and
+    /// `handleRegionEvent` was dead code.
+    @MainActor
+    func activate() {
+        regionMonitor.onRegionEvent = { [weak self] region, didEnter in
+            self?.handleRegionEvent(region: region, didEnter: didEnter)
+        }
+        regionMonitor.onBecameAuthorizedAlways = { [weak self] in
+            self?.restoreGeofences()
+        }
+        restoreGeofences()
+    }
+
+    // MARK: - Armability (pure)
+
+    /// Whether a new region can be armed right now, and why not (BK P1). Reliable geofencing needs
+    /// **Always** authorization (When-In-Use only delivers while the app is foregrounded), the OS
+    /// caps monitored regions at 20, and a device may not support region monitoring at all.
+    enum Armability: Equatable {
+        case ok
+        case needsPermission   // notDetermined — request Always, arm on grant
+        case denied            // denied/restricted/When-In-Use — can't deliver reliably
+        case unavailable       // device can't monitor regions
+        case atCapacity        // 20-region OS cap reached
+    }
+
+    static func armability(status: CLAuthorizationStatus, monitoringAvailable: Bool, monitoredCount: Int) -> Armability {
+        guard monitoringAvailable else { return .unavailable }
+        switch status {
+        case .authorizedAlways:
+            return monitoredCount >= 20 ? .atCapacity : .ok
+        case .notDetermined:
+            return .needsPermission
+        case .authorizedWhenInUse, .denied, .restricted:
+            return .denied
+        @unknown default:
+            return .denied
+        }
     }
 
     func execute(args: [String: Any]) async throws -> String {
@@ -82,9 +126,9 @@ final class GeofenceTool: NativeTool, @unchecked Sendable {
         case "list":
             return listGeofences()
         case "delete":
-            return deleteGeofence(args: args)
+            return await deleteGeofence(args: args)
         case "clear":
-            return clearAllGeofences()
+            return await clearAllGeofences()
         default:
             return "Unknown action '\(action)'. Use 'create', 'list', 'delete', or 'clear'."
         }
@@ -123,12 +167,6 @@ final class GeofenceTool: NativeTool, @unchecked Sendable {
         let trigger = (args["trigger"] as? String)?.lowercased() ?? "enter"
         let message = args["message"] as? String ?? "You've \(trigger == "exit" ? "left" : "arrived at") \(name)."
 
-        // Check iOS region monitoring limit (20 regions max)
-        var reminders = loadReminders()
-        if reminders.count >= 19 { // Leave 1 slot buffer
-            return "Maximum geofence limit reached (20). Delete some first with action='delete'."
-        }
-
         let reminder = GeofenceReminder(
             id: UUID().uuidString,
             name: name,
@@ -139,17 +177,39 @@ final class GeofenceTool: NativeTool, @unchecked Sendable {
             message: message,
             createdAt: Date()
         )
+        let triggerDesc = trigger == "both" ? "enter or leave" : trigger
 
+        // Pre-flight the monitoring capability on the main actor (BK P1). Return an HONEST message
+        // when it can't be armed, rather than the old unconditional "I'll alert you" success.
+        return await MainActor.run {
+            switch Self.armability(
+                status: regionMonitor.regionAuthorizationStatus,
+                monitoringAvailable: regionMonitor.regionMonitoringAvailable(),
+                monitoredCount: regionMonitor.monitoredRegionCount
+            ) {
+            case .ok:
+                persist(reminder)
+                registerRegion(for: reminder)
+                return "Geofence '\(name)' created. I'll alert you when you \(triggerDesc) within \(Int(radius))m of that location."
+            case .needsPermission:
+                persist(reminder)   // arms automatically once Always is granted (onBecameAuthorizedAlways)
+                regionMonitor.requestAlwaysAuthorization()
+                return "To alert you at '\(name)' I need \"Always\" location access. I've asked for it — grant Always and I'll start watching for it."
+            case .denied:
+                return "I can't set a location reminder for '\(name)' — geofence alerts need \"Always\" location access, which isn't granted. Enable it in Settings → OpenGlasses → Location."
+            case .unavailable:
+                return "This device can't monitor geofence regions, so I can't set a location reminder."
+            case .atCapacity:
+                return "You already have the maximum of 20 geofence reminders. Delete one first with action='delete'."
+            }
+        }
+    }
+
+    /// Append a reminder to the saved set.
+    private func persist(_ reminder: GeofenceReminder) {
+        var reminders = loadReminders()
         reminders.append(reminder)
         saveReminders(reminders)
-
-        // Register with CLLocationManager
-        await MainActor.run {
-            registerRegion(for: reminder)
-        }
-
-        let triggerDesc = trigger == "both" ? "enter or leave" : trigger
-        return "Geofence '\(name)' created. I'll alert you when you \(triggerDesc) within \(Int(radius))m of that location."
     }
 
     // MARK: - List
@@ -169,7 +229,7 @@ final class GeofenceTool: NativeTool, @unchecked Sendable {
 
     // MARK: - Delete
 
-    private func deleteGeofence(args: [String: Any]) -> String {
+    private func deleteGeofence(args: [String: Any]) async -> String {
         guard let name = args["name"] as? String, !name.isEmpty else {
             return "Specify the name of the geofence to delete."
         }
@@ -183,28 +243,16 @@ final class GeofenceTool: NativeTool, @unchecked Sendable {
         let removed = reminders.remove(at: index)
         saveReminders(reminders)
 
-        // Unregister from CLLocationManager
-        let region = CLCircularRegion(
-            center: CLLocationCoordinate2D(latitude: removed.latitude, longitude: removed.longitude),
-            radius: removed.radius,
-            identifier: removed.id
-        )
-        locationManager.stopMonitoring(for: region)
-
+        await MainActor.run { regionMonitor.stopMonitoringRegion(region(for: removed)) }
         return "Geofence '\(removed.name)' deleted."
     }
 
     // MARK: - Clear
 
-    private func clearAllGeofences() -> String {
+    private func clearAllGeofences() async -> String {
         let reminders = loadReminders()
-        for r in reminders {
-            let region = CLCircularRegion(
-                center: CLLocationCoordinate2D(latitude: r.latitude, longitude: r.longitude),
-                radius: r.radius,
-                identifier: r.id
-            )
-            locationManager.stopMonitoring(for: region)
+        await MainActor.run {
+            for r in reminders { regionMonitor.stopMonitoringRegion(region(for: r)) }
         }
         saveReminders([])
         return "All geofence reminders cleared."
@@ -212,10 +260,10 @@ final class GeofenceTool: NativeTool, @unchecked Sendable {
 
     // MARK: - Region Registration
 
-    private func registerRegion(for reminder: GeofenceReminder) {
+    /// The `CLCircularRegion` for a reminder (id-keyed so region events resolve back to it).
+    private func region(for reminder: GeofenceReminder) -> CLCircularRegion {
         let center = CLLocationCoordinate2D(latitude: reminder.latitude, longitude: reminder.longitude)
         let region = CLCircularRegion(center: center, radius: reminder.radius, identifier: reminder.id)
-
         switch reminder.trigger {
         case "enter":
             region.notifyOnEntry = true
@@ -227,16 +275,21 @@ final class GeofenceTool: NativeTool, @unchecked Sendable {
             region.notifyOnEntry = true
             region.notifyOnExit = true
         }
-
-        locationManager.startMonitoring(for: region)
+        return region
     }
 
-    /// Re-register all saved geofences (call on app launch)
+    @MainActor
+    private func registerRegion(for reminder: GeofenceReminder) {
+        regionMonitor.startMonitoringRegion(region(for: reminder))
+    }
+
+    /// Re-register all saved geofences (call on app launch / when Always is granted). Only arms
+    /// when Always authorization is in place — otherwise the OS won't deliver events anyway.
+    @MainActor
     func restoreGeofences() {
+        guard regionMonitor.regionAuthorizationStatus == .authorizedAlways else { return }
         let reminders = loadReminders()
-        for reminder in reminders {
-            registerRegion(for: reminder)
-        }
+        for reminder in reminders { registerRegion(for: reminder) }
         if !reminders.isEmpty {
             print("📍 Restored \(reminders.count) geofence(s)")
         }

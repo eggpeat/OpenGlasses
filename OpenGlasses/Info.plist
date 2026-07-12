@@ -143,6 +143,8 @@
 		</array>
 		<key>NSLocationWhenInUseUsageDescription</key>
 	<string>OpenGlasses uses your location to provide contextually relevant answers based on where you are.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>OpenGlasses uses your location in the background to alert you when you arrive at or leave a place you set a location reminder for.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>OpenGlasses needs microphone access to listen for wake words and transcribe your voice commands.</string>
 	<key>NSMotionUsageDescription</key>
