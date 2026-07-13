@@ -13,6 +13,7 @@ struct LocalModelManagerView: View {
     @State private var loadingModelId: String?
     @State private var loadedLocalModelId: String?   // mirrors the in-memory loaded model for the UI
     @State private var loadError: String?
+    @State private var failedLoadModelId: String?    // enables Try again after e.g. a headroom refusal
 
     private var localService: LocalLLMService? {
         appState.llmService.localLLMService
@@ -31,8 +32,20 @@ struct LocalModelManagerView: View {
                         .font(.footnote)
                         .foregroundStyle(.orange)
                 }
+                // Live memory readout: refreshes while visible so the user can watch a
+                // model load/unload. Sandboxing limits this to the app's own numbers —
+                // other apps' memory isn't visible from inside an iOS app.
+                TimelineView(.periodic(from: .now, by: 2)) { _ in
+                    LabeledContent("App memory", value: formatBytes(MemoryHeadroom.appFootprintBytes()))
+                }
+                TimelineView(.periodic(from: .now, by: 2)) { _ in
+                    let available = MemoryHeadroom.availableBytes()
+                    LabeledContent("Headroom", value: available > 0 ? formatBytes(available) : "—")
+                }
             } header: {
                 Text("Device")
+            } footer: {
+                Text("Headroom is how much more memory the app can use before iOS terminates it. A model won't load unless it fits in the current headroom with room to generate.")
             }
 
             // MARK: Downloaded Models
@@ -79,9 +92,30 @@ struct LocalModelManagerView: View {
                     }
                 }
                 if let loadError {
-                    Label(loadError, systemImage: "exclamationmark.triangle")
-                        .font(.caption)
-                        .foregroundStyle(.red)
+                    VStack(alignment: .leading, spacing: 8) {
+                        Label(loadError, systemImage: "exclamationmark.triangle")
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                        if let failedLoadModelId {
+                            // Retry seam for the headroom gate: the user swipes other apps
+                            // away, watches headroom recover, and retries without leaving
+                            // the screen.
+                            HStack(spacing: 12) {
+                                Button("Try again") { loadLocalModel(failedLoadModelId) }
+                                    .buttonStyle(.bordered)
+                                    .controlSize(.small)
+                                    .disabled(loadingModelId != nil)
+                                TimelineView(.periodic(from: .now, by: 2)) { _ in
+                                    let available = MemoryHeadroom.availableBytes()
+                                    if available > 0 {
+                                        Text("Headroom now: \(formatBytes(available))")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             } header: {
                 Text("Downloaded Models")
@@ -268,12 +302,14 @@ struct LocalModelManagerView: View {
     private func loadLocalModel(_ modelId: String) {
         loadingModelId = modelId
         loadError = nil
+        failedLoadModelId = nil
         Task {
             do {
                 try await localService?.loadModel(modelId)
                 loadedLocalModelId = modelId
             } catch {
                 loadError = error.localizedDescription
+                failedLoadModelId = modelId
             }
             loadingModelId = nil
         }

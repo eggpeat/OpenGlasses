@@ -70,13 +70,15 @@ Run AI models entirely on your iPhone — no internet, no cloud, no API keys.
 
 | Model | Size | Best For |
 |-------|------|----------|
-| **Gemma 4 E2B** (default agent) | 3.6 GB | Best on-device agent — vision, tool calling, 140+ languages (needs 8 GB RAM) |
+| **Gemma 4 E2B** (default agent) | 3.6 GB | Best on-device agent — vision, tool calling, 140+ languages (8 GB RAM minimum, 12 GB recommended — uses ~4 GB while running) |
 | SmolVLM2 2.2B | 1.5 GB | Vision — sees photos + video |
 | Qwen 2.5 3B | 1.8 GB | Strong text reasoning + tool use |
 | Gemma 2 2B | 1.5 GB | Lightweight general purpose |
 | Qwen 2.5 0.5B | 0.4 GB | Ultra-light, basic |
 
 **Gemma 4 E2B** is the default on-device agent — it runs automatically when no cloud model is configured. Models are stored persistently and work fully offline after download. Toggle **Offline Mode** in Settings → Tools to disable internet-dependent tools.
+
+**Memory:** a loaded model occupies its full weight size in RAM plus working memory while generating — Gemma 4 E2B uses ~4 GB, a real load even on a 12 GB iPhone with other apps open. OpenGlasses checks available headroom before loading: if the model won't fit it tells you how much to free (swipe apps away in the app switcher) instead of letting iOS silently kill the app, and voice requests automatically fall over to a cloud model if one is configured. **Settings → AI Models → Download & Manage Models** shows the app's live memory use and remaining headroom.
 
 ### Self-Hosted Local Server (Ollama, llama.cpp, vLLM…)
 
@@ -481,7 +483,7 @@ All settings are in-app — no source code editing needed.
 | No audio through glasses | Verify Bluetooth connection in iOS Settings |
 | Glasses not connecting | Tap "Connect to Glasses"; enable Developer Mode in Meta AI app |
 | HomeKit not finding devices | HomeKit initializes on first tool call — say "list smart home devices" and wait 10s |
-| Local model crashes | Gemma 4 E2B needs ~8 GB RAM; on 6 GB devices use a smaller model (0.5B–2B) |
+| Local model won't load ("not enough memory") | Close other apps in the app switcher and use **Try again** in Download & Manage Models (live headroom shown there), or switch to a smaller model (0.5B–2B) |
 | Model download stuck | Keep app in foreground; downloads continue if briefly backgrounded |
 | "Untrusted Developer" | Settings → General → VPN & Device Management → Verify (requires internet) |
 
