@@ -59,6 +59,7 @@ enum ModelFallbackChain {
             switch local {
             case .promptTooLong: return .needsBiggerWindow
             case .backgrounded: return .retryOtherModel   // a cloud candidate can still run
+            case .insufficientMemory: return .retryOtherModel   // cloud (or a smaller local model) still fits
             case .modelNotLoaded, .generationFailed, .alreadyGenerating, .alreadyDownloading:
                 return .retryOtherModel
             }

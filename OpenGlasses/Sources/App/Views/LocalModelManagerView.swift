@@ -31,8 +31,20 @@ struct LocalModelManagerView: View {
                         .font(.footnote)
                         .foregroundStyle(.orange)
                 }
+                // Live memory readout: refreshes while visible so the user can watch a
+                // model load/unload. Sandboxing limits this to the app's own numbers —
+                // other apps' memory isn't visible from inside an iOS app.
+                TimelineView(.periodic(from: .now, by: 2)) { _ in
+                    LabeledContent("App memory", value: formatBytes(MemoryHeadroom.appFootprintBytes()))
+                }
+                TimelineView(.periodic(from: .now, by: 2)) { _ in
+                    let available = MemoryHeadroom.availableBytes()
+                    LabeledContent("Headroom", value: available > 0 ? formatBytes(available) : "—")
+                }
             } header: {
                 Text("Device")
+            } footer: {
+                Text("Headroom is how much more memory the app can use before iOS terminates it. A model won't load unless it fits in the current headroom with room to generate.")
             }
 
             // MARK: Downloaded Models
