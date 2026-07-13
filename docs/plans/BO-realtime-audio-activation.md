@@ -1,6 +1,12 @@
 # Plan BO — Realtime Audio Activation (post-BJ follow-up)
 
-**Status:** 📋 Planned — **sequenced strictly after Plan BJ PR1+PR2.**
+**Status:** 🚧 Code shipped, device-gated ([#223](https://github.com/straff2002/OpenGlasses/pull/223)) —
+both realtime managers' `setupAudioSession` now activates off-main via the coordinator's
+`acquireOffMain`; `attemptAudioResetOnQueue` recovery hops to a `@MainActor` Task and awaits it; the
+queue-ordering / deadlock-freedom contract is documented in the `RealtimeAudioEngine` header. Headless
+coordination tests + Release green; **on-glasses smoke test gates merge** (shares BJ's session — Gemini
+Live + OpenAI Realtime start/stop, phone-call interruption + BT route flip mid-realtime, TPC panel
+clean across the app). **Sequenced strictly after Plan BJ PR1+PR2** (both merged).
 **Origin:** Plan BJ's 2026-07-10 re-scope deliberately excluded the realtime managers from the
 off-main activation move; the review sweep confirmed that exclusion leaves TPC hang-risk warnings
 and one ownership hole in a path that today belongs to no plan. This plan is that home.

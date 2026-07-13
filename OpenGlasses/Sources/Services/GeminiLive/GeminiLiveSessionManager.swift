@@ -332,7 +332,7 @@ class GeminiLiveSessionManager: ObservableObject {
         useIPhoneAudioMode = !isCameraStreaming
         NSLog("[Session] Audio mode: %@", useIPhoneAudioMode ? "iPhone (voiceChat)" : "Glasses (videoChat)")
         do {
-            try audioManager.setupAudioSession(useIPhoneMode: useIPhoneAudioMode)
+            try await audioManager.setupAudioSession(useIPhoneMode: useIPhoneAudioMode)
         } catch {
             errorMessage = "Audio setup failed: \(error.localizedDescription)"
             isActive = false
@@ -397,7 +397,7 @@ class GeminiLiveSessionManager: ObservableObject {
                     useIPhoneAudioMode = false
                     NSLog("[Session] Switching to glasses audio mode (videoChat)")
                     do {
-                        try audioManager.setupAudioSession(useIPhoneMode: false)
+                        try await audioManager.setupAudioSession(useIPhoneMode: false)
                     } catch {
                         NSLog("[Session] Audio mode switch failed: %@", error.localizedDescription)
                     }

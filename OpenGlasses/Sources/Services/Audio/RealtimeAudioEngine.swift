@@ -68,6 +68,28 @@ struct RealtimeAudioEngineConfig {
 /// generation counter discards stale tap buffers so audio from a torn-down session can't bleed into
 /// the next one. The interruption/route → action decisions live in pure, tested policies
 /// (`AudioInterruptionPolicy`, `AudioRoutePolicy`); this class only executes them.
+///
+/// ## Queue-ordering contract (Plan BO — off-main session activation)
+///
+/// Three serial queues are in play; the rule that keeps them deadlock-free is **the two `.sync`
+/// waiters never wait on the queue that performs session I/O**:
+///
+///  - **`audioLifecycleQueue`** — owns every engine-graph mutation. Entered via
+///    `syncOnAudioLifecycleQueue`, which runs inline when already on the queue (re-entrancy guard
+///    via `audioLifecycleQueueKey`) and otherwise `.sync`s onto it. `sendQueue.sync` is the only
+///    other blocking wait. Neither ever waits on the coordinator's `sessionIOQueue`.
+///  - **coordinator `sessionIOQueue`** — owns `setActive`/`setCategory`. `setupAudioSession` reaches
+///    it through `acquireOffMain`, which `await`s an `async` hop (`withCheckedThrowingContinuation`
+///    + `sessionIOQueue.async`) — a **suspension, not a thread-block** — and never calls back into
+///    `audioLifecycleQueue`. So `sessionIOQueue` waits on nobody here.
+///  - **main actor** — the managers and the recovery `Task` call `await setupAudioSession`.
+///
+/// The recovery path is the one that could cycle and does not: `attemptAudioResetOnQueue` runs on
+/// `audioLifecycleQueue`, tears the graph down, then **hops off that queue** to a `@MainActor Task`
+/// that `await`s `setupAudioSession` (session activation on `sessionIOQueue`) and then `startCapture`
+/// (`.sync` back onto the — now free — `audioLifecycleQueue`). Because the reset dispatches
+/// asynchronously and never `.sync`-waits, the lifecycle queue is released before the re-setup
+/// re-enters it; the async activation suspends rather than blocking. No `A waits on B waits on A`.
 final class RealtimeAudioEngine {
     var onAudioCaptured: ((Data) -> Void)?
 
@@ -128,16 +150,19 @@ final class RealtimeAudioEngine {
 
     /// Configure the audio session for this realtime mode.
     /// - Parameter useIPhoneMode: `true` for `.voiceChat` (iPhone mic), `false` for `.videoChat` (glasses mic).
-    func setupAudioSession(useIPhoneMode: Bool = false) throws {
+    func setupAudioSession(useIPhoneMode: Bool = false) async throws {
         self.useIPhoneMode = useIPhoneMode
         let session = AVAudioSession.sharedInstance()
         guard AVAudioApplication.shared.recordPermission != .denied else {
             throw AudioSessionError.microphonePermissionDenied
         }
         let mode: AVAudioSession.Mode = useIPhoneMode ? .voiceChat : .videoChat
-        // Acquire the shared session through the coordinator (single owner); supersedes any prior
-        // holder and lets a clean `release` deactivate it for whoever runs next (e.g. wake word).
-        sessionLease = try AudioSessionCoordinator.shared.acquire(
+        // BO: acquire OFF-MAIN through the coordinator (was the synchronous `acquire`, which
+        // activated on the main thread — the last realtime TPC hang-risk). `acquireOffMain` awaits
+        // the activation on the coordinator's `sessionIOQueue`, so the session is active on return
+        // (no separate `activationSettled` wait needed before `startCapture`). Supersedes any prior
+        // holder; a clean `release` deactivates it for whoever runs next (e.g. wake word).
+        sessionLease = try await AudioSessionCoordinator.shared.acquireOffMain(
             config.owner,
             category: .playAndRecord,
             mode: mode,
@@ -443,10 +468,14 @@ final class RealtimeAudioEngine {
         let mode = useIPhoneMode
         tearDownEngineGraphOnQueue(flushPendingAudio: false) { [weak self] in
             guard let self, wasCapturing else { return }
-            DispatchQueue.main.async { [weak self] in
+            // BO: hop OFF the lifecycle queue to the main actor and await the now-async
+            // setupAudioSession. This async hop is what lets the recovery path re-enter the
+            // lifecycle queue (via startCapture's syncOnAudioLifecycleQueue) without deadlocking —
+            // see the queue-ordering contract in the type header.
+            Task { @MainActor [weak self] in
                 guard let self else { return }
                 do {
-                    try self.setupAudioSession(useIPhoneMode: mode)
+                    try await self.setupAudioSession(useIPhoneMode: mode)
                     try self.startCapture()
                     NSLog("%@ Audio reset successful", self.config.logPrefix)
                 } catch {
