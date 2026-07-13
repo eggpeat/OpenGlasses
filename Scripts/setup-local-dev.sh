@@ -33,7 +33,13 @@ targets:
       base:
         CODE_SIGN_ENTITLEMENTS: Config/Entitlements/Personal/OpenGlasses.entitlements
         DEVELOPMENT_TEAM: ${team}
-        INFOPLIST_FILE: Config/Info/Info.personal.plist
+        # By default the app builds from the committed OpenGlasses/Info.plist so new
+        # usage-description keys can never go stale in a personal copy (that caused an
+        # App Store ITMS-90683 "missing NSLocationAlwaysAndWhenInUseUsageDescription").
+        # ONLY rebranders (custom bundle id / display name) need a personal plist —
+        # uncomment the next line and keep Config/Info/Info.personal.plist in sync with
+        # OpenGlasses/Info.plist by hand:
+        #   INFOPLIST_FILE: Config/Info/Info.personal.plist
         PRODUCT_BUNDLE_IDENTIFIER: ${app_bundle}
 
   GlassesActivityWidget:
@@ -61,7 +67,9 @@ restore_from_commit() {
 
   git show "$commit:OpenGlasses/OpenGlasses.entitlements" > Config/Entitlements/Personal/OpenGlasses.entitlements
   git show "$commit:GlassesActivityWidget/GlassesActivityWidget.entitlements" > Config/Entitlements/Personal/GlassesActivityWidget.entitlements
-  git show "$commit:OpenGlasses/Info.plist" > Config/Info/Info.personal.plist
+  # Seed the (opt-in, rebrand-only) personal Info.plist from the CURRENT committed plist, not the
+  # old signing-recovery commit — otherwise it starts life missing every key added since.
+  cp OpenGlasses/Info.plist Config/Info/Info.personal.plist
 
   local team
   team="$(development_team_from_commit "$commit")"

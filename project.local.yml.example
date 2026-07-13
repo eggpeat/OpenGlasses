@@ -7,12 +7,15 @@ targets:
       base:
         CODE_SIGN_ENTITLEMENTS: Config/Entitlements/Personal/OpenGlasses.entitlements
         DEVELOPMENT_TEAM: YOUR_APPLE_TEAM_ID
-        # NOTE: this REPLACES the app's entire Info.plist — Info.personal.plist must be a
-        # full plist (all CFBundle*/usage keys) plus the MWDAT dict, not MWDAT-only.
-        # `./Scripts/setup-local-dev.sh` seeds it correctly from OpenGlasses/Info.plist.
-        # If you also change PRODUCT_BUNDLE_IDENTIFIER (rebrand), override
+        # Leave the app on the committed OpenGlasses/Info.plist (the default) so newly added
+        # usage-description keys can't go stale in a personal copy — a stale copy caused an
+        # App Store ITMS-90683 ("missing NSLocationAlwaysAndWhenInUseUsageDescription").
+        # ONLY uncomment the override below if you REBRAND (custom bundle id / display name):
+        # it REPLACES the app's entire Info.plist, so Info.personal.plist must be a FULL plist
+        # (all CFBundle*/usage keys) that you keep in sync with OpenGlasses/Info.plist by hand.
+        # If you also change PRODUCT_BUNDLE_IDENTIFIER, override
         # WK_COMPANION_APP_BUNDLE_IDENTIFIER on the OpenGlassesWatch target to match.
-        INFOPLIST_FILE: Config/Info/Info.personal.plist
+        # INFOPLIST_FILE: Config/Info/Info.personal.plist
 
   GlassesActivityWidget:
     settings:
