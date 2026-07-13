@@ -107,9 +107,12 @@ struct ConversationClassifier {
     // MARK: - Tier 0: Direct Tool Calls
 
     /// Match patterns that can be resolved with a direct tool call, skipping the LLM.
+    /// The time/steps/battery groups are gated by `isBareQuery`: "what time is it" is answerable
+    /// by reading the clock, but "what time does the game start" merely *contains* the pattern and
+    /// must reach the LLM — a substring match here would speak the current time as the answer.
     private func matchDirectToolCall(_ text: String, words: [String.SubSequence]) -> DirectToolCall? {
         // Time/date queries
-        if matchesAny(text, patterns: timePatterns) {
+        if let matched = matchedPattern(text, patterns: timePatterns), isBareQuery(text, matched: matched) {
             return DirectToolCall(toolName: "get_datetime", arguments: [:])
         }
 
@@ -127,17 +130,37 @@ struct ConversationClassifier {
         }
 
         // Step count
-        if matchesAny(text, patterns: stepPatterns) {
+        if let matched = matchedPattern(text, patterns: stepPatterns), isBareQuery(text, matched: matched) {
             return DirectToolCall(toolName: "step_count", arguments: [:])
         }
 
         // Device info / battery
-        if matchesAny(text, patterns: batteryPatterns) {
+        if let matched = matchedPattern(text, patterns: batteryPatterns), isBareQuery(text, matched: matched) {
             return DirectToolCall(toolName: "device_info", arguments: [:])
         }
 
         return nil
     }
+
+    /// First pattern the text contains (these groups use no regex patterns).
+    private func matchedPattern(_ text: String, patterns: [String]) -> String? {
+        patterns.first { text.contains($0) }
+    }
+
+    /// True when removing the matched pattern leaves only filler — the query IS the pattern
+    /// ("what time is it now?"), not a larger question containing it. False negatives are safe:
+    /// they fall through to the LLM, which answers correctly via tools.
+    private func isBareQuery(_ text: String, matched: String) -> Bool {
+        let remainder = text.replacingOccurrences(of: matched, with: " ")
+        let leftover = remainder.split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+        return leftover.allSatisfy { fillerWords.contains(String($0)) }
+    }
+
+    private let fillerWords: Set<String> = [
+        "is", "it", "the", "right", "now", "today", "currently", "please",
+        "hey", "tell", "me", "do", "i", "have", "left", "my", "on", "at",
+        "moment", "how", "s", "phone"
+    ]
 
     // MARK: - Tier 1: Prompt Section Detection
 
@@ -191,8 +214,13 @@ struct ConversationClassifier {
     private func estimateComplexity(_ text: String, words: [String.SubSequence], hasImage: Bool, conversationTurnCount: Int) -> Double {
         var score: Double = 0.0
 
-        // Word count — longer requests tend to be more complex
-        let wordCount = words.count
+        // Word count — longer requests tend to be more complex.
+        // CJK scripts don't use spaces, so a whole Chinese/Japanese sentence splits to one
+        // "word" — which scored every CJK query as trivial and routed it to the fast tier
+        // (i.e. the 2B local model) regardless of actual complexity. Approximate CJK words
+        // as characters/2 (Chinese averages ~1.5–2 characters per word).
+        let cjkCount = text.unicodeScalars.filter { Self.isCJK($0) }.count
+        let wordCount = cjkCount > 0 ? max(words.count, cjkCount / 2) : words.count
         if wordCount <= 5 { score += 0.0 }
         else if wordCount <= 15 { score += 0.15 }
         else if wordCount <= 30 { score += 0.3 }
@@ -246,21 +274,31 @@ struct ConversationClassifier {
         "look at", "what is this", "what's this", "whats this",
         "read this", "identify", "what do you see", "describe what",
         "scan", "qr code", "barcode", "what does this say",
-        "translate this", "read the sign", "what brand"
+        "translate this", "read the sign", "what brand",
+        // zh
+        "看看", "这是什么", "扫描", "识别", "读一下", "二维码"
     ]
 
     private let locationPatterns = [
         "nearby", "near me", "closest", "around here",
         "how far", "directions to", "navigate", "take me to",
         "where am i", "where is", "find a", "restaurants",
-        "coffee", "pharmacy", "gas station", "parking"
+        "coffee", "pharmacy", "gas station", "parking",
+        // Weather is implicitly "here" — without USER LOCATION in the prompt the model
+        // asks "what city are you in?" instead of answering (or calling get_weather).
+        "weather", "forecast", "rain", "umbrella",
+        "sunrise", "sunset", "how hot", "how cold",
+        // zh — the app ships Chinese presets; English-only patterns dropped these sections
+        "天气", "附近", "哪里", "在哪", "导航", "下雨", "预报", "多远"
     ]
 
     private let smartHomePatterns = [
         "turn on the", "turn off the", "lights", "light",
         "lock", "unlock", "thermostat", "temperature",
         "scene", "smart home", "home assistant",
-        "fan", "blinds", "curtains", "garage"
+        "fan", "blinds", "curtains", "garage",
+        // zh
+        "开灯", "关灯", "灯光", "空调", "锁门", "开锁", "窗帘"
     ]
 
     private let toolTriggerPatterns = [
@@ -270,7 +308,10 @@ struct ConversationClassifier {
         "call", "text", "message", "send", "calculate",
         "convert", "translate", "define", "news",
         "play", "pause", "skip", "music",
-        "shortcut", "note", "save", "remember"
+        "shortcut", "note", "save", "remember",
+        // zh
+        "天气", "提醒", "定时", "闹钟", "日历", "搜索",
+        "翻译", "新闻", "播放", "计算", "笔记", "备忘"
     ]
 
     private let socialPatterns = [
@@ -288,24 +329,42 @@ struct ConversationClassifier {
         "and then", "after that", "also", "first .* then",
         "plan my", "organize", "schedule my",
         "compare", "summarize", "research",
-        "find .* and call", "look up .* and send"
+        "find .* and call", "look up .* and send",
+        // zh
+        "然后", "接着", "总结", "帮我规划", "对比"
     ]
 
     private let reasoningPatterns = [
         "explain", "why", "how does", "what are the pros",
         "analyze", "evaluate", "recommend", "suggest",
         "what should i", "help me decide", "think about",
-        "what would happen", "is it better to"
+        "what would happen", "is it better to",
+        // zh
+        "为什么", "解释", "分析", "比较", "建议", "推荐", "怎么办"
     ]
 
     private let simpleFactPatterns = [
         "what is the capital", "how tall is", "who invented",
         "when was", "how old is", "what color",
         "yes", "no", "ok", "sure", "thanks", "thank you",
-        "good morning", "hello", "hi", "hey"
+        "good morning", "hello", "hi", "hey",
+        // zh
+        "你好", "谢谢", "好的", "早上好"
     ]
 
     // MARK: - Helpers
+
+    /// CJK unified ideographs, kana, and hangul — scripts written without spaces.
+    static func isCJK(_ scalar: Unicode.Scalar) -> Bool {
+        switch scalar.value {
+        case 0x4E00...0x9FFF, 0x3400...0x4DBF,   // CJK unified ideographs (+ extension A)
+             0x3040...0x309F, 0x30A0...0x30FF,   // hiragana, katakana
+             0xAC00...0xD7AF:                     // hangul syllables
+            return true
+        default:
+            return false
+        }
+    }
 
     /// Check if text matches any pattern in the list. Supports simple regex.
     private func matchesAny(_ text: String, patterns: [String]) -> Bool {

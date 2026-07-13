@@ -2778,7 +2778,10 @@ class AppState: ObservableObject, AppStateProtocol {
                             locationContext: locationCtx,
                             imageData: imageData,
                             memoryContext: memoryCtx,
-                            playbookContext: classification.relevantSections.contains(.playbook) ? playbookStore.playbookContext() : nil,
+                            // Unconditional like the photo path: the classifier never sets .playbook
+                            // (mid-playbook utterances — "done", "next" — match no keyword list), and
+                            // playbookContext() already returns nil when no playbook is active.
+                            playbookContext: playbookStore.playbookContext(),
                             nowPlayingContext: nowPlayingAtStart?.promptContext,
                             shortcutsContext: ShortcutsCatalog.shared.promptBlock(),
                             promptSections: classification.relevantSections,

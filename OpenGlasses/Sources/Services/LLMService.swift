@@ -184,9 +184,13 @@ class LLMService: ObservableObject {
     /// reduced tool block, so the model still has usable tools. Used by every on-device path
     /// (active-model `sendMessage` and fast-tier `sendViaLocalAgent`) so they can't diverge.
     static func leanOnDevicePrompt(locationContext: String?, memoryContext: String?, hasImage: Bool, turn: String) async -> String {
-        await buildSystemPrompt(
+        let prompt = await buildSystemPrompt(
             locationContext: locationContext, includeTools: false, includeOpenClaw: false,
             hasImage: hasImage, memoryContext: memoryContext, turn: turn)
+        // Gemma-style templates have no separate system channel — this whole prompt is merged
+        // into the model's first *user* turn, and a small model can flip roles and reply to
+        // "OpenGlasses" instead of the wearer. Pin the speaker identity explicitly.
+        return prompt + "\n\nThe person speaking to you is the user wearing the glasses. Address them directly as \"you\". Never address OpenGlasses — that is your own name."
     }
 
     private static func buildSystemPrompt(locationContext: String?, includeTools: Bool, includeOpenClaw: Bool, hasImage: Bool, nativeToolNames: [String] = [], nativeToolDescriptions: [(name: String, description: String)] = [], gatewayToolNames: [String] = [], memoryContext: String? = nil, agentContext: String? = nil, playbookContext: String? = nil, nowPlayingContext: String? = nil, shortcutsContext: String? = nil, promptSections: ConversationClassifier.PromptSections? = nil, turn: String? = nil) async -> String {
@@ -2074,6 +2078,16 @@ class LLMService: ObservableObject {
     }
     #endif
 
+    /// The reduced tool set a local model is offered — only simple, reliable, self-contained tools
+    /// (each resolves its own inputs, e.g. `get_weather`/`where_am_i` read LocationService directly,
+    /// so the 2B model never has to supply coordinates it doesn't have).
+    static let localSafeTools: Set<String> = [
+        "get_weather", "get_datetime", "calculate", "set_timer",
+        "flashlight", "brightness", "calendar", "reminder",
+        "set_alarm", "step_count", "device_info", "music_control",
+        "where_am_i"
+    ]
+
     // Unlike the cloud providers, the on-device path is deliberately NOT on the shared `runToolLoop`
     // driver (Plan BG P3). On-device models don't expose a structured tool-use API — they emit
     // `<tool_call>` markup — so this path is single-shot with a reduced tool set and one optional
@@ -2092,13 +2106,7 @@ class LLMService: ObservableObject {
         // Build tool instructions — use minimal set for local models
         var fullPrompt = systemPrompt
         if includeTools, let router = nativeToolRouter {
-            // Local models get a reduced tool set — only simple, reliable tools
-            let localSafeTools: Set<String> = [
-                "get_weather", "get_datetime", "calculate", "set_timer",
-                "flashlight", "brightness", "calendar", "reminder",
-                "set_alarm", "step_count", "device_info", "music_control"
-            ]
-            let toolNames = router.registry.toolNames.filter { localSafeTools.contains($0) }
+            let toolNames = router.registry.toolNames.filter { Self.localSafeTools.contains($0) }
             if !toolNames.isEmpty {
                 fullPrompt += """
 
@@ -2334,6 +2342,10 @@ extension LLMService {
     nonisolated static func cleanedNonEmptyLocalAnswer(_ raw: String) throws -> String {
         let cleaned = raw
             .replacingOccurrences(of: #"<tool_call>.*?</tool_call>"#, with: "", options: .regularExpression)
+            // A small model fed a merged (no-system-role) prompt can answer in transcript
+            // style — "OpenGlasses: ..." / "Assistant: ..." — and TTS would speak the label.
+            .replacingOccurrences(of: #"^\s*(OpenGlasses|Assistant|AI|Model)\s*:\s*"#,
+                                  with: "", options: [.regularExpression, .caseInsensitive])
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleaned.isEmpty else { throw LLMError.invalidResponse("Local") }
         return cleaned

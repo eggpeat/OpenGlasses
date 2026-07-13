@@ -23,12 +23,12 @@ protocol RegionMonitoring: AnyObject {
 @MainActor
 class LocationService: NSObject, ObservableObject {
     @Published var currentLocation: CLLocation?
-    @Published var currentPlacemark: CLPlacemark?
+    /// Human-readable place for the current location (reverse geocoded).
+    @Published var geocodedPlace: String?
     @Published var locationError: String?
     @Published var isAuthorized: Bool = false
 
     private let locationManager = CLLocationManager()
-    // private let geocoder = CLGeocoder() // Deprecated in iOS 26
 
     /// Region-monitoring event forwarders (BK P1). Set by `GeofenceTool.activate()`.
     var onRegionEvent: ((CLRegion, Bool) -> Void)?
@@ -60,46 +60,20 @@ class LocationService: NSObject, ObservableObject {
 
     /// Returns a human-readable location string for LLM context
     var locationContext: String? {
-        guard let placemark = currentPlacemark else {
-            guard let location = currentLocation else { return nil }
-            return String(format: "%.4f, %.4f", location.coordinate.latitude, location.coordinate.longitude)
-        }
-
-        var parts: [String] = []
-        if let name = placemark.name { parts.append(name) }
-        if let locality = placemark.locality { parts.append(locality) }
-        if let adminArea = placemark.administrativeArea { parts.append(adminArea) }
-        if let country = placemark.country { parts.append(country) }
-
-        // Deduplicate (name sometimes equals locality)
-        var seen = Set<String>()
-        let unique = parts.filter { seen.insert($0).inserted }
-
-        return unique.isEmpty ? nil : unique.joined(separator: ", ")
+        if let geocodedPlace { return geocodedPlace }
+        guard let location = currentLocation else { return nil }
+        return String(format: "%.4f, %.4f", location.coordinate.latitude, location.coordinate.longitude)
     }
 
-    /// Reverse geocode the current location to get a placemark
+    /// Reverse geocode the current location to a human-readable place. A small on-device model
+    /// can't map raw coordinates to a city, so the USER LOCATION prompt line needs a place name;
+    /// coordinates remain the fallback while geocoding is pending or offline.
     private func reverseGeocode(_ location: CLLocation) {
-        // Disabled due to CLGeocoder deprecation warning
-        /*
-        geocoder.reverseGeocodeLocation(location) { [weak self] placemarks, error in
-            Task { @MainActor in
-                if let error = error {
-                    print("📍 Geocoding failed: \(error.localizedDescription)")
-                    self?.locationError = "Geocoding failed: \(error.localizedDescription)"
-                    // Still have coordinates as fallback
-                    return
-                }
-
-                if let placemark = placemarks?.first {
-                    self?.currentPlacemark = placemark
-                    print("📍 Location: \(self?.locationContext ?? "unknown")")
-                } else {
-                    print("📍 Geocoding returned no results")
-                }
-            }
+        Task { @MainActor [weak self] in
+            guard let place = await GeocodingHelper.reverseGeocode(location) else { return }
+            self?.geocodedPlace = place.cityState ?? place.fullAddress
+            print("📍 Location: \(self?.geocodedPlace ?? "unknown")")
         }
-        */
     }
 }
 
