@@ -24,7 +24,13 @@ final class KokoroSynthesizer: @unchecked Sendable {
     func synthesizeWAV(_ text: String, speakerId: Int32 = 0, speed: Float = 1.0) throws -> Data {
         try queue.sync {
             let engine = try ttsHandle()
-            guard let audio = SherpaOnnxOfflineTtsGenerate(engine, text, speakerId, speed) else {
+            // Advanced config API (SherpaOnnxOfflineTtsGenerate — the sid/speed shorthand — is
+            // deprecated). Zero-initialised, then only sid + speed set; the create config already
+            // caps generation at one sentence, so inter-sentence `silence_scale` (0) is irrelevant.
+            var genConfig = SherpaOnnxGenerationConfig()
+            genConfig.sid = speakerId
+            genConfig.speed = speed
+            guard let audio = SherpaOnnxOfflineTtsGenerateWithConfig(engine, text, &genConfig, nil, nil) else {
                 throw KokoroError.inferenceFailed
             }
             defer { SherpaOnnxDestroyOfflineTtsGeneratedAudio(audio) }
