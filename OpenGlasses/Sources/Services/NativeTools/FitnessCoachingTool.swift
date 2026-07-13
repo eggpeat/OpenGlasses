@@ -147,9 +147,11 @@ struct FitnessCoachingTool: NativeTool {
     /// deflection — the built `PoseAnalyzer` was never called, so "check form via camera" was a
     /// false claim. Now it actually runs Vision pose estimation on the frame, or gives honest
     /// guidance when no camera view is available.
+    @MainActor
     private func checkForm(args: [String: Any]) async -> String {
         let exercise = (args["exercise"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "your exercise"
-        guard let frame = await frameProvider?() else {
+        // `frameProvider` is `@MainActor`; on the main actor this is a plain call (no await).
+        guard let frame = frameProvider?() else {
             return "To check your form, make sure the glasses camera can see you doing \(exercise), then ask again."
         }
         return PoseAnalyzer.analyzeForm(image: frame, exercise: exercise)

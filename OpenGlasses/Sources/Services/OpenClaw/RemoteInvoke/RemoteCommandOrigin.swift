@@ -34,7 +34,7 @@ enum RemoteCommandOrigin: Hashable, Codable {
     var consentSource: RemoteActionSource {
         switch self {
         case .gateway:          return .gateway
-        case .mcpPeer(let id):  return .opsPeer(label: displayName)
+        case .mcpPeer:          return .opsPeer(label: displayName)
         }
     }
 }
