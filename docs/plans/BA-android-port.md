@@ -140,6 +140,14 @@ equivalent of `.claude/rules/dat-conventions.md` during Phase 0:
   SCO connect, PCM16 mono @ 24 kHz (OpenAI-Realtime-native), `AudioRecord`/`AudioTrack`. The reference uses
   the legacy `startBluetoothSco()`; on API 31+ prefer `setCommunicationDevice(TYPE_BLE_HEADSET)`. This is the
   Android face of the iOS LE-Audio mic-routing gotcha — budget the same care here.
+- **Device observables + firmware gate:** `Wearables.devices` (`Flow<Set<DeviceIdentifier>>`) and
+  `Wearables.registrationState` are Flows to collect, and per-device
+  `Wearables.devicesMetadata[id]` streams name + a `DeviceCompatibility` — surface
+  `DEVICE_UPDATE_REQUIRED` as a "glasses firmware needs an update" prompt in Phase 0/1, or connect
+  failures look like SDK bugs. (No iOS equivalent in our bridge today; it's a new-but-cheap UX row.)
+- **Broadcast has no answer here:** the worked example's open code contains no RTMP stack (its
+  advertised platform streaming isn't in the published source) — the Phase-4 RTMP-library choice
+  for the HaishinKit port remains an open question, not a solved one.
 
 ### Reusable patterns (not code — MIT app as a worked example)
 
