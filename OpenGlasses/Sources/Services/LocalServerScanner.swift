@@ -61,8 +61,11 @@ final class LocalServerScanner {
     /// endpoint resolution is device-validated).
     private func browseHosts(for seconds: TimeInterval) async -> [String] {
         await withCheckedContinuation { (continuation: CheckedContinuation<[String], Never>) in
-            var hosts = Set<String>()
-            var resumed = false
+            // The NWBrowser handlers are `@Sendable` and the timeout closure is passed to
+            // `asyncAfter`, so the shared browse state must be data-race-free (a hard error under
+            // the Swift 6 language mode). A lock-guarded collector confines `hosts` + the
+            // resume-once flag; browser teardown hops back to the main actor.
+            let collector = HostCollector()
             let browser = NWBrowser(for: .bonjour(type: "_http._tcp", domain: nil), using: .tcp)
             self.browser = browser
 
@@ -70,17 +73,18 @@ final class LocalServerScanner {
                 for result in results {
                     if case let .service(name, _, _, _) = result.endpoint {
                         let host = name.hasSuffix(".local") ? name : "\(name).local"
-                        hosts.insert(host)
+                        collector.insert(host)
                     }
                 }
             }
 
-            let finish: () -> Void = { [weak self] in
-                guard !resumed else { return }
-                resumed = true
-                self?.browser?.cancel()
-                self?.browser = nil
-                continuation.resume(returning: Array(hosts))
+            let finish: @Sendable () -> Void = { [weak self] in
+                guard collector.claimFinish() else { return }
+                Task { @MainActor in
+                    self?.browser?.cancel()
+                    self?.browser = nil
+                }
+                continuation.resume(returning: collector.snapshot())
             }
 
             browser.stateUpdateHandler = { state in
@@ -89,5 +93,32 @@ final class LocalServerScanner {
             browser.start(queue: .main)
             DispatchQueue.main.asyncAfter(deadline: .now() + seconds, execute: finish)
         }
+    }
+}
+
+/// Data-race-free accumulator for a Bonjour browse: the browser's `@Sendable` handlers and the
+/// timeout closure can run on different threads, so the discovered hosts and the resume-once flag
+/// live behind a lock rather than as captured `var`s.
+private final class HostCollector: @unchecked Sendable {
+    private let lock = NSLock()
+    private var hosts = Set<String>()
+    private var finished = false
+
+    func insert(_ host: String) {
+        lock.lock(); defer { lock.unlock() }
+        hosts.insert(host)
+    }
+
+    func snapshot() -> [String] {
+        lock.lock(); defer { lock.unlock() }
+        return Array(hosts)
+    }
+
+    /// Returns `true` for the first caller only — the winner performs the single continuation resume.
+    func claimFinish() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        if finished { return false }
+        finished = true
+        return true
     }
 }
