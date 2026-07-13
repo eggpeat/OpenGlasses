@@ -195,8 +195,15 @@ final class LocalLLMService: ObservableObject {
         // compressor and ends in a silent Jetsam kill. Refuse with a catchable,
         // speakable error instead. Skipped when either number is unknown (model not
         // on disk yet, or no per-app budget on this platform — see MemoryHeadroom).
+        //
+        // Runs BEFORE the unload below so a refused load keeps the current model
+        // usable — but credits the outgoing model's weights back to the budget
+        // (effectiveAvailableBytes), so swapping models on a full phone isn't
+        // refused when the swap itself would fit.
         let modelBytes = modelSizeOnDisk(modelId)
-        let availableBytes = MemoryHeadroom.availableBytes()
+        let reclaimableBytes = loadedModelId.map { modelSizeOnDisk($0) } ?? 0
+        let availableBytes = MemoryHeadroom.effectiveAvailableBytes(
+            budget: MemoryHeadroom.availableBytes(), reclaimableBytes: reclaimableBytes)
         guard MemoryHeadroom.canLoad(modelBytes: modelBytes, availableBytes: availableBytes) else {
             throw LocalLLMError.insufficientMemory(
                 neededBytes: modelBytes + MemoryHeadroom.workingOverheadBytes,
@@ -490,7 +497,7 @@ enum LocalLLMError: LocalizedError {
             return "On-device models can't run while the app is in the background. Switch to a cloud model for background tasks."
         case .insufficientMemory(let needed, let available):
             let gb = { (bytes: Int64) in String(format: "%.1f", Double(bytes) / 1_073_741_824) }
-            return "Not enough memory to load the on-device model — it needs about \(gb(needed)) GB but only \(gb(available)) GB is available. Close other apps, or switch to a cloud model."
+            return "Not enough memory to load the on-device model — it needs about \(gb(needed)) GB but only \(gb(available)) GB is available. Free up about \(gb(needed - available)) GB by closing other apps, or switch to a cloud model."
         case .promptTooLong(let tokens, let limit):
             return "Prompt is too long for the on-device model (\(tokens) tokens; limit \(limit)). Switch to a cloud model for this request."
         case .alreadyGenerating:

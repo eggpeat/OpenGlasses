@@ -32,6 +32,16 @@ enum MemoryHeadroom {
         return availableBytes >= modelBytes + workingOverheadBytes
     }
 
+    /// Budget for a load that first unloads the currently loaded model: the outgoing
+    /// model's resident weights come back the moment it unloads, so they count toward
+    /// what the incoming model can use (weights-resident ≈ size on disk for 4-bit MLX
+    /// checkpoints). Without this, swapping models on a full phone is refused even
+    /// though the swap fits. A 0 budget stays 0 — "no per-app budget on this platform"
+    /// must not become a real number that switches the gate on.
+    static func effectiveAvailableBytes(budget: Int64, reclaimableBytes: Int64) -> Int64 {
+        budget > 0 ? budget + max(0, reclaimableBytes) : 0
+    }
+
     /// Bytes this process currently occupies — `phys_footprint`, the same number
     /// Xcode's memory gauge and the jetsam accounting use.
     static func appFootprintBytes() -> Int64 {

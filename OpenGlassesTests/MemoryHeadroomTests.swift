@@ -46,7 +46,27 @@ final class MemoryHeadroomTests: XCTestCase {
         XCTAssertTrue(MemoryHeadroom.canLoad(modelBytes: 3 * gb, availableBytes: 0))
     }
 
-    func testInsufficientMemoryErrorIsSpeakable() {
+    func testSwapCreditsOutgoingModelWeights() {
+        // Full phone, gemma already loaded (3.6 GB weights reclaimable on unload).
+        // Loading a 3 GB replacement must be admitted: 1 GB raw budget + 3.6 GB
+        // reclaimed ≥ 3 GB + overhead.
+        let budget = 1 * gb
+        let effective = MemoryHeadroom.effectiveAvailableBytes(
+            budget: budget, reclaimableBytes: Int64(3.6 * Double(gb)))
+        XCTAssertTrue(MemoryHeadroom.canLoad(modelBytes: 3 * gb, availableBytes: effective))
+        // Without the credit the same swap is refused — the bug the credit fixes.
+        XCTAssertFalse(MemoryHeadroom.canLoad(modelBytes: 3 * gb, availableBytes: budget))
+    }
+
+    func testEffectiveAvailableKeepsUnknownBudgetUnknown() {
+        // budget 0 = "no per-app budget on this platform"; crediting reclaimable
+        // weights must not turn that into a real number that switches the gate on.
+        XCTAssertEqual(MemoryHeadroom.effectiveAvailableBytes(budget: 0, reclaimableBytes: 3 * gb), 0)
+        XCTAssertEqual(MemoryHeadroom.effectiveAvailableBytes(budget: 2 * gb, reclaimableBytes: 0), 2 * gb)
+        XCTAssertEqual(MemoryHeadroom.effectiveAvailableBytes(budget: 2 * gb, reclaimableBytes: -1), 2 * gb)
+    }
+
+    func testInsufficientMemoryErrorIsSpeakableAndQuantifiesTheGap() {
         let error = LocalLLMError.insufficientMemory(
             neededBytes: 4_402_341_478,   // ~4.1 GB
             availableBytes: 2_147_483_648 // 2.0 GB
@@ -54,6 +74,7 @@ final class MemoryHeadroomTests: XCTestCase {
         let message = error.errorDescription ?? ""
         XCTAssertTrue(message.contains("4.1 GB"))
         XCTAssertTrue(message.contains("2.0 GB"))
+        XCTAssertTrue(message.contains("Free up about 2.1 GB"))
         XCTAssertTrue(message.contains("cloud model"))
     }
 }
