@@ -58,14 +58,20 @@ class TranscriptionService: ObservableObject {
                                                availability: availability) == .onDevice
         accumulatedSamples.removeAll(keepingCapacity: true)
 
-        do {
-            try setupAndStartRecording()
-            isRecording = true
-            print("🎙️ Recording started...")
-            startNoSpeechTimer()
-        } catch {
-            print("🎙️ Recording setup failed: \(error)")
-            errorMessage = error.localizedDescription
+        // BJ PR2 follow-up: the fallback engine start may activate the shared session off the main
+        // thread now, so setup is async. Keep `startRecording()` synchronous (its ~8 callers are
+        // unchanged): mark recording optimistically, run setup on the next tick, roll back on failure.
+        isRecording = true
+        Task { @MainActor in
+            do {
+                try await setupAndStartRecording()
+                print("🎙️ Recording started...")
+                startNoSpeechTimer()
+            } catch {
+                print("🎙️ Recording setup failed: \(error)")
+                errorMessage = error.localizedDescription
+                isRecording = false
+            }
         }
     }
 
@@ -110,9 +116,9 @@ class TranscriptionService: ObservableObject {
         }
     }
 
-    private func setupAndStartRecording() throws {
+    private func setupAndStartRecording() async throws {
         if useOnDevice {
-            try setupOnDeviceCapture()
+            try await setupOnDeviceCapture()
             return
         }
 
@@ -145,6 +151,9 @@ class TranscriptionService: ObservableObject {
                 self?.recognitionRequest?.append(buffer)
             }
 
+            // BJ PR2 follow-up: activate the shared session off-main before the engine starts, so
+            // the (usually-already-active) activation never blocks the main thread. Idempotent.
+            await AudioSessionCoordinator.shared.ensureActiveOffMain()
             audioEngine.prepare()
             try audioEngine.start()
             self.fallbackAudioEngine = audioEngine
@@ -173,7 +182,7 @@ class TranscriptionService: ObservableObject {
     // MARK: - On-device capture (SenseVoice)
 
     /// Accumulate the utterance's mono float samples (the recognizer resamples to 16 kHz on decode).
-    private func setupOnDeviceCapture() throws {
+    private func setupOnDeviceCapture() async throws {
         let accumulate: @Sendable (AVAudioPCMBuffer) -> Void = { [weak self] buffer in
             guard let channels = buffer.floatChannelData, buffer.frameLength > 0 else { return }
             let samples = Array(UnsafeBufferPointer(start: channels[0], count: Int(buffer.frameLength)))
@@ -199,6 +208,8 @@ class TranscriptionService: ObservableObject {
             let inputNode = audioEngine.inputNode
             let format = inputNode.outputFormat(forBus: 0)
             inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in accumulate(buffer) }
+            // BJ PR2 follow-up: activate off-main before the engine starts (see setupAndStartRecording).
+            await AudioSessionCoordinator.shared.ensureActiveOffMain()
             audioEngine.prepare()
             try audioEngine.start()
             self.fallbackAudioEngine = audioEngine
