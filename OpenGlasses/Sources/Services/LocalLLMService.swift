@@ -214,6 +214,15 @@ final class LocalLLMService: ObservableObject {
         defer { isLoadingModel = false }
         unloadModel()
 
+        // MLX recycles evaluation buffers through a cache whose default limit is Metal's
+        // recommendedMaxWorkingSetSize — effectively "all of RAM" on iPhone. Left uncapped,
+        // each turn's temporaries accumulate there instead of returning to the OS (Gemma's
+        // 262k-vocab chunked-prefill logits are ~256 MB apiece): observed 2.6 → 6.0 GB app
+        // footprint over five questions, ending in a silent Jetsam kill with every daemon
+        // on the phone idle-exited (2026-07-13 19:12 JetsamEvent). Cap it small per MLX's
+        // own iOS guidance; set here (not init) so simulator unit tests never touch Metal.
+        Memory.cacheLimit = 20 * 1024 * 1024
+
         let config = ModelConfiguration(id: modelId)
         let factory: any ModelFactory = Self.visionModelIds.contains(modelId)
             ? VLMModelFactory.shared
@@ -236,9 +245,16 @@ final class LocalLLMService: ObservableObject {
 
     /// Unload model from memory.
     func unloadModel() {
+        let hadModel = modelContainer != nil
         modelContainer = nil
         loadedModelId = nil
         isModelLoaded = false
+        if hadModel {
+            // Return MLX's recycled evaluation buffers to the OS — without this, Unload
+            // frees the weights but leaves the buffer cache resident. Guarded so a
+            // never-loaded service (unit tests on the simulator) never touches Metal.
+            Memory.clearCache()
+        }
         print("🔄 Local model unloaded")
     }
 
@@ -361,6 +377,11 @@ final class LocalLLMService: ObservableObject {
             },
             onToken: onToken
         )
+        // Memory telemetry per turn — footprint should now stay flat across questions;
+        // before the cacheLimit cap it grew ~0.7 GB per turn until the Jetsam kill.
+        NSLog("🔬 LocalLLM.generate done — mlx active=%dMB cache=%dMB, app footprint=%dMB",
+              Memory.activeMemory / 1_048_576, Memory.cacheMemory / 1_048_576,
+              Int(MemoryHeadroom.appFootprintBytes() / 1_048_576))
         return output.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
