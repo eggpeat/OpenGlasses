@@ -190,6 +190,19 @@ final class LocalLLMService: ObservableObject {
             throw LocalLLMError.backgrounded
         }
 
+        // Memory headroom gate: weights bigger than the app's remaining allocation
+        // budget don't fail cleanly — the load (or first generation) thrashes the
+        // compressor and ends in a silent Jetsam kill. Refuse with a catchable,
+        // speakable error instead. Skipped when either number is unknown (model not
+        // on disk yet, or no per-app budget on this platform — see MemoryHeadroom).
+        let modelBytes = modelSizeOnDisk(modelId)
+        let availableBytes = MemoryHeadroom.availableBytes()
+        guard MemoryHeadroom.canLoad(modelBytes: modelBytes, availableBytes: availableBytes) else {
+            throw LocalLLMError.insufficientMemory(
+                neededBytes: modelBytes + MemoryHeadroom.workingOverheadBytes,
+                availableBytes: availableBytes)
+        }
+
         isLoadingModel = true
         defer { isLoadingModel = false }
         unloadModel()
@@ -287,13 +300,21 @@ final class LocalLLMService: ObservableObject {
         }
         let tokens = try tokenize(trimmedHistory)
 
-        // Build a 2D (1, L) batch, not a 1D (L,) array. The Gemma 4 / 3n forward pass
-        // indexes x.dim(2) and fatally crashes ("SmallVector out of range") on 1D input —
-        // its prepare() path doesn't expand 1D internally (ml-explore/mlx-swift-lm#240).
-        // Other models accept (1, L) fine, so this is safe across the board.
-        let tokenIDs = MLXArray(tokens).expandedDimensions(axis: 0)
-        // NSLog (not print) so it survives the fatal MLX crash in the unified log,
-        // confirming the 2D fix is live and what shape reaches the model.
+        // Token shape depends on which factory loaded the model:
+        // - Text models (LLMModelFactory) MUST get 1D (L,) tokens. The library's default
+        //   `prepare` chunks prompts longer than the 512-token prefill step as
+        //   `y[.newAxis, ..<512]` / `y = y[512...]`, which assumes 1D — on a (1, L) batch
+        //   those slices hit axis 0, so the remainder becomes an EMPTY (0, L) array and the
+        //   next forward pass dies in QuantizedEmbedding's reshape ("cannot infer dimension"),
+        //   an uncatchable fatal MLX error. Short prompts skip the chunk loop, which is why
+        //   a (1, L) batch *appeared* to work: any real question (system prompt + tools
+        //   > 512 tokens) crashed the app.
+        // - Vision models (VLMModelFactory, e.g. SmolVLM2/Idefics3) skip that chunked
+        //   prepare and feed the tokens to the language model in one shot, so they need the
+        //   explicit (1, L) batch axis (their forward pass indexes dim(2)).
+        let tokenIDs = Self.tokenBatch(tokens, isVisionModel: Self.visionModelIds.contains(loadedModelId ?? ""))
+        // NSLog (not print) so it survives a fatal MLX crash in the unified log,
+        // confirming what shape reaches the model.
         NSLog("🔬 LocalLLM.generate model=%@ tokenIDs.shape=%@ count=%d", loadedModelId ?? "?", "\(tokenIDs.shape)", tokens.count)
 
         let input = LMInput(text: .init(tokens: tokenIDs))
@@ -334,6 +355,15 @@ final class LocalLLMService: ObservableObject {
             onToken: onToken
         )
         return output.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Shape token ids for the loaded model (see the call site in `generate` for why):
+    /// 1D (L,) for text-factory models — their chunked prefill slices axis 0 and an explicit
+    /// batch axis fatally breaks prompts over the prefill step size; (1, L) for vision-factory
+    /// models, whose prepare skips chunking and requires the batch axis.
+    nonisolated static func tokenBatch(_ tokens: [Int], isVisionModel: Bool) -> MLXArray {
+        let array = MLXArray(tokens)
+        return isVisionModel ? array.expandedDimensions(axis: 0) : array
     }
 
     /// Pure token-drain loop (BK P4). Accumulates text chunks, honouring:
@@ -445,6 +475,7 @@ enum LocalLLMError: LocalizedError {
     case modelNotLoaded
     case generationFailed(String)
     case backgrounded
+    case insufficientMemory(neededBytes: Int64, availableBytes: Int64)
     case promptTooLong(tokens: Int, limit: Int)
     case alreadyGenerating
     case alreadyDownloading
@@ -457,6 +488,9 @@ enum LocalLLMError: LocalizedError {
             return "Local model generation failed: \(reason)"
         case .backgrounded:
             return "On-device models can't run while the app is in the background. Switch to a cloud model for background tasks."
+        case .insufficientMemory(let needed, let available):
+            let gb = { (bytes: Int64) in String(format: "%.1f", Double(bytes) / 1_073_741_824) }
+            return "Not enough memory to load the on-device model — it needs about \(gb(needed)) GB but only \(gb(available)) GB is available. Close other apps, or switch to a cloud model."
         case .promptTooLong(let tokens, let limit):
             return "Prompt is too long for the on-device model (\(tokens) tokens; limit \(limit)). Switch to a cloud model for this request."
         case .alreadyGenerating:

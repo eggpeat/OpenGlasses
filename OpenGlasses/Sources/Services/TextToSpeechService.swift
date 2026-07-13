@@ -366,8 +366,7 @@ class TextToSpeechService: NSObject, ObservableObject, AVSpeechSynthesizerDelega
             let player = try AVAudioPlayer(data: toneData)
             self.tonePlayer = player
             player.volume = 0.45
-            player.prepareToPlay()
-            player.play()
+            Self.prepareAndPlayOffMain(player)
         } catch {
             print("🔊 Photo tone failed: \(error)")
         }
@@ -395,8 +394,7 @@ class TextToSpeechService: NSObject, ObservableObject, AVSpeechSynthesizerDelega
             let player = try AVAudioPlayer(data: toneData)
             self.tonePlayer = player
             player.volume = 0.7
-            player.prepareToPlay()
-            player.play()
+            Self.prepareAndPlayOffMain(player)
         } catch {
             print("🔊 Disconnect tone failed: \(error)")
             // Single-note fallback
@@ -418,11 +416,21 @@ class TextToSpeechService: NSObject, ObservableObject, AVSpeechSynthesizerDelega
             let player = try AVAudioPlayer(data: toneData)
             self.tonePlayer = player
             player.volume = 0.7
-            player.prepareToPlay()
-            player.play()
+            Self.prepareAndPlayOffMain(player)
         } catch {
             print("🔊 Tone failed: \(error)")
             AudioServicesPlaySystemSound(1054)
+        }
+    }
+
+    /// `prepareToPlay()` implicitly activates the audio session — synchronous I/O that
+    /// AVAudioSession warns can hang the UI when done on the main thread. AVAudioPlayer is
+    /// safe to drive from a background queue, so prepare + play happen there; the main-actor
+    /// `tonePlayer` reference (set by the caller) keeps the player alive.
+    private nonisolated static func prepareAndPlayOffMain(_ player: AVAudioPlayer) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            player.prepareToPlay()
+            player.play()
         }
     }
 
