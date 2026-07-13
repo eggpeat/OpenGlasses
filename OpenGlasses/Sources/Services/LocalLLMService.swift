@@ -51,7 +51,7 @@ final class LocalLLMService: ObservableObject {
             estimatedSize: "3.6 GB",
             hasVision: true,
             hasToolCalling: true,
-            notes: "Best on-device agent — vision, tool calling, 140+ languages",
+            notes: "Best on-device agent — vision, tool calling, 140+ languages. Uses ~4 GB while running; close other apps if it refuses to load.",
             minimumRAMGB: 8
         ),
         // Vision models (can see photos from glasses)
