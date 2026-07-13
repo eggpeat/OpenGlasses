@@ -215,7 +215,7 @@ class OpenAIRealtimeSessionManager: ObservableObject {
         useIPhoneAudioMode = !isCameraStreaming
         NSLog("[OpenAI Session] Audio mode: %@", useIPhoneAudioMode ? "iPhone" : "Glasses")
         do {
-            try audioManager.setupAudioSession(useIPhoneMode: useIPhoneAudioMode)
+            try await audioManager.setupAudioSession(useIPhoneMode: useIPhoneAudioMode)
         } catch {
             errorMessage = "Audio setup failed: \(error.localizedDescription)"
             isActive = false
@@ -264,7 +264,7 @@ class OpenAIRealtimeSessionManager: ObservableObject {
                     NSLog("[OpenAI Session] Already in glasses audio mode")
                 } else {
                     useIPhoneAudioMode = false
-                    do { try audioManager.setupAudioSession(useIPhoneMode: false) }
+                    do { try await audioManager.setupAudioSession(useIPhoneMode: false) }
                     catch { NSLog("[OpenAI Session] Audio mode switch failed: %@", error.localizedDescription) }
                 }
             }
