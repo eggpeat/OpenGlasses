@@ -107,8 +107,8 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.openglasses.app
-        MARKETING_VERSION: "2.2.0"
-        CURRENT_PROJECT_VERSION: "11"
+        MARKETING_VERSION: "2026.7"
+        CURRENT_PROJECT_VERSION: "305"
         SWIFT_VERSION: "5.9"
         CODE_SIGN_ALLOW_ENTITLEMENTS_MODIFICATION: "YES"
         CODE_SIGN_STYLE: Automatic
@@ -175,8 +175,8 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.openglasses.app.GlassesActivityWidget
-        MARKETING_VERSION: "2.2.0"
-        CURRENT_PROJECT_VERSION: "11"
+        MARKETING_VERSION: "2026.7"
+        CURRENT_PROJECT_VERSION: "305"
         SWIFT_VERSION: "5.9"
         SKIP_INSTALL: "YES"
         CODE_SIGN_STYLE: Automatic
@@ -213,8 +213,8 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.openglasses.app.ShareExtension
-        MARKETING_VERSION: "2.2.0"
-        CURRENT_PROJECT_VERSION: "11"
+        MARKETING_VERSION: "2026.7"
+        CURRENT_PROJECT_VERSION: "305"
         SWIFT_VERSION: "5.9"
         SKIP_INSTALL: "YES"
         CODE_SIGN_STYLE: Automatic
