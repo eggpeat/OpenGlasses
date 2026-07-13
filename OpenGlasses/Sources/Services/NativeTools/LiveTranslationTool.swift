@@ -43,9 +43,7 @@ struct LiveTranslationTool: NativeTool {
             if await MainActor.run(body: { service.isActive }) {
                 return "Live translation is already running. Say 'stop translating' to end it."
             }
-            await MainActor.run {
-                service.start(from: source, to: target)
-            }
+            await service.start(from: source, to: target)
             let sourceName = languageName(source)
             let targetName = languageName(target)
             return "Live translation started: \(sourceName) → \(targetName). I'll translate speech as I hear it. Say 'stop translating' when you're done."
@@ -75,7 +73,7 @@ struct LiveTranslationTool: NativeTool {
         case "set_language", "language", "set":
             if await MainActor.run(body: { service.isActive }) {
                 await MainActor.run { service.stop() }
-                await MainActor.run { service.start(from: source, to: target) }
+                await service.start(from: source, to: target)
                 return "Switched to \(languageName(source)) → \(languageName(target))."
             }
             return "Translation isn't running. Start it first with the new languages."

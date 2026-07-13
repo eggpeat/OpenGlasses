@@ -3081,7 +3081,7 @@ class AppState: ObservableObject, AppStateProtocol {
                 return await self.videoRecorder.stopRecording()?.lastPathComponent
             },
             startTranslation: { [weak self] source, target in
-                self?.liveTranslation.start(from: source ?? "auto", to: target ?? "en")
+                Task { await self?.liveTranslation.start(from: source ?? "auto", to: target ?? "en") }
             },
             stopTranslation: { [weak self] in
                 self?.liveTranslation.stop()

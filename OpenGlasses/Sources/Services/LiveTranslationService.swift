@@ -33,7 +33,7 @@ final class LiveTranslationService: ObservableObject {
 
     // MARK: - Start/Stop
 
-    func start(from source: String = "auto", to target: String = "en") {
+    func start(from source: String = "auto", to target: String = "en") async {
         guard !isActive else { return }
         sourceLanguage = source
         targetLanguage = target
@@ -56,7 +56,7 @@ final class LiveTranslationService: ObservableObject {
         translationCount = 0
         lastTranslatedText = ""
 
-        startListening()
+        await startListening()
         coexistToken = AudioSessionCoordinator.shared.beginCoexisting(.liveTranslation)
         print("🌍 Live translation started: \(source) → \(target)")
     }
@@ -80,9 +80,8 @@ final class LiveTranslationService: ObservableObject {
 
     // MARK: - Speech Recognition
 
-    private func startListening() {
+    private func startListening() async {
         // Configure audio session based on mic source preference
-        let audioSession = AVAudioSession.sharedInstance()
         do {
             let usePhoneMic = Config.usePhoneMicForTranslation
             let options: AVAudioSession.CategoryOptions = usePhoneMic
@@ -92,8 +91,9 @@ final class LiveTranslationService: ObservableObject {
             // shared session in a state the owner didn't choose. .measurement disables output
             // processing and makes iPhone-speaker TTS extremely quiet, and it was never restored on
             // stop. .default matches the wake-word baseline so audio coexists cleanly.
-            try audioSession.setCategory(.playAndRecord, mode: .default, options: options)
-            try audioSession.setActive(true)
+            // BJ PR2 follow-up: the blocking setCategory→setActive runs off-main via the coordinator.
+            try await AudioSessionCoordinator.shared.reconfigure(
+                category: .playAndRecord, mode: .default, options: options)
             print("🌍 Translation mic source: \(usePhoneMic ? "iPhone" : "glasses (Bluetooth)")")
         } catch {
             print("⚠️ LiveTranslation: audio session error: \(error)")
@@ -150,7 +150,7 @@ final class LiveTranslationService: ObservableObject {
         Task {
             try? await Task.sleep(nanoseconds: 300_000_000)
             if isActive {
-                startListening()
+                await startListening()
             }
         }
     }
