@@ -82,6 +82,28 @@ final class ConversationClassifierTests: XCTestCase {
         }
     }
 
+    /// A larger question that merely *contains* a Tier-0 pattern must reach the LLM —
+    /// a substring match would speak the current time/date as the "answer".
+    func testEmbeddedPatternsDoNotShortCircuitToDirectCall() {
+        let queries = [
+            "what time does the game start",
+            "what day is the concert",
+            "what time is sunset in tokyo",
+            "how much battery does my tesla have",
+            "how many steps are in this recipe",
+        ]
+        for query in queries {
+            XCTAssertNil(classifier.classify(query).directToolCall,
+                         "'\(query)' should go to the LLM, not a direct tool call")
+        }
+    }
+
+    func testBareQueriesWithFillerStillMatchDirectly() {
+        XCTAssertEqual(classifier.classify("what time is it right now").directToolCall?.toolName, "get_datetime")
+        XCTAssertEqual(classifier.classify("hey what's the date today").directToolCall?.toolName, "get_datetime")
+        XCTAssertEqual(classifier.classify("how's my phone battery").directToolCall?.toolName, "device_info")
+    }
+
     // MARK: - Tier 1: Prompt Section Detection
 
     func testVisionSectionDetectedForImageInput() {
@@ -102,6 +124,23 @@ final class ConversationClassifierTests: XCTestCase {
         let queries = ["restaurants nearby", "find a pharmacy near me", "directions to the airport"]
         for query in queries {
             let result = classifier.classify(query)
+            XCTAssertTrue(result.relevantSections.contains(.location),
+                          "'\(query)' should include location section")
+        }
+    }
+
+    /// Weather is implicitly about "here": without the .location section the send path passes
+    /// locationContext = nil, the prompt has no USER LOCATION line, and the on-device model
+    /// asks "what city are you in?" instead of answering.
+    func testWeatherQueriesIncludeLocationSection() {
+        let queries = [
+            "what's the weather", "weather forecast for tomorrow",
+            "will it rain today", "do i need an umbrella",
+            "when is sunset", "how hot is it today",
+        ]
+        for query in queries {
+            let result = classifier.classify(query)
+            XCTAssertNil(result.directToolCall, "'\(query)' should reach the LLM, not a direct tool")
             XCTAssertTrue(result.relevantSections.contains(.location),
                           "'\(query)' should include location section")
         }
@@ -132,6 +171,31 @@ final class ConversationClassifierTests: XCTestCase {
             XCTAssertTrue(result.relevantSections.contains(.openClaw),
                           "'\(query)' should include OpenClaw section")
         }
+    }
+
+    // MARK: - CJK (no-space scripts)
+
+    /// English-only patterns + space-split word counts used to classify every CJK query as
+    /// trivial (one "word" → fast tier → 2B local model) with no location/smart-home sections.
+    func testChineseWeatherQueryIncludesLocationAndTools() {
+        let result = classifier.classify("今天天气怎么样")
+        XCTAssertTrue(result.relevantSections.contains(.location), "天气 should include location")
+        XCTAssertTrue(result.relevantSections.contains(.tools), "天气 should include tools")
+    }
+
+    func testChineseSmartHomeDetected() {
+        XCTAssertTrue(classifier.classify("帮我开灯").relevantSections.contains(.smartHome))
+    }
+
+    func testChineseComplexQueryIsNotFastTier() {
+        // Analysis + comparison + chaining in one long sentence — must not route to the fast tier.
+        let result = classifier.classify("帮我分析一下这两种方案的优缺点然后推荐一个")
+        XCTAssertNotEqual(result.modelTier, .fast,
+                          "long analytical Chinese query must not be scored as trivial")
+    }
+
+    func testChineseGreetingStaysFastTier() {
+        XCTAssertEqual(classifier.classify("你好").modelTier, .fast)
     }
 
     func testUnspecificQueryDefaultsToTools() {

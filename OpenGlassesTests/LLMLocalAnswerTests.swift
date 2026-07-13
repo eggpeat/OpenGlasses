@@ -8,6 +8,13 @@ import XCTest
 /// Anthropic/Gemini empty-completion guards.
 final class LLMLocalAnswerTests: XCTestCase {
 
+    func testLocalSafeToolsIncludeSelfContainedLocationTools() {
+        // Both resolve their own coordinates from LocationService, so the 2B model can fetch
+        // location/weather on demand instead of claiming it has no GPS access.
+        XCTAssertTrue(LLMService.localSafeTools.contains("where_am_i"))
+        XCTAssertTrue(LLMService.localSafeTools.contains("get_weather"))
+    }
+
     func testKeepsRealTextTrimmed() throws {
         XCTAssertEqual(try LLMService.cleanedNonEmptyLocalAnswer("Hello there"), "Hello there")
         XCTAssertEqual(try LLMService.cleanedNonEmptyLocalAnswer("  padded  "), "padded")
@@ -17,6 +24,18 @@ final class LLMLocalAnswerTests: XCTestCase {
         XCTAssertEqual(
             try LLMService.cleanedNonEmptyLocalAnswer(#"The answer is 42 <tool_call>{"name":"x","arguments":{}}</tool_call>"#),
             "The answer is 42")
+    }
+
+    func testStripsLeadingSpeakerLabel() throws {
+        // A small model fed a merged (no-system-role) prompt can answer in transcript style;
+        // the persona label must never reach TTS.
+        XCTAssertEqual(try LLMService.cleanedNonEmptyLocalAnswer("OpenGlasses: It's sunny today."),
+                       "It's sunny today.")
+        XCTAssertEqual(try LLMService.cleanedNonEmptyLocalAnswer("Assistant: Sure."), "Sure.")
+        XCTAssertEqual(try LLMService.cleanedNonEmptyLocalAnswer("  model:  Hello"), "Hello")
+        // A colon later in the sentence is untouched.
+        XCTAssertEqual(try LLMService.cleanedNonEmptyLocalAnswer("Note: bring an umbrella"),
+                       "Note: bring an umbrella")
     }
 
     func testEmptyOrWhitespaceThrowsInvalidResponseLocal() {

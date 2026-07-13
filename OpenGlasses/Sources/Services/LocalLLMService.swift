@@ -301,9 +301,11 @@ final class LocalLLMService: ObservableObject {
                 return try tokenizer.applyChatTemplate(messages: messages)
             } catch {
                 // Merge the system prompt into the user turn for models without a system role.
+                // No "User:" transcript label — a small model reads a speaker-labelled dialogue
+                // and can flip roles, replying *as* the user addressed to the persona name.
                 var fallback: [[String: String]] = []
                 for turn in hist { fallback.append(["role": turn.role, "content": turn.content]) }
-                fallback.append(["role": "user", "content": systemPrompt + "\n\nUser: " + userMessage])
+                fallback.append(["role": "user", "content": systemPrompt + "\n\n" + userMessage])
                 return try tokenizer.applyChatTemplate(messages: fallback)
             }
         }
